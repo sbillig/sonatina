@@ -194,10 +194,8 @@ impl<'a> SimpleAllocBuilder<'a> {
                                     self.liveness,
                                 );
                             }
-                            eprintln!("JUMP {block:?}->{dest:?}, args: {args:?}, stack: {stack:?}, live_out: {live_out:?}");
                             // xxx allow phi vals to move into dead xfer slots
                             stack.retain(act, &args, live_out);
-                            eprintln!("after retain: {:?}", &stack);
                             // xxx debug_assert inherited stacks are equal
                             inherited_stack.insert(dest, stack);
                         }
@@ -221,10 +219,6 @@ impl<'a> SimpleAllocBuilder<'a> {
                                 &self.func.dfg,
                                 self.liveness,
                             );
-                            eprintln!(
-                                "BRANCH {block:?}->{nz_dest:?} | {z_dest:?}, {cond:?}, {:?}",
-                                &stack
-                            );
 
                             // "Consume" branch condition
                             stack.force_pop();
@@ -240,9 +234,7 @@ impl<'a> SimpleAllocBuilder<'a> {
                             // Remove all dead locals
                             let mut live = BitSet::from(args.as_slice());
                             live.union_with(live_out);
-                            eprintln!("BRTABLE {args:?}, {:?}", &stack);
                             stack.retain(&mut self.alloc.actions[inst_id], &[], &live);
-                            eprintln!("after retain: {:?}", &stack);
 
                             let mut args_iter = args.iter();
                             let comp = args_iter.next().unwrap();
@@ -300,6 +292,7 @@ impl<'a> SimpleAllocBuilder<'a> {
                     let act = &mut self.alloc.actions[inst_id];
 
                     if self.func.dfg.is_call(inst_id) {
+                        stack.push_jump_target();
                         act.push(Action::PushContinuationOffset);
                     }
 

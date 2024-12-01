@@ -9,10 +9,18 @@ pub type MemSlot = SmallVec<[ValueId; 4]>;
 
 const REACH: usize = 16;
 
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+pub enum StackEntry {
+    Live(ValueId),
+    // xxx Frozen(ValueId),
+    ReturnJumpTarget,
+    Junk,
+}
+
 // xxx rename
 #[derive(Clone, Default)]
 pub struct LocalStack {
-    stack: VecDeque<ValueId>,
+    stack: VecDeque<StackEntry>,
     dead: BitSet<ValueId>,
 
     /// `usize` is reverse index (position relative to bottom of stack).
@@ -26,7 +34,7 @@ impl LocalStack {
     /// is on top of stack).
     pub fn with_values(vals: &[ValueId]) -> Self {
         Self {
-            stack: VecDeque::from_iter(vals.iter().copied()),
+            stack: VecDeque::from_iter(vals.iter().copied().map(StackEntry::Live)),
             dead: BitSet::new(),
             frozen: SmallVec::default(),
         }
@@ -40,7 +48,8 @@ impl LocalStack {
     /// Panics if slot >= stack.len().
     pub fn rename_slot(&mut self, slot: usize, val: ValueId) {
         debug_assert!(!self.is_frozen(slot));
-        self.stack[slot] = val;
+        debug_assert!(matches!(self.stack[slot], StackEntry::Live(_)));
+        self.stack[slot] = StackEntry::Live(val);
     }
 
     pub fn freeze(&mut self, mut values: BitSet<ValueId>) {
@@ -51,8 +60,10 @@ impl LocalStack {
 
         // We only freeze the bottommost instance of each value.
         for (ridx, val) in self.stack.iter_mut().rev().enumerate() {
-            if values.remove(*val) {
-                self.frozen.push((ridx, *val));
+            if let StackEntry::Live(val) = val {
+                if values.remove(*val) {
+                    self.frozen.push((ridx, *val));
+                }
             }
         }
     }
@@ -69,12 +80,20 @@ impl LocalStack {
             .any(|(ridx, _)| *ridx == self.stack.len() - 1 - slot)
     }
 
-    fn top(&self) -> Option<ValueId> {
+    fn top(&self) -> Option<StackEntry> {
         self.stack.front().copied()
     }
 
-    fn top_n(&self, n: usize) -> impl Iterator<Item = &'_ ValueId> + '_ {
+    fn top_n(&self, n: usize) -> impl Iterator<Item = &'_ StackEntry> + '_ {
         self.stack.iter().take(n)
+    }
+
+    fn top_n_is(&self, n: usize, iter: &mut dyn Iterator<Item = &ValueId>) -> bool {
+        self.stack
+            .iter()
+            .take(n)
+            .copied()
+            .eq(iter.map(|v| StackEntry::Live(*v)))
     }
 
     fn first_reachable_dead(&self) -> Option<usize> {
@@ -82,7 +101,7 @@ impl LocalStack {
     }
 
     fn push(&mut self, act: &mut Actions, val: ValueId, imm: Immediate) {
-        self.stack.push_front(val);
+        self.stack.push_front(StackEntry::Live(val));
         act.push(Action::Push(imm));
     }
 
@@ -135,8 +154,12 @@ impl LocalStack {
         F: Fn(ValueId, &Self) -> bool,
     {
         while let Some(val) = self.stack.front() {
-            if pred(*val, self) {
-                self.pop(act)
+            if match val {
+                StackEntry::Live(val) => pred(*val, self),
+                StackEntry::Junk => true,
+                StackEntry::ReturnJumpTarget => false,
+            } {
+                self.pop(act);
             } else {
                 break;
             }
@@ -149,6 +172,14 @@ impl LocalStack {
         }
     }
 
+    // xxx rename/remove?
+    pub fn push_jump_target(&mut self) {
+        self.stack.push_front(StackEntry::ReturnJumpTarget);
+    }
+    pub fn pop_jump_target(&mut self) {
+        assert_eq!(self.stack.pop_front(), Some(StackEntry::ReturnJumpTarget));
+    }
+
     /// Ensure `out` is atop an otherwise empty stack. // xxx name
     pub fn ret(&mut self, act: &mut Actions, memory: &[MemSlot], return_val: Option<ValueId>) {
         let Some(return_val) = return_val else {
@@ -157,7 +188,7 @@ impl LocalStack {
         };
 
         while let Some(val) = self.stack.front() {
-            if return_val != *val {
+            if *val != StackEntry::Live(return_val) {
                 self.pop(act);
             } else if self.stack.len() > 1 {
                 // If there are vals below the return val,
@@ -194,7 +225,11 @@ impl LocalStack {
             .stack
             .iter()
             .skip(1)
-            .take_while(|v| pred(**v, self))
+            .take_while(|e| match e {
+                StackEntry::Live(v) => pred(*v, self),
+                StackEntry::ReturnJumpTarget => false,
+                StackEntry::Junk => true,
+            })
             .count();
 
         if swap_to > 0 {
@@ -216,7 +251,12 @@ impl LocalStack {
         self.clean_top_of_stack(act, |val, zelf| zelf.dead.contains(val));
 
         let consumable = last_use
-            || self.stack.iter().filter(|v| **v == arg).count() > 1
+            || self
+                .stack
+                .iter()
+                .filter(|v| **v == StackEntry::Live(arg))
+                .count()
+                > 1
             || memory_slot_of(arg, memory).is_some()
             || dfg.value_is_imm(arg);
 
@@ -229,7 +269,7 @@ impl LocalStack {
                     // slot, while leaving a copy on the stack.
                     let slot = allocate_slot(memory, arg, liveness);
                     act.push(Action::MemLoadFrameSlot(slot as u32));
-                    self.stack.push_front(arg);
+                    self.stack.push_front(StackEntry::Live(arg));
                 } else if !consumable {
                     self.dup(act, pos);
                 } else if !self.is_frozen(0) {
@@ -244,7 +284,7 @@ impl LocalStack {
             }
             ValueLocation::Memory(pos) => {
                 act.push(Action::MemLoadFrameSlot(pos as u32));
-                self.stack.push_front(arg);
+                self.stack.push_front(StackEntry::Live(arg));
             }
             ValueLocation::Nowhere => {
                 panic!("{arg:?} not found on stack or in memory");
@@ -270,14 +310,15 @@ impl LocalStack {
                 last_use.contains(*a)
                 // We allow a val to be consumed if the stack contains
                 // any additional copies, even if buried.
-                    || self.stack.iter().filter(|v| *v == a).count() > 1
+                    || self.stack.iter().filter(|e| **e == StackEntry::Live(*a)).count() > 1
                     || memory_slot_of(*a, memory).is_some()
                     || dfg.value_is_imm(*a)
             })
             .collect();
 
         // if the top val isn't used by this insn...
-        if let Some(top) = self.stack.front() {
+        if let Some(StackEntry::Live(top)) = self.stack.front() {
+            // xxx consider case where top entry is a jump target we just pushed on
             if !args.contains(top) {
                 if_chain! {
                     if let Some(last) = args.last();
@@ -298,9 +339,10 @@ impl LocalStack {
         }
 
         let all_consumable = args.iter().all(|a| consumable.contains(*a));
-        if all_consumable && args.iter().eq(self.top_n(args.len())) {
+        if all_consumable && self.top_n_is(args.len(), &mut args.iter()) {
             // happy case: all vals are at top of stack, in order
-        } else if all_consumable && args.iter().rev().eq(self.top_n(args.len())) {
+        } else if all_consumable && self.top_n_is(args.len(), &mut args.iter().rev()) {
+            // xxx if args.len() == 2 and insn commutes, do nothing
             // all vals are at top of stack, but in reverse order
             for swap in reverse(args.len() as u8) {
                 self.swap(act, swap as usize);
@@ -332,7 +374,7 @@ impl LocalStack {
                             // last arg is consumable; swap it up.
                             self.swap(act, pos)
                         } else if pos == 1
-                            && args.last().copied() == self.top()
+                            && self.top() == args.last().map(|a| StackEntry::Live(*a))
                             && consumable.contains(val)
                         {
                             // stack is [prev_arg, this_arg, ..]; swap.
@@ -344,14 +386,14 @@ impl LocalStack {
                             // slot, while leaving a copy on the stack.
                             let slot = allocate_slot(memory, val, liveness);
                             act.push(Action::MemLoadFrameSlot(slot as u32));
-                            self.stack.push_front(val);
+                            self.stack.push_front(StackEntry::Live(val));
                         } else {
                             self.dup(act, pos);
                         }
                     }
                     ValueLocation::Memory(pos) => {
                         act.push(Action::MemLoadFrameSlot(pos as u32));
-                        self.stack.push_front(val);
+                        self.stack.push_front(StackEntry::Live(val));
                     }
                     ValueLocation::Nowhere => {
                         panic!("{val:?} not found on stack or in memory");
@@ -380,8 +422,13 @@ impl LocalStack {
         }
         self.dead.union_with(last_use);
 
+        // xxx assert that the current insn is a call
+        if self.stack.front() == Some(&StackEntry::ReturnJumpTarget) {
+            self.stack.pop_front();
+        }
+
         if let Some(res) = result {
-            self.stack.push_front(res);
+            self.stack.push_front(StackEntry::Live(res));
         }
     }
 
@@ -389,11 +436,9 @@ impl LocalStack {
     /// leaving any `args` values at the top, and any
     /// `live_out` values at the bottom.
     /// Args must be moved to the top before calling `retain`.
+    /// xxx rework this. don't require args to be at top
     pub fn retain(&mut self, act: &mut Actions, args: &[ValueId], live_out: &BitSet<ValueId>) {
-        eprintln!("retain {args:?} in {:?}", &self);
-        debug_assert!(self.top_n(args.len()).eq(args.iter()));
-
-        eprintln!("retain 1 {:?}", &self);
+        debug_assert!(self.top_n_is(args.len(), &mut args.iter()));
 
         self.clean_top_of_stack(act, |val, _| {
             !args.contains(&val) && !live_out.contains(val)
@@ -422,8 +467,6 @@ impl LocalStack {
         //     }
         // }
 
-        eprintln!("retain 3 {:?} {:?}", &self, act);
-
         // xxx remove
         // if let Some(arg) = args.first() {
         //     let pos = self
@@ -433,11 +476,17 @@ impl LocalStack {
         // }
     }
 
-    fn position_within_reach<F>(&self, predicate: F) -> Option<usize>
+    fn position_within_reach<F>(&self, mut predicate: F) -> Option<usize>
     where
         F: FnMut(ValueId) -> bool,
     {
-        self.top_n(REACH).copied().position(predicate)
+        self.top_n(REACH).copied().position(|e| {
+            if let StackEntry::Live(v) = e {
+                predicate(v)
+            } else {
+                false
+            }
+        })
     }
 
     fn shrink_stack<F>(
@@ -474,7 +523,7 @@ impl LocalStack {
     }
 
     fn location_of(&self, val: ValueId, memory: &[MemSlot], dfg: &DataFlowGraph) -> ValueLocation {
-        if let Some(pos) = self.stack.iter().position(|v| *v == val) {
+        if let Some(pos) = self.stack.iter().position(|e| *e == StackEntry::Live(val)) {
             // If item is buried, check if it's imm or in memory
             if pos >= REACH {
                 if let Some(imm) = dfg.value_imm(val) {
@@ -544,12 +593,18 @@ impl fmt::Debug for LocalStack {
         let mut pref = "";
         for (idx, val) in self.stack.iter().enumerate() {
             write!(f, "{pref}")?;
-            if self.dead.contains(*val) {
-                write!(f, "dead({})", val.as_u32())?;
-            } else if self.is_frozen(idx) {
-                write!(f, "frozen({})", val.as_u32())?;
-            } else {
-                write!(f, "{}", val.as_u32())?;
+            match val {
+                StackEntry::Live(val) => {
+                    if self.dead.contains(*val) {
+                        write!(f, "dead({})", val.as_u32())?;
+                    } else if self.is_frozen(idx) {
+                        write!(f, "frozen({})", val.as_u32())?;
+                    } else {
+                        write!(f, "{}", val.as_u32())?;
+                    }
+                }
+                StackEntry::ReturnJumpTarget => write!(f, "jump target")?,
+                StackEntry::Junk => write!(f, "junk!")?,
             }
             pref = ", ";
         }
@@ -564,7 +619,7 @@ mod tests {
     use super::BitSet;
     use sonatina_ir::ValueId;
 
-    use crate::stackalloc::Actions;
+    use crate::stackalloc::{local_stack::StackEntry, Actions};
 
     use super::{reverse, LocalStack};
 
@@ -603,6 +658,9 @@ mod tests {
         let mut act = Actions::default();
         stack.clean_top_of_stack(&mut act, |val, _| !live.contains(val));
 
-        assert_eq!(stack.stack, VecDeque::from([ValueId(2), ValueId(5)]));
+        assert_eq!(
+            stack.stack,
+            VecDeque::from([StackEntry::Live(ValueId(2)), StackEntry::Live(ValueId(5))])
+        );
     }
 }

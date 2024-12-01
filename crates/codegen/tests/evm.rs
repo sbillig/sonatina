@@ -94,6 +94,7 @@ fn test_evm(fixture: Fixture<&str>) {
                 vcode.write(&mut v, &ctx).unwrap();
                 (vcode, block_order)
             });
+
             writeln!(v).unwrap();
             (*fref, vcode, block_order)
         })
