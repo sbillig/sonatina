@@ -998,7 +998,6 @@ impl LowerBackend for EvmBackend {
                 let mem_plan = mem_plan
                     .as_ref()
                     .expect("missing memory plan during lowering");
-                let is_transient = mem_plan.transient_mallocs.contains(&insn);
 
                 let dyn_base_words = self
                     .dyn_base()
@@ -1021,35 +1020,14 @@ impl LowerBackend for EvmBackend {
 
                 perform_actions(ctx, &alloc.read(insn, &args));
 
-                if is_transient {
-                    // Drop the requested size; this is a transient bump allocation that does not
-                    // update `FREE_PTR_SLOT` and is allowed to overlap with later allocations.
-                    ctx.push(OpCode::POP);
-
-                    // heap_end = mload(0x40)
-                    push_bytes(ctx, &[FREE_PTR_SLOT]);
-                    ctx.push(OpCode::MLOAD);
-
-                    // sp = mload(DYN_SP_SLOT)
-                    push_bytes(ctx, &[DYN_SP_SLOT]);
-                    ctx.push(OpCode::MLOAD);
-
-                    // max(heap_end, sp)
-                    emit_max_top_two(ctx);
-
-                    // max(max(heap_end, sp), min_base)
-                    push_bytes(ctx, &u32_to_be(min_base_bytes));
-                    emit_max_top_two(ctx);
-
-                    perform_actions(ctx, &alloc.write(insn, result));
-                    return;
-                }
-
                 // Align to 32 bytes:
                 // aligned = ((size + 31) / 32) * 32
                 push_bytes(ctx, &[0x1f]);
                 ctx.push(OpCode::ADD);
                 push_bytes(ctx, &[0x20]);
+                // EVM `DIV` computes `a / b` where `a` is top-of-stack. At this point we have
+                // `[size+31, 32]` on the stack (32 is top), so swap to make `size+31` the numerator.
+                ctx.push(OpCode::SWAP1);
                 ctx.push(OpCode::DIV);
                 push_bytes(ctx, &[0x20]);
                 ctx.push(OpCode::MUL);
