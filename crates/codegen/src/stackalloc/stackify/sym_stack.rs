@@ -213,6 +213,48 @@ impl SymStack {
         self.push_call_ret_addr();
     }
 
+    /// Ensure the call continuation address sits immediately below the `operand_count`
+    /// call operands at the top of the stack.
+    ///
+    /// This matches the EVM backend's internal-call ABI, where the callee expects its return
+    /// address (`FuncRetAddr`) to sit below its arguments and above any caller values that must
+    /// survive the call.
+    pub(super) fn position_call_ret_below_operands(
+        &mut self,
+        operand_count: usize,
+        actions: &mut Actions,
+    ) {
+        let Some(pos) = self.items.iter().position(|i| *i == StackItem::CallRetAddr) else {
+            panic!("expected StackItem::CallRetAddr");
+        };
+
+        if pos == operand_count {
+            return;
+        }
+
+        // `SWAPn` can only address up to 16 deep; stackify planning should keep the call
+        // continuation reachable.
+        debug_assert!(pos <= super::SWAP_MAX, "call return address out of reach");
+        debug_assert!(
+            operand_count <= super::SWAP_MAX,
+            "call operand count exceeds SWAP16"
+        );
+        debug_assert!(pos < self.len_above_func_ret());
+
+        // Rotate the call return address to the top, then rotate it down behind the operands.
+        self.stable_rotate_to_top(pos, actions);
+        debug_assert_eq!(self.items.front(), Some(&StackItem::CallRetAddr));
+
+        for k in (1..=operand_count).rev() {
+            self.swap(k, actions);
+        }
+        debug_assert_eq!(
+            self.items.get(operand_count),
+            Some(&StackItem::CallRetAddr),
+            "failed to position call return address"
+        );
+    }
+
     pub(super) fn remove_call_ret_addr(&mut self) {
         let Some(pos) = self.items.iter().position(|i| *i == StackItem::CallRetAddr) else {
             panic!("expected StackItem::CallRetAddr")

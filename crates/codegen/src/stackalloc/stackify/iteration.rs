@@ -281,14 +281,6 @@ impl<'a, 'ctx, O: StackifyObserver> IterationPlanner<'a, 'ctx, O> {
             None,
         );
 
-        // Calls push a continuation target before argument setup (the backend consumes
-        // `Action::PushContinuationOffset`).
-        if is_call {
-            state
-                .stack
-                .push_call_continuation(&mut self.alloc.pre_actions[inst]);
-        }
-
         if let Some(branch) = self.ctx.func.dfg.branch_info(inst) {
             match branch.branch_kind() {
                 BranchKind::Jump(jump) => {
@@ -462,6 +454,18 @@ impl<'a, 'ctx, O: StackifyObserver> IterationPlanner<'a, 'ctx, O> {
         self.with_pre_actions_planner(&mut state.stack, inst, &mut state.free_slots, |p| {
             p.prepare_operands_for_inst(inst, &mut args, &consume_last_use);
         });
+
+        if is_call {
+            // Insert the continuation marker after operand preparation so we can position it
+            // relative to the call operands without operand-prep reordering it.
+            state
+                .stack
+                .push_call_continuation(&mut self.alloc.pre_actions[inst]);
+            state.stack.position_call_ret_below_operands(
+                args.len(),
+                &mut self.alloc.pre_actions[inst],
+            );
+        }
 
         self.observer.on_inst_actions(
             "pre",
