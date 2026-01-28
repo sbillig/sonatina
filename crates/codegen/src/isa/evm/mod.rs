@@ -1728,20 +1728,80 @@ fn prepare_function(
             mem_effects,
             &inst_liveness,
         );
-        let alloc = StackifyAlloc::for_function_with_call_live_values_and_scratch_spills(
-            function,
-            &cfg,
-            &dom,
-            &liveness,
-            backend.stackify_reach_depth,
-            StackifyLiveValues {
-                call_live_values: call_live_values.clone(),
-                scratch_live_values,
-            },
-            scratch_spill_slots,
-        );
+        let (alloc, stackify_trace) = if std::env::var_os("SONATINA_STACKIFY_TRACE").is_some() {
+            let (alloc, trace) =
+                StackifyAlloc::for_function_with_trace_call_live_values_and_scratch_spills(
+                    function,
+                    &cfg,
+                    &dom,
+                    &liveness,
+                    backend.stackify_reach_depth,
+                    StackifyLiveValues {
+                        call_live_values: call_live_values.clone(),
+                        scratch_live_values,
+                    },
+                    scratch_spill_slots,
+                );
+            (alloc, Some(trace))
+        } else {
+            let alloc = StackifyAlloc::for_function_with_call_live_values_and_scratch_spills(
+                function,
+                &cfg,
+                &dom,
+                &liveness,
+                backend.stackify_reach_depth,
+                StackifyLiveValues {
+                    call_live_values: call_live_values.clone(),
+                    scratch_live_values,
+                },
+                scratch_spill_slots,
+            );
+            (alloc, None)
+        };
         let persistent_frame_slots = alloc.persistent_frame_slots;
         let transient_frame_slots = alloc.transient_frame_slots;
+
+        if let Some(trace) = stackify_trace {
+            // Filter by substring match on the function name if requested, to keep output usable.
+            let filter = std::env::var("SONATINA_STACKIFY_TRACE_FUNC").ok();
+            let name = module.func_sig(func_ref, |sig| sig.name().to_string());
+            let should_print = match &filter {
+                None => true,
+                Some(f) => name.contains(f),
+            };
+            if should_print {
+                let msg = format!("sonatina stackify trace: {name}\n{trace}\n");
+                let out_path =
+                    std::env::var_os("SONATINA_STACKIFY_TRACE_OUT").map(std::path::PathBuf::from);
+                let write_stderr = out_path.is_none()
+                    || std::env::var("SONATINA_STACKIFY_TRACE_STDERR")
+                        .map(|v| v != "0" && !v.is_empty())
+                        .unwrap_or(false);
+
+                if let Some(path) = out_path {
+                    use std::io::Write;
+                    match std::fs::OpenOptions::new()
+                        .create(true)
+                        .append(true)
+                        .open(&path)
+                        .and_then(|mut f| f.write_all(msg.as_bytes()))
+                    {
+                        Ok(()) => {}
+                        Err(err) => {
+                            eprintln!(
+                                "SONATINA_STACKIFY_TRACE_OUT: failed to write `{}`: {err}",
+                                path.display()
+                            );
+                            eprint!("{msg}");
+                        }
+                    }
+                }
+
+                if write_stderr {
+                    eprint!("{msg}");
+                }
+            }
+        }
 
         let alloca_layout = alloca_plan::compute_stack_alloca_layout(
             func_ref,

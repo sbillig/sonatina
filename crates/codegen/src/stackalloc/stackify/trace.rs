@@ -256,6 +256,22 @@ impl StackifyObserver for StackifyTrace {
         res: Option<ValueId>,
     ) {
         let op_name = func.dfg.inst(inst).as_text();
+        if op_name == "call" {
+            if let Some(call) = func.dfg.call_info(inst) {
+                let callee = call.callee();
+                let callee_name = func.ctx().func_sig(callee, |sig| sig.name().to_string());
+                let _ = write!(
+                    &mut self.out,
+                    "      call({callee_name}) {}",
+                    fmt_values(func, args)
+                );
+                if let Some(r) = res {
+                    let _ = write!(&mut self.out, " -> {}", fmt_value(func, r));
+                }
+                let _ = writeln!(&mut self.out);
+                return;
+            }
+        }
         let _ = write!(&mut self.out, "      {op_name} {}", fmt_values(func, args));
         if let Some(r) = res {
             let _ = write!(&mut self.out, " -> {}", fmt_value(func, r));
