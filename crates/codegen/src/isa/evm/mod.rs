@@ -998,6 +998,7 @@ impl LowerBackend for EvmBackend {
                 let mem_plan = mem_plan
                     .as_ref()
                     .expect("missing memory plan during lowering");
+                let is_transient = mem_plan.transient_mallocs.contains(&insn);
 
                 let dyn_base_words = self
                     .dyn_base()
@@ -1019,6 +1020,30 @@ impl LowerBackend for EvmBackend {
                     .expect("malloc static bound bytes overflow");
 
                 perform_actions(ctx, &alloc.read(insn, &args));
+
+                if is_transient {
+                    // Drop the requested size; this is a transient bump allocation that does not
+                    // update `FREE_PTR_SLOT` and is allowed to overlap with later allocations.
+                    ctx.push(OpCode::POP);
+
+                    // heap_end = mload(0x40)
+                    push_bytes(ctx, &[FREE_PTR_SLOT]);
+                    ctx.push(OpCode::MLOAD);
+
+                    // sp = mload(DYN_SP_SLOT)
+                    push_bytes(ctx, &[DYN_SP_SLOT]);
+                    ctx.push(OpCode::MLOAD);
+
+                    // max(heap_end, sp)
+                    emit_max_top_two(ctx);
+
+                    // max(max(heap_end, sp), min_base)
+                    push_bytes(ctx, &u32_to_be(min_base_bytes));
+                    emit_max_top_two(ctx);
+
+                    perform_actions(ctx, &alloc.write(insn, result));
+                    return;
+                }
 
                 // Align to 32 bytes:
                 // aligned = ((size + 31) / 32) * 32
@@ -1690,14 +1715,21 @@ fn prepare_function(
         let mut inst_liveness = InstLiveness::new();
         inst_liveness.compute(function, &cfg, &liveness);
 
-        let transient_mallocs = malloc_plan::compute_transient_mallocs(
-            function,
-            module,
-            &backend.isa,
-            ptr_escape,
-            mem_effects,
-            &inst_liveness,
-        );
+        let disable_transient_mallocs = std::env::var("SONATINA_DISABLE_TRANSIENT_MALLOC")
+            .map(|v| v != "0" && !v.is_empty())
+            .unwrap_or(false);
+        let transient_mallocs = if disable_transient_mallocs {
+            FxHashSet::default()
+        } else {
+            malloc_plan::compute_transient_mallocs(
+                function,
+                module,
+                &backend.isa,
+                ptr_escape,
+                mem_effects,
+                &inst_liveness,
+            )
+        };
 
         if mem_effects.is_none()
             && !did_insert_free_ptr_restore
