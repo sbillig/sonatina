@@ -1696,6 +1696,39 @@ fn prepare_function(
     ptr_escape: &FxHashMap<FuncRef, PtrEscapeSummary>,
     mem_effects: Option<&FxHashMap<FuncRef, FuncMemEffects>>,
 ) -> PreparedFunction {
+    fn emit_debug_output(out_path_env: &str, stderr_env: &str, contents: &str) {
+        use std::io::Write;
+
+        let out_path = std::env::var_os(out_path_env).map(std::path::PathBuf::from);
+        let write_stderr = out_path.is_none()
+            || std::env::var(stderr_env)
+                .map(|v| v != "0" && !v.is_empty())
+                .unwrap_or(false);
+
+        if let Some(path) = out_path {
+            match std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(&path)
+                .and_then(|mut f| f.write_all(contents.as_bytes()))
+            {
+                Ok(()) => {}
+                Err(err) => {
+                    eprintln!(
+                        "{out_path_env}: failed to write `{}`: {err}",
+                        path.display()
+                    );
+                    eprint!("{contents}");
+                    return;
+                }
+            }
+        }
+
+        if write_stderr {
+            eprint!("{contents}");
+        }
+    }
+
     let mut cfg = ControlFlowGraph::new();
     cfg.compute(function);
 
@@ -1730,6 +1763,54 @@ fn prepare_function(
                 &inst_liveness,
             )
         };
+
+        let transient_trace_enabled = std::env::var("SONATINA_TRANSIENT_MALLOC_TRACE")
+            .map(|v| v != "0" && !v.is_empty())
+            .unwrap_or(false);
+        if transient_trace_enabled {
+            let filter = std::env::var("SONATINA_TRANSIENT_MALLOC_TRACE_FUNC").ok();
+            let name = module.func_sig(func_ref, |sig| sig.name().to_string());
+            let should_print = match &filter {
+                None => true,
+                Some(f) => name.contains(f),
+            };
+            if should_print {
+                let mut total_mallocs = 0usize;
+                let mut out = String::new();
+                out.push_str(&format!(
+                    "sonatina transient malloc trace: {name}\n  disabled={disable_transient_mallocs}\n",
+                ));
+
+                for block in function.layout.iter_block() {
+                    for inst in function.layout.iter_inst(block) {
+                        let data = backend.isa.inst_set().resolve_inst(function.dfg.inst(inst));
+                        let sonatina_ir::inst::evm::inst_set::EvmInstKind::EvmMalloc(m) = data
+                        else {
+                            continue;
+                        };
+
+                        total_mallocs += 1;
+                        let is_transient = transient_mallocs.contains(&inst);
+                        let size = *m.size();
+                        let res = function.dfg.inst_result(inst);
+                        out.push_str(&format!(
+                            "  block={block:?} inst={inst:?} transient={is_transient} size={size:?} res={res:?}\n",
+                        ));
+                    }
+                }
+
+                out.push_str(&format!(
+                    "  mallocs_total={total_mallocs} mallocs_transient={}\n\n",
+                    transient_mallocs.len()
+                ));
+
+                emit_debug_output(
+                    "SONATINA_TRANSIENT_MALLOC_TRACE_OUT",
+                    "SONATINA_TRANSIENT_MALLOC_TRACE_STDERR",
+                    &out,
+                );
+            }
+        }
 
         if mem_effects.is_none()
             && !did_insert_free_ptr_restore
@@ -1803,35 +1884,11 @@ fn prepare_function(
             };
             if should_print {
                 let msg = format!("sonatina stackify trace: {name}\n{trace}\n");
-                let out_path =
-                    std::env::var_os("SONATINA_STACKIFY_TRACE_OUT").map(std::path::PathBuf::from);
-                let write_stderr = out_path.is_none()
-                    || std::env::var("SONATINA_STACKIFY_TRACE_STDERR")
-                        .map(|v| v != "0" && !v.is_empty())
-                        .unwrap_or(false);
-
-                if let Some(path) = out_path {
-                    use std::io::Write;
-                    match std::fs::OpenOptions::new()
-                        .create(true)
-                        .append(true)
-                        .open(&path)
-                        .and_then(|mut f| f.write_all(msg.as_bytes()))
-                    {
-                        Ok(()) => {}
-                        Err(err) => {
-                            eprintln!(
-                                "SONATINA_STACKIFY_TRACE_OUT: failed to write `{}`: {err}",
-                                path.display()
-                            );
-                            eprint!("{msg}");
-                        }
-                    }
-                }
-
-                if write_stderr {
-                    eprint!("{msg}");
-                }
+                emit_debug_output(
+                    "SONATINA_STACKIFY_TRACE_OUT",
+                    "SONATINA_STACKIFY_TRACE_STDERR",
+                    &msg,
+                );
             }
         }
 
