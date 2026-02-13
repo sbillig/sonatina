@@ -218,8 +218,14 @@ pub(crate) fn compute_transient_mallocs(
                 continue;
             }
 
-            let live = inst_liveness.live_out(inst);
-            remove_live_mallocs(&mut mallocs, live, &prov, &seen_mallocs);
+            // Barrier calls can run heap/meta operations that may overlap transient allocations.
+            // Treat call arguments as live across the barrier as well, even if the call consumes
+            // them and they are absent from `live_out`.
+            let mut live = inst_liveness.live_out(inst).clone();
+            for arg in function.dfg.inst(inst).collect_values() {
+                live.insert(arg);
+            }
+            remove_live_mallocs(&mut mallocs, &live, &prov, &seen_mallocs);
         }
     }
 
