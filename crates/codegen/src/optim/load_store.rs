@@ -285,6 +285,9 @@ fn transfer_backward(
                 if let Some(key) = analysis.trackable_exact_loc(func, access) {
                     live.exact_live.insert(key);
                 } else if let Some(range) = analysis.trackable_linear_range(func, access) {
+                    if range.bytes == 0 {
+                        continue;
+                    }
                     live.range_live.insert(range);
                 } else {
                     live.whole_space_live.insert(access.space);
@@ -557,6 +560,7 @@ mod tests {
         I256, Immediate, Type,
         builder::test_util::*,
         inst::{
+            arith::Add,
             control_flow::Return,
             data::{Alloca, Mload},
             evm::{
@@ -1002,6 +1006,29 @@ mod tests {
         let value = builder.make_imm_value(I256::from(7));
         builder.insert_inst_no_result_with(|| Mstore::new(is, addr, value, Type::I256));
         builder.insert_inst_no_result_with(|| EvmRevert::new(is, zero, zero));
+        builder.seal_all();
+
+        assert!(run_solver(&mut builder.func));
+        assert_eq!(count_insts::<Mstore>(&builder.func), 0);
+    }
+
+    #[test]
+    fn removes_store_before_zero_length_opaque_revert_payload() {
+        let mb = test_module_builder();
+        let (evm, mut builder) = test_func_builder(&mb, &[Type::I256, Type::I256], Type::Unit);
+        let is = evm.inst_set();
+
+        let block = builder.append_block();
+        builder.switch_to_block(block);
+
+        let lhs = builder.args()[0];
+        let rhs = builder.args()[1];
+        let zero = builder.make_imm_value(I256::from(0));
+        let addr = builder.make_imm_value(I256::from(64));
+        let value = builder.make_imm_value(I256::from(7));
+        let payload_addr = builder.insert_inst_with(|| Add::new(is, lhs, rhs), Type::I256);
+        builder.insert_inst_no_result_with(|| Mstore::new(is, addr, value, Type::I256));
+        builder.insert_inst_no_result_with(|| EvmRevert::new(is, payload_addr, zero));
         builder.seal_all();
 
         assert!(run_solver(&mut builder.func));

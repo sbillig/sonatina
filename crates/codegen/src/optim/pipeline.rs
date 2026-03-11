@@ -52,7 +52,7 @@ pub enum Pass {
     Adce,
     /// Loop invariant code motion.
     Licm,
-    /// E-graph based algebraic simplification and memory forwarding.
+    /// E-graph based algebraic simplification, typically after dedicated load/store cleanup.
     Egraph,
     /// Complete Global Value Numbering (legacy sparse predicated solver).
     Gvn,
@@ -236,11 +236,14 @@ impl Pipeline {
     /// 1. `Inline` — single-block inlining (module-level)
     /// 2. Per-function passes (parallel):
     ///    - `CfgCleanup` — normalize CFG before analysis-heavy passes
+    ///    - `AggregateCombine` — local aggregate simplification
+    ///    - `AggregateScalarize` — scalarize closed aggregate webs
+    ///    - `LoadStore` — memory forwarding and dead-store elimination
     ///    - `Sccp` — constant propagation + dead code elimination (composite)
     ///    - `Gvn` — sparse predicated global value numbering with value-phi resolution
     ///    - `Licm` — loop invariant code motion
     ///    - `CfgCleanup` — clean up after LICM structural changes
-    ///    - `Egraph` — algebraic simplification, memory forwarding
+    ///    - `Egraph` — algebraic simplification, typically after load/store cleanup
     ///    - `RebuildUsers` — fix stale `dfg.users` after egraph
     ///    - `Sccp` — second round catches constants exposed by egraph
     ///    - `CfgCleanup` — final cleanup

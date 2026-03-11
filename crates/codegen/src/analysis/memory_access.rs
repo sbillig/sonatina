@@ -137,13 +137,13 @@ impl MemoryAccessAnalysis {
             return None;
         };
 
-        let addr = self.canonical_linear_addr(func, *addr);
-        if matches!(addr.base, BaseObject::Unknown(_)) {
+        let bytes = self.value_const_i64(func, *len)?;
+        if bytes < 0 {
             return None;
         }
 
-        let bytes = self.value_const_i64(func, *len)?;
-        if bytes < 0 {
+        let addr = self.canonical_linear_addr(func, *addr);
+        if bytes != 0 && matches!(addr.base, BaseObject::Unknown(_)) {
             return None;
         }
 
@@ -871,6 +871,44 @@ mod tests {
             )
             .expect("zero-length range should be trackable");
 
+        assert!(!analysis.range_may_alias_key(&range, &key));
+    }
+
+    #[test]
+    fn zero_length_unknown_linear_range_is_trackable_noop() {
+        let mb = test_module_builder();
+        let (evm, mut builder) = test_func_builder(&mb, &[Type::I256, Type::I256], Type::Unit);
+        let is = evm.inst_set();
+
+        let block = builder.append_block();
+        builder.switch_to_block(block);
+
+        let lhs = builder.args()[0];
+        let rhs = builder.args()[1];
+        let dynamic_addr = builder.insert_inst_with(|| Add::new(is, lhs, rhs), Type::I256);
+        let exact_addr = builder.make_imm_value(I256::from(64));
+        let load = builder.insert_inst_with(|| Mload::new(is, exact_addr, Type::I256), Type::I256);
+        let _ = (dynamic_addr, load);
+        builder.insert_inst_no_result_with(|| Return::new_unit(is));
+        builder.seal_all();
+
+        let insts: Vec<_> = builder.func.layout.iter_inst(block).collect();
+        let inst = insts[1];
+        let key = single_key(&builder.func, inst);
+        let zero = builder.make_imm_value(I256::from(0));
+        let analysis = MemoryAccessAnalysis::new();
+        let range = analysis
+            .trackable_linear_range(
+                &builder.func,
+                &range_access(
+                    builder.func.ctx().address_spaces().default_space(),
+                    dynamic_addr,
+                    zero,
+                ),
+            )
+            .expect("zero-length range should stay trackable even with an unknown base");
+
+        assert_eq!(range.bytes, 0);
         assert!(!analysis.range_may_alias_key(&range, &key));
     }
 
