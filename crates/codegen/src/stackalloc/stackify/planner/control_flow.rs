@@ -38,12 +38,7 @@ impl<'a, 'ctx: 'a> Planner<'a, 'ctx> {
             }
         }
 
-        // Memory-only phi results do not participate in the successor's stack template. Their
-        // spill slots are assigned with phi-edge interference, so stores can be emitted directly
-        // without clobbering later source loads on this edge.
-        for &(phi_res, src) in &spilled_phi_pairs {
-            self.emit_store_spilled_value_from_source(phi_res, src);
-        }
+        self.emit_spilled_phi_parallel_stores(&spilled_phi_pairs);
 
         // Normalize the predecessor stack directly to the successor entry template:
         //
@@ -88,6 +83,47 @@ impl<'a, 'ctx: 'a> Planner<'a, 'ctx> {
         }
     }
 
+    fn emit_spilled_phi_parallel_stores(&mut self, spilled_phi_pairs: &[(ValueId, ValueId)]) {
+        if spilled_phi_pairs.is_empty() {
+            return;
+        }
+
+        // Spilled phi edge stores are still parallel copies. Source and destination stack objects
+        // can later be assigned the same memory word when their ordinary block liveness does not
+        // overlap, so all sources must be captured before any destination store is emitted.
+        for &(_, src) in spilled_phi_pairs {
+            self.push_spilled_phi_source(src);
+        }
+
+        for &(phi_res, src) in spilled_phi_pairs.iter().rev() {
+            debug_assert_eq!(
+                self.stack.top(),
+                Some(&StackItem::Value(src)),
+                "spilled phi source capture order drifted"
+            );
+            self.mem.emit_store_for_spilled_value(phi_res, self.actions);
+            self.stack.pop_operand();
+        }
+    }
+
+    fn push_spilled_phi_source(&mut self, src: ValueId) {
+        if self.ctx.func.dfg.value_is_imm(src) {
+            let imm = self
+                .ctx
+                .func
+                .dfg
+                .value_imm(src)
+                .expect("imm value missing payload");
+            self.stack.push_imm(src, imm, self.actions);
+        } else if let Some(pos) = self.stack.find_reachable_value(src, self.ctx.reach.dup_max) {
+            self.stack.dup(pos, self.actions);
+        } else {
+            let act = self.mem.load_frame_slot_or_placeholder(src);
+            self.actions.push(act);
+            self.stack.push_value(src);
+        }
+    }
+
     pub fn plan_internal_return(&mut self, inst: InstId) {
         let ret_vals: SmallVec<[ValueId; 16]> = self
             .ctx
@@ -129,7 +165,7 @@ mod tests {
             },
         },
     };
-    use cranelift_entity::SecondaryMap;
+    use cranelift_entity::{EntityRef, SecondaryMap};
     use smallvec::smallvec;
     use sonatina_ir::{BlockId, ValueId, cfg::ControlFlowGraph};
     use sonatina_parser::parse_module;
@@ -244,14 +280,132 @@ block1:
                 actions.as_slice(),
                 &[
                     Action::Push(sonatina_ir::Immediate::I256(0.into())),
-                    Action::MemStoreAbs(32),
                     Action::MemLoadAbs(0),
+                    Action::MemStoreAbs(32),
                     Action::MemStoreAbs(64),
                 ],
             );
             assert_eq!(slots.scratch.slot_for(source), Some(0));
-            assert_eq!(slots.scratch.slot_for(first_phi), Some(1));
-            assert_eq!(slots.scratch.slot_for(second_phi), Some(2));
+            assert_eq!(slots.scratch.slot_for(first_phi), Some(2));
+            assert_eq!(slots.scratch.slot_for(second_phi), Some(1));
+        });
+    }
+
+    #[test]
+    fn spilled_phi_object_sources_load_before_any_store() {
+        let parsed = parse_module(
+            r#"
+target = "evm-ethereum-osaka"
+
+func public %entry(v0.i256, v1.i256) -> i256 {
+block0:
+    v2.i256 = add v0 1.i256;
+    v3.i256 = add v1 1.i256;
+    jump block1;
+
+block1:
+    v4.i256 = phi (v2 block0);
+    v5.i256 = phi (v3 block0);
+    return v5;
+}
+"#,
+        )
+        .expect("module parses");
+        let func_ref = parsed
+            .module
+            .funcs()
+            .into_iter()
+            .find(|&func| {
+                parsed
+                    .module
+                    .ctx
+                    .func_sig(func, |sig| sig.name() == "entry")
+            })
+            .expect("entry exists");
+
+        parsed.module.func_store.view(func_ref, |func| {
+            let mut cfg = ControlFlowGraph::default();
+            cfg.compute(func);
+            let entry = cfg.entry().expect("entry block");
+
+            let mut liveness = Liveness::new();
+            liveness.compute(func, &cfg);
+
+            let mut dom = DomTree::new();
+            dom.compute(&cfg);
+
+            let mut scc = CfgSccAnalysis::new();
+            scc.compute(&cfg);
+
+            let ctx = build_stackify_test_context(
+                func,
+                &cfg,
+                &dom,
+                &liveness,
+                entry,
+                scc,
+                StackifyReachability::new(16),
+            );
+
+            let source_a = parsed.debug.value(func_ref, "v2").expect("v2");
+            let source_b = parsed.debug.value(func_ref, "v3").expect("v3");
+            let phi_a = parsed.debug.value(func_ref, "v4").expect("v4");
+            let phi_b = parsed.debug.value(func_ref, "v5").expect("v5");
+
+            let mut spill_set = crate::bitset::BitSet::default();
+            for value in [source_a, source_b, phi_a, phi_b] {
+                spill_set.insert(value);
+            }
+
+            let mut spill_requests = crate::bitset::BitSet::default();
+            let mut object_spill_requests = crate::bitset::BitSet::default();
+            let forced_object_spills = crate::bitset::BitSet::default();
+            let mut spill_obj: SecondaryMap<ValueId, Option<_>> = SecondaryMap::new();
+            for (idx, value) in [source_a, source_b, phi_a, phi_b].into_iter().enumerate() {
+                spill_obj[value] = Some(crate::isa::evm::static_arena_alloc::StackObjId::new(idx));
+            }
+            let mut free_slots = FreeSlotPools::default();
+            let mut slots = SpillSlotPools::default();
+            let mem = MemPlan::new(
+                SpillSet::new(&spill_set),
+                &mut spill_requests,
+                &ctx,
+                &spill_obj,
+                &ctx.exact_local_addr,
+                &mut object_spill_requests,
+                &forced_object_spills,
+                &mut free_slots,
+                &mut slots,
+            );
+            let mut stack = SymStack::opaque_prefix_empty(false);
+            let mut actions = Actions::new();
+            let mut search_scratch = NormalizeSearchScratch::default();
+            let mut planner =
+                Planner::new(&ctx, &mut stack, &mut actions, mem, &mut search_scratch);
+
+            let mut template = BlockTemplate::new(smallvec![]);
+            template.freeze_transfer(smallvec![]);
+            planner.plan_edge_fixup_to_template(&template, BlockId(0), BlockId(1));
+
+            assert!(
+                actions
+                    .as_slice()
+                    .windows(2)
+                    .any(|window| matches!(window, [Action::MemLoadObj(_), Action::MemLoadObj(_)])),
+                "spilled phi sources must be loaded before destination stores: {actions:?}"
+            );
+            let first_store = actions
+                .iter()
+                .position(|action| matches!(action, Action::MemStoreObj(_)))
+                .expect("expected a store");
+            let load_count_before_first_store = actions[..first_store]
+                .iter()
+                .filter(|action| matches!(action, Action::MemLoadObj(_)))
+                .count();
+            assert_eq!(
+                load_count_before_first_store, 2,
+                "expected both object sources to load before first store: {actions:?}"
+            );
         });
     }
 
