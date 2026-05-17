@@ -29,11 +29,12 @@ pub(super) fn translate_module(
     let funcs = module.funcs();
 
     for &func_ref in &funcs {
-        let (name, sig) = module.ctx.func_sig(func_ref, |sig| {
+        let (name, sig) = module.ctx.func_sig(func_ref, |sig| -> Result<_, String> {
+            validate_cranelift_signature(sig)?;
             let name = sig.name().to_string();
             let clif_sig = sonatina_sig_to_clif(sig, clif_module);
-            (name, clif_sig)
-        });
+            Ok((name, clif_sig))
+        })?;
 
         let linkage = match module.ctx.func_linkage(func_ref) {
             SonatinaLinkage::Public => Linkage::Export,
@@ -86,17 +87,30 @@ pub(super) fn translate_module(
     Ok(func_map)
 }
 
-fn returns_struct(sig: &Signature) -> bool {
-    sig.ret_tys()
-        .iter()
-        .any(|ty| matches!(ty, Type::Compound(_)))
+fn uses_indirect_return_abi(ty: Type) -> bool {
+    ty == Type::I256 || matches!(ty, Type::Compound(_))
+}
+
+fn returns_indirect(sig: &Signature) -> bool {
+    sig.ret_tys().len() == 1 && uses_indirect_return_abi(sig.ret_tys()[0])
+}
+
+fn validate_cranelift_signature(sig: &Signature) -> Result<(), String> {
+    if sig.ret_tys().len() > 1 && sig.ret_tys().iter().any(|ty| uses_indirect_return_abi(*ty)) {
+        return Err(format!(
+            "Cranelift backend does not support multi-return signatures containing indirect return types: {}",
+            sig.name()
+        ));
+    }
+    Ok(())
 }
 
 fn sonatina_sig_to_clif(sig: &Signature, clif_module: &impl ClifModule) -> clif::Signature {
     let mut clif_sig = clif_module.make_signature();
 
-    // If returning a struct, add hidden sret pointer as first param
-    if returns_struct(sig) {
+    // Values represented as pointers to owned storage return through a
+    // caller-allocated buffer so the result outlives the callee frame.
+    if returns_indirect(sig) {
         clif_sig.params.push(clif::AbiParam::new(clif::types::I64));
     }
 
@@ -106,8 +120,8 @@ fn sonatina_sig_to_clif(sig: &Signature, clif_module: &impl ClifModule) -> clif:
         }
     }
 
-    if returns_struct(sig) {
-        // Struct return via sret pointer — no return values in signature
+    if returns_indirect(sig) {
+        // Indirect return via hidden sret pointer: no Cranelift return values.
     } else {
         for &ret_ty in sig.ret_tys() {
             if let Some(clif_ty) = sonatina_type_to_clif(ret_ty) {
@@ -148,9 +162,10 @@ fn translate_function(
     clif_module: &mut impl ClifModule,
 ) -> Result<(), String> {
     let mut ctx = clif_module.make_context();
-    let sig = module
-        .ctx
-        .func_sig(func_ref, |sig| sonatina_sig_to_clif(sig, clif_module));
+    let sig = module.ctx.func_sig(func_ref, |sig| -> Result<_, String> {
+        validate_cranelift_signature(sig)?;
+        Ok(sonatina_sig_to_clif(sig, clif_module))
+    })?;
     ctx.func.signature = sig;
 
     let mut builder_ctx = FunctionBuilderContext::new();
@@ -163,7 +178,7 @@ fn translate_function(
         block_map.insert(block, clif_block);
     }
 
-    let has_sret = module.ctx.func_sig(func_ref, returns_struct);
+    let has_sret = module.ctx.func_sig(func_ref, returns_indirect);
 
     let entry = function.layout.entry_block().ok_or("no entry block")?;
     let clif_entry = block_map[&entry];
@@ -629,11 +644,11 @@ fn translate_function(
                         .ok_or_else(|| format!("unknown callee {:?}", callee))?;
                     let clif_func_ref = clif_module.declare_func_in_func(*clif_func_id, builder.func);
                     let ir_results = function.dfg.inst_results(inst_id);
-                    let callee_returns_struct = !ir_results.is_empty()
-                        && matches!(function.dfg.value_ty(ir_results[0]), Type::Compound(_));
+                    let callee_returns_indirect = ir_results.len() == 1
+                        && uses_indirect_return_abi(function.dfg.value_ty(ir_results[0]));
 
                     let mut call_args: Vec<clif::Value> = Vec::new();
-                    let sret_slot = if callee_returns_struct {
+                    let sret_slot = if callee_returns_indirect {
                         let result_ty = function.dfg.value_ty(ir_results[0]);
                         let slot = builder.create_sized_stack_slot(
                             cranelift_codegen::ir::StackSlotData::new(

@@ -481,6 +481,66 @@ fn cranelift_native_i256_div_checked_and_saturating_ops() {
 }
 
 #[test]
+fn cranelift_native_i256_call_results_do_not_alias_callee_stack() {
+    let isa = native_isa();
+    let is = isa.inst_set();
+    let mb = native_module_builder();
+
+    let make_sig = Signature::new_single("make_i256", Linkage::Private, &[Type::I32], Type::I256);
+    let make_ref = mb.declare_function(make_sig).unwrap();
+    let caller_sig = Signature::new_single("first_i256_result", Linkage::Public, &[], Type::I32);
+    let caller_ref = mb.declare_function(caller_sig).unwrap();
+
+    {
+        let mut fb = mb.func_builder::<InstInserter>(make_ref);
+        let entry = fb.append_block();
+        fb.switch_to_block(entry);
+
+        let value = fb.insert_inst(cast::Zext::new(is, fb.args()[0], Type::I256), Type::I256);
+        fb.insert_inst_no_result(control_flow::Return::new_single(is, value));
+        fb.seal_all();
+        fb.finish();
+    }
+
+    {
+        let mut fb = mb.func_builder::<InstInserter>(caller_ref);
+        let entry = fb.append_block();
+        fb.switch_to_block(entry);
+
+        let first_arg = fb.make_imm_value(1i32);
+        let first = fb.insert_inst(
+            control_flow::Call::new(is, make_ref, smallvec::smallvec![first_arg]),
+            Type::I256,
+        );
+        for value in 2..=5 {
+            let arg = fb.make_imm_value(value);
+            fb.insert_inst(
+                control_flow::Call::new(is, make_ref, smallvec::smallvec![arg]),
+                Type::I256,
+            );
+        }
+        let first = fb.insert_inst(cast::Trunc::new(is, first, Type::I32), Type::I32);
+        fb.insert_inst_no_result(control_flow::Return::new_single(is, first));
+        fb.seal_all();
+        fb.finish();
+    }
+
+    let module = mb.build();
+    let artifact = CraneliftBackend::new()
+        .compile_module(&module)
+        .expect("compilation failed");
+
+    let f: fn() -> i32 = unsafe {
+        let ptr = artifact
+            .get_func_ptr::<fn() -> i32>("first_i256_result")
+            .unwrap();
+        std::mem::transmute(ptr)
+    };
+
+    assert_eq!(f(), 1);
+}
+
+#[test]
 fn cranelift_native_integer_edge_ops() {
     let isa = native_isa();
     let is = isa.inst_set();
