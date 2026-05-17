@@ -8,8 +8,8 @@ use cranelift_frontend::{FunctionBuilder, FunctionBuilderContext};
 use cranelift_module::{FuncId, Linkage, Module as ClifModule};
 
 use sonatina_ir::{
-    BlockId, Function, Immediate, Linkage as SonatinaLinkage, Module, Signature, Type, Value,
-    ValueId,
+    BlockId, ControlFlowGraph, Function, Immediate, Linkage as SonatinaLinkage, Module, Signature,
+    Type, Value, ValueId,
     module::{FuncRef, ModuleCtx},
 };
 
@@ -171,9 +171,14 @@ fn translate_function(
     let mut builder_ctx = FunctionBuilderContext::new();
     let mut builder = FunctionBuilder::new(&mut ctx.func, &mut builder_ctx);
 
+    let mut cfg = ControlFlowGraph::default();
+    cfg.compute(function);
+    let mut block_order: Vec<_> = cfg.post_order().collect();
+    block_order.reverse();
+
     let mut block_map: HashMap<BlockId, clif::Block> = HashMap::new();
     let mut value_map: HashMap<ValueId, clif::Value> = HashMap::new();
-    for block in function.layout.iter_block() {
+    for &block in &block_order {
         let clif_block = builder.create_block();
         block_map.insert(block, clif_block);
     }
@@ -199,34 +204,37 @@ fn translate_function(
 
     let inst_set = function.inst_set();
 
+    for &block in &block_order {
+        let clif_block = block_map[&block];
+        for inst_id in function.layout.iter_inst(block) {
+            let inst_data = function.dfg.inst(inst_id);
+            if <&sonatina_ir::inst::control_flow::Phi as sonatina_ir::InstDowncast>::downcast(
+                inst_set, inst_data,
+            )
+            .is_some()
+            {
+                let result = function
+                    .dfg
+                    .inst_result(inst_id)
+                    .ok_or("phi has no result")?;
+                let ty = function.dfg.value_ty(result);
+                let clif_ty = sonatina_type_to_clif_or_err(ty)?;
+                let param = builder.append_block_param(clif_block, clif_ty);
+                value_map.insert(result, param);
+            } else {
+                break;
+            }
+        }
+    }
+
     // No blanket ISA rejection — the translator handles each instruction
     // individually, emitting intrinsic calls for EVM-specific operations
     // (addmod, mulmod) and errors for truly unsupported ones.
 
-    for block in function.layout.iter_block() {
+    for &block in &block_order {
         let clif_block = block_map[&block];
         if block != entry {
             builder.switch_to_block(clif_block);
-
-            for inst_id in function.layout.iter_inst(block) {
-                let inst_data = function.dfg.inst(inst_id);
-                if <&sonatina_ir::inst::control_flow::Phi as sonatina_ir::InstDowncast>::downcast(
-                    inst_set, inst_data,
-                )
-                .is_some()
-                {
-                    let result = function
-                        .dfg
-                        .inst_result(inst_id)
-                        .ok_or("phi has no result")?;
-                    let ty = function.dfg.value_ty(result);
-                    let clif_ty = sonatina_type_to_clif_or_err(ty)?;
-                    let param = builder.append_block_param(clif_block, clif_ty);
-                    value_map.insert(result, param);
-                } else {
-                    break;
-                }
-            }
         }
 
         for inst_id in function.layout.iter_inst(block) {
@@ -611,10 +619,13 @@ fn translate_function(
                     }
                     builder.ins().return_(&[]);
                 } else {
-                    let args: Vec<clif::Value> = ret.args().as_slice()
+                    let args: Result<Vec<_>, _> = ret
+                        .args()
+                        .as_slice()
                         .iter()
-                        .filter_map(|v| resolve_value(function, *v, &value_map, &mut builder).ok())
+                        .map(|v| resolve_value(function, *v, &value_map, &mut builder))
                         .collect();
+                    let args = args?;
                     builder.ins().return_(&args);
                 }
             } else if let Some(call) = <&sonatina_ir::inst::control_flow::Call as sonatina_ir::InstDowncast>::downcast(inst_set, inst_data) {

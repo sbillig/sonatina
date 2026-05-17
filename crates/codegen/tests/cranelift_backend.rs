@@ -120,6 +120,102 @@ fn cranelift_arithmetic_chain() {
 }
 
 #[test]
+fn cranelift_allows_dominating_defs_after_uses_in_layout_order() {
+    let isa = native_isa();
+    let is = isa.inst_set();
+    let mb = native_module_builder();
+
+    let sig = Signature::new_single("late_layout_def", Linkage::Public, &[], Type::I64);
+    let func_ref = mb.declare_function(sig).unwrap();
+
+    let mut fb = mb.func_builder::<InstInserter>(func_ref);
+    let entry = fb.append_block();
+    let use_block = fb.append_block();
+    let def_block = fb.append_block();
+
+    fb.switch_to_block(def_block);
+    let lhs = fb.make_imm_value(37i64);
+    let rhs = fb.make_imm_value(5i64);
+    let value = fb.insert_inst(arith::Add::new(is, lhs, rhs), Type::I64);
+    fb.insert_inst_no_result(control_flow::Jump::new(is, use_block));
+
+    fb.switch_to_block(entry);
+    fb.insert_inst_no_result(control_flow::Jump::new(is, def_block));
+
+    fb.switch_to_block(use_block);
+    let one = fb.make_imm_value(1i64);
+    let result = fb.insert_inst(arith::Add::new(is, value, one), Type::I64);
+    fb.insert_inst_no_result(control_flow::Return::new_single(is, result));
+
+    fb.seal_all();
+    fb.finish();
+
+    let module = mb.build();
+    let backend = CraneliftBackend::new();
+    let artifact = backend.compile_module(&module).expect("compilation failed");
+
+    let f: fn() -> i64 = unsafe {
+        let ptr = artifact
+            .get_func_ptr::<fn() -> i64>("late_layout_def")
+            .unwrap();
+        std::mem::transmute(ptr)
+    };
+
+    assert_eq!(f(), 43);
+}
+
+#[test]
+fn cranelift_predeclares_phi_params_before_predecessor_translation() {
+    let isa = native_isa();
+    let is = isa.inst_set();
+    let mb = native_module_builder();
+
+    let sig = Signature::new_single("later_phi_target", Linkage::Public, &[], Type::I64);
+    let func_ref = mb.declare_function(sig).unwrap();
+
+    let mut fb = mb.func_builder::<InstInserter>(func_ref);
+    let entry = fb.append_block();
+    let then_block = fb.append_block();
+    let else_block = fb.append_block();
+    let join_block = fb.append_block();
+
+    fb.switch_to_block(entry);
+    let cond = fb.make_imm_value(true);
+    fb.insert_inst_no_result(control_flow::Br::new(is, cond, then_block, else_block));
+
+    fb.switch_to_block(then_block);
+    let then_value = fb.make_imm_value(11i64);
+    fb.insert_inst_no_result(control_flow::Jump::new(is, join_block));
+
+    fb.switch_to_block(else_block);
+    let else_value = fb.make_imm_value(22i64);
+    fb.insert_inst_no_result(control_flow::Jump::new(is, join_block));
+
+    fb.switch_to_block(join_block);
+    let phi = fb.insert_inst(
+        control_flow::Phi::new(is, vec![(then_value, then_block), (else_value, else_block)]),
+        Type::I64,
+    );
+    fb.insert_inst_no_result(control_flow::Return::new_single(is, phi));
+
+    fb.seal_all();
+    fb.finish();
+
+    let module = mb.build();
+    let backend = CraneliftBackend::new();
+    let artifact = backend.compile_module(&module).expect("compilation failed");
+
+    let f: fn() -> i64 = unsafe {
+        let ptr = artifact
+            .get_func_ptr::<fn() -> i64>("later_phi_target")
+            .unwrap();
+        std::mem::transmute(ptr)
+    };
+
+    assert_eq!(f(), 11);
+}
+
+#[test]
 fn cranelift_native_casts_round_trip_pointer_values() {
     let isa = native_isa();
     let is = isa.inst_set();
