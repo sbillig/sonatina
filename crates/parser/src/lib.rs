@@ -806,6 +806,45 @@ func public %entry(v0.enumtag(@E)) -> unit {
     }
 
     #[test]
+    fn test_native_target_triples_parse() {
+        for target in ["x86_64-unknown-native", "aarch64-unknown-native"] {
+            let s = format!(
+                r#"
+target = "{target}"
+
+func public %entry() -> unit {{
+    block0:
+        return;
+}}
+"#
+            );
+            assert!(parse_module(&s).is_ok(), "{target} should parse");
+        }
+    }
+
+    #[test]
+    fn test_invalid_shaped_native_target_reports_invalid_target() {
+        let s = r#"
+target = "evm_unknown-ethereum-london"
+
+func public %entry() -> unit {
+    block0:
+        return;
+}
+"#;
+
+        let errors = match parse_module(s) {
+            Ok(_) => panic!("invalid target should fail"),
+            Err(errors) => errors,
+        };
+        assert!(
+            errors
+                .iter()
+                .any(|err| matches!(err, Error::InvalidTarget(..)))
+        );
+    }
+
+    #[test]
     fn test_compact_hash_comments_parse_outside_enum_declarations() {
         let s = r#"
 target = "evm-ethereum-london"
