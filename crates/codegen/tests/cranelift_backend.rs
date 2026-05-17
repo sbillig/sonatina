@@ -333,6 +333,154 @@ fn cranelift_native_i256_feasible_integer_ops() {
 }
 
 #[test]
+fn cranelift_native_i256_div_checked_and_saturating_ops() {
+    let isa = native_isa();
+    let is = isa.inst_set();
+    let mb = native_module_builder();
+
+    let sig = Signature::new_single("i256_div_checked_sat_ops", Linkage::Public, &[], Type::I32);
+    let func_ref = mb.declare_function(sig).unwrap();
+
+    let mut fb = mb.func_builder::<InstInserter>(func_ref);
+    let entry = fb.append_block();
+    fb.switch_to_block(entry);
+
+    macro_rules! word {
+        ($value:expr) => {
+            fb.make_imm_value(Immediate::from_i256($value, Type::I256))
+        };
+    }
+
+    macro_rules! add_bool {
+        ($acc:ident, $value:expr) => {{
+            let value = fb.insert_inst(cast::Zext::new(is, $value, Type::I32), Type::I32);
+            $acc = fb.insert_inst(arith::Add::new(is, $acc, value), Type::I32);
+        }};
+    }
+
+    macro_rules! add_word_eq {
+        ($acc:ident, $value:expr, $expected:expr) => {{
+            let expected = word!($expected);
+            let matches = fb.insert_inst(cmp::Eq::new(is, $value, expected), Type::I1);
+            add_bool!($acc, matches);
+        }};
+    }
+
+    let zero_i32 = fb.make_imm_value(0i32);
+    let mut acc = zero_i32;
+
+    let big = (U256::one() << 130) + U256::from(123u8);
+    let seven_u = U256::from(7u8);
+    let big_word = word!(I256::from(big));
+    let seven_word = word!(I256::from(seven_u));
+    let udiv = fb.insert_inst(arith::Udiv::new(is, big_word, seven_word), Type::I256);
+    let umod = fb.insert_inst(arith::Umod::new(is, big_word, seven_word), Type::I256);
+    add_word_eq!(acc, udiv, I256::from(big / seven_u));
+    add_word_eq!(acc, umod, I256::from(big % seven_u));
+
+    let negative_hundred = word!(I256::from(-100i8));
+    let seven = word!(I256::from(7u8));
+    let sdiv = fb.insert_inst(arith::Sdiv::new(is, negative_hundred, seven), Type::I256);
+    let smod = fb.insert_inst(arith::Smod::new(is, negative_hundred, seven), Type::I256);
+    add_word_eq!(acc, sdiv, I256::from(-14i8));
+    add_word_eq!(acc, smod, I256::from(-2i8));
+
+    let signed_min = I256::from(U256::one() << 255);
+    let signed_max = I256::from((U256::one() << 255) - U256::one());
+    let unsigned_max = I256::all_one();
+    let min_word = word!(signed_min);
+    let negative_one = word!(I256::from(-1i8));
+    let min_div = fb.insert_inst(arith::Sdiv::new(is, min_word, negative_one), Type::I256);
+    let min_mod = fb.insert_inst(arith::Smod::new(is, min_word, negative_one), Type::I256);
+    add_word_eq!(acc, min_div, signed_min);
+    add_word_eq!(acc, min_mod, I256::zero());
+
+    let zero = word!(I256::zero());
+    let one = word!(I256::one());
+    let two = word!(I256::from(2u8));
+    let unsigned_max_word = word!(unsigned_max);
+    let signed_max_word = word!(signed_max);
+    let signed_min_word = word!(signed_min);
+
+    let [uadd_raw, uadd_overflow] = fb.insert_uaddo(unsigned_max_word, one);
+    add_word_eq!(acc, uadd_raw, I256::zero());
+    add_bool!(acc, uadd_overflow);
+
+    let [sadd_raw, sadd_overflow] = fb.insert_saddo(signed_max_word, one);
+    add_word_eq!(acc, sadd_raw, signed_min);
+    add_bool!(acc, sadd_overflow);
+
+    let [usub_raw, usub_overflow] = fb.insert_usubo(zero, one);
+    add_word_eq!(acc, usub_raw, unsigned_max);
+    add_bool!(acc, usub_overflow);
+
+    let [ssub_raw, ssub_overflow] = fb.insert_ssubo(signed_min_word, one);
+    add_word_eq!(acc, ssub_raw, signed_max);
+    add_bool!(acc, ssub_overflow);
+
+    let high_a = word!(I256::from(U256::one() << 128));
+    let high_b = word!(I256::from(U256::one() << 128));
+    let [umul_raw, umul_overflow] = fb.insert_umulo(high_a, high_b);
+    add_word_eq!(acc, umul_raw, I256::zero());
+    add_bool!(acc, umul_overflow);
+
+    let [smul_raw, smul_overflow] = fb.insert_smulo(signed_max_word, two);
+    add_word_eq!(acc, smul_raw, I256::from(-2i8));
+    add_bool!(acc, smul_overflow);
+
+    let [sneg_raw, sneg_overflow] = fb.insert_snego(signed_min_word);
+    add_word_eq!(acc, sneg_raw, signed_min);
+    add_bool!(acc, sneg_overflow);
+
+    let uaddsat = fb.insert_uaddsat(unsigned_max_word, one);
+    add_word_eq!(acc, uaddsat, unsigned_max);
+
+    let saddsat = fb.insert_saddsat(signed_max_word, one);
+    add_word_eq!(acc, saddsat, signed_max);
+
+    let usubsat = fb.insert_usubsat(zero, one);
+    add_word_eq!(acc, usubsat, I256::zero());
+
+    let ssubsat = fb.insert_ssubsat(signed_min_word, one);
+    add_word_eq!(acc, ssubsat, signed_min);
+
+    let high_a = word!(I256::from(U256::one() << 128));
+    let high_b = word!(I256::from(U256::one() << 128));
+    let umulsat = fb.insert_umulsat(high_a, high_b);
+    add_word_eq!(acc, umulsat, unsigned_max);
+
+    let smulsat_hi = fb.insert_smulsat(signed_max_word, two);
+    add_word_eq!(acc, smulsat_hi, signed_max);
+
+    let smulsat_lo = fb.insert_smulsat(signed_min_word, two);
+    add_word_eq!(acc, smulsat_lo, signed_min);
+
+    fb.insert_inst_no_result(control_flow::Return::new_single(is, acc));
+    fb.seal_all();
+    fb.finish();
+
+    let module = mb.build();
+    let artifact = CraneliftBackend::new()
+        .compile_module(&module)
+        .expect("compilation failed");
+
+    let f: fn() -> i32 = unsafe {
+        let ptr = artifact
+            .get_func_ptr::<fn() -> i32>("i256_div_checked_sat_ops")
+            .unwrap();
+        std::mem::transmute(ptr)
+    };
+
+    assert_eq!(f(), 27);
+
+    let object = CraneliftBackend::new()
+        .compile_module_to_object(&module)
+        .expect("object compilation failed");
+    assert!(!object.bytes.is_empty());
+    assert!(object.func_map.contains_key("i256_div_checked_sat_ops"));
+}
+
+#[test]
 fn cranelift_native_integer_edge_ops() {
     let isa = native_isa();
     let is = isa.inst_set();
