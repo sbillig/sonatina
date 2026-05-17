@@ -1052,6 +1052,16 @@ fn translate_function(
                     let addr = builder.ins().stack_addr(clif::types::I64, slot, 0);
                     value_map.insert(result, addr);
                 }
+            } else if let Some(obj_init_const) = <&sonatina_ir::inst::data::ObjInitConst as sonatina_ir::InstDowncast>::downcast(inst_set, inst_data) {
+                let object = resolve_value(function, *obj_init_const.object(), &value_map, &mut builder)?;
+                let value = resolve_value(function, *obj_init_const.value(), &value_map, &mut builder)?;
+                let object_ty = function.dfg.value_ty(*obj_init_const.object());
+                copy_bytes(
+                    value,
+                    object,
+                    compute_alloc_size(object_ty, &module.ctx),
+                    &mut builder,
+                );
             } else if let Some(obj_proj) = <&sonatina_ir::inst::data::ObjProj as sonatina_ir::InstDowncast>::downcast(inst_set, inst_data) {
                 let vals = obj_proj.values();
                 let base = resolve_value(function, vals[0], &value_map, &mut builder)?;

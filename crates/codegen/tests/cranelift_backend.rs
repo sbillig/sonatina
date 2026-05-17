@@ -1004,6 +1004,60 @@ fn cranelift_const_ref_array() {
 }
 
 #[test]
+fn cranelift_obj_init_const_array() {
+    let isa = native_isa();
+    let is = isa.inst_set();
+    let mb = native_module_builder();
+
+    let arr_ty = mb.declare_array_type(Type::I64, 4);
+    let gv = mb.declare_gv(GlobalVariableData::constant(
+        "OBJECT_INIT_CONSTANTS".to_string(),
+        arr_ty,
+        Linkage::Private,
+        GvInitializer::Array(vec![
+            GvInitializer::Immediate(Immediate::I64(11)),
+            GvInitializer::Immediate(Immediate::I64(22)),
+            GvInitializer::Immediate(Immediate::I64(33)),
+            GvInitializer::Immediate(Immediate::I64(44)),
+        ]),
+    ));
+
+    let sig = Signature::new_single("init_const_array", Linkage::Public, &[], Type::I64);
+    let func_ref = mb.declare_function(sig).unwrap();
+    let objref_ty = mb.objref_type(arr_ty);
+    let constref_ty =
+        Type::Compound(mb.make_compound(sonatina_ir::types::CompoundType::ConstRef(arr_ty)));
+    let elem_objref_ty = mb.objref_type(Type::I64);
+
+    let mut fb = mb.func_builder::<InstInserter>(func_ref);
+    let entry = fb.append_block();
+    fb.switch_to_block(entry);
+
+    let object = fb.insert_inst(data::ObjAlloc::new(is, arr_ty), objref_ty);
+    let constants = fb.insert_inst(data::ConstRef::new(is, gv.into()), constref_ty);
+    fb.insert_inst_no_result(data::ObjInitConst::new(is, object, constants));
+    let idx = fb.make_imm_value(2i64);
+    let elem_ref = fb.insert_inst(data::ObjIndex::new(is, object, idx), elem_objref_ty);
+    let elem = fb.insert_inst(data::ObjLoad::new(is, elem_ref), Type::I64);
+    fb.insert_inst_no_result(control_flow::Return::new_single(is, elem));
+    fb.seal_all();
+    fb.finish();
+
+    let module = mb.build();
+    let backend = CraneliftBackend::new();
+    let artifact = backend.compile_module(&module).expect("compilation failed");
+
+    let f: fn() -> i64 = unsafe {
+        let ptr = artifact
+            .get_func_ptr::<fn() -> i64>("init_const_array")
+            .unwrap();
+        std::mem::transmute(ptr)
+    };
+
+    assert_eq!(f(), 33);
+}
+
+#[test]
 fn cranelift_poseidon_loop_with_const_array() {
     let isa = native_isa();
     let is = isa.inst_set();
