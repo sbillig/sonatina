@@ -2,11 +2,11 @@
 
 use sonatina_codegen::{Backend, Compile, OptLevel, isa::cranelift::CraneliftBackend};
 use sonatina_ir::{
-    I256, Immediate, Linkage, Signature, Type,
+    I256, Immediate, Linkage, Signature, Type, U256,
     builder::ModuleBuilder,
     func_cursor::InstInserter,
     global_variable::{GlobalVariableData, GvInitializer},
-    inst::{arith, cast, cmp, control_flow, data},
+    inst::{arith, cast, cmp, control_flow, data, logic},
     isa::{Isa, native::Native},
     module::ModuleCtx,
 };
@@ -241,6 +241,95 @@ fn cranelift_native_i256_bool_sext_is_zero_one() {
     };
 
     assert_eq!(f(), 1);
+}
+
+#[test]
+fn cranelift_native_i256_feasible_integer_ops() {
+    let isa = native_isa();
+    let is = isa.inst_set();
+    let mb = native_module_builder();
+
+    let sig = Signature::new_single("i256_integer_ops", Linkage::Public, &[], Type::I32);
+    let func_ref = mb.declare_function(sig).unwrap();
+
+    let mut fb = mb.func_builder::<InstInserter>(func_ref);
+    let entry = fb.append_block();
+    fb.switch_to_block(entry);
+
+    macro_rules! word {
+        ($value:expr) => {
+            fb.make_imm_value(Immediate::from_i256($value, Type::I256))
+        };
+    }
+
+    let three_hi = word!(I256::from(U256::from(3u8) << 64));
+    let one_hi = word!(I256::from(U256::one() << 64));
+    let three = word!(I256::from(3u8));
+    let product = fb.insert_inst(arith::Mul::new(is, one_hi, three), Type::I256);
+    let product_ok = fb.insert_inst(cmp::Eq::new(is, product, three_hi), Type::I1);
+
+    let five = word!(I256::from(5u8));
+    let neg_five = fb.insert_inst(arith::Neg::new(is, five), Type::I256);
+    let neg_five = fb.insert_inst(cast::Trunc::new(is, neg_five, Type::I32), Type::I32);
+
+    let zero_word = word!(I256::zero());
+    let not_zero = fb.insert_inst(logic::Not::new(is, zero_word), Type::I256);
+    let not_zero = fb.insert_inst(cast::Trunc::new(is, not_zero, Type::I32), Type::I32);
+
+    let mask_lhs = word!(I256::from(0xf0u16));
+    let mask_rhs = word!(I256::from(0xccu16));
+    let mask = fb.insert_inst(logic::And::new(is, mask_lhs, mask_rhs), Type::I256);
+    let or_rhs = word!(I256::from(0x03u8));
+    let masked = fb.insert_inst(logic::Or::new(is, mask, or_rhs), Type::I256);
+    let xor_rhs = word!(I256::from(0x0fu8));
+    let xored = fb.insert_inst(logic::Xor::new(is, masked, xor_rhs), Type::I256);
+    let xored = fb.insert_inst(cast::Trunc::new(is, xored, Type::I32), Type::I32);
+
+    let one = word!(I256::from(1u8));
+    let shift_65 = word!(I256::from(65u8));
+    let shift_64 = word!(I256::from(64u8));
+    let shifted_left = fb.insert_inst(arith::Shl::new(is, shift_65, one), Type::I256);
+    let shifted_right = fb.insert_inst(arith::Shr::new(is, shift_64, shifted_left), Type::I256);
+    let shifted_right = fb.insert_inst(cast::Trunc::new(is, shifted_right, Type::I32), Type::I32);
+
+    let negative_eight = word!(I256::from(-8i8));
+    let shift_1 = word!(I256::from(1u8));
+    let shifted_arithmetic =
+        fb.insert_inst(arith::Sar::new(is, shift_1, negative_eight), Type::I256);
+    let shifted_arithmetic = fb.insert_inst(
+        cast::Trunc::new(is, shifted_arithmetic, Type::I32),
+        Type::I32,
+    );
+
+    let product_ok = fb.insert_inst(cast::Zext::new(is, product_ok, Type::I32), Type::I32);
+    let mut acc = product_ok;
+    for value in [neg_five, not_zero, xored, shifted_right, shifted_arithmetic] {
+        acc = fb.insert_inst(arith::Add::new(is, acc, value), Type::I32);
+    }
+
+    fb.insert_inst_no_result(control_flow::Return::new_single(is, acc));
+    fb.seal_all();
+    fb.finish();
+
+    let module = mb.build();
+    let artifact = CraneliftBackend::new()
+        .compile_module(&module)
+        .expect("compilation failed");
+
+    let f: fn() -> i32 = unsafe {
+        let ptr = artifact
+            .get_func_ptr::<fn() -> i32>("i256_integer_ops")
+            .unwrap();
+        std::mem::transmute(ptr)
+    };
+
+    assert_eq!(f(), 197);
+
+    let object = CraneliftBackend::new()
+        .compile_module_to_object(&module)
+        .expect("object compilation failed");
+    assert!(!object.bytes.is_empty());
+    assert!(object.func_map.contains_key("i256_integer_ops"));
 }
 
 #[test]

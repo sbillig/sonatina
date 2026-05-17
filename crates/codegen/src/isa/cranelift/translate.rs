@@ -13,6 +13,10 @@ use sonatina_ir::{
     module::{FuncRef, ModuleCtx},
 };
 
+const I256_LIMBS: usize = 4;
+const I256_BITS: i64 = 256;
+const I256_LIMB_BITS: i64 = 64;
+
 pub(super) fn translate_module(
     module: &Module,
     clif_module: &mut impl ClifModule,
@@ -243,22 +247,28 @@ fn translate_function(
                     value_map.insert(result, result_val);
                 }
             } else if let Some(mul) = <&sonatina_ir::inst::arith::Mul as sonatina_ir::InstDowncast>::downcast(inst_set, inst_data) {
-                if function.dfg.value_ty(*mul.lhs()) == Type::I256 {
-                    return Err("i256 multiplication is not supported by CraneliftBackend object lowering yet".to_string());
-                }
-                let lhs = resolve_value(function, *mul.lhs(), &value_map, &mut builder)?;
-                let rhs = resolve_value(function, *mul.rhs(), &value_map, &mut builder)?;
-                let result_val = builder.ins().imul(lhs, rhs);
+                let result_val = if function.dfg.value_ty(*mul.lhs()) == Type::I256 {
+                    emit_i256_mul(function, *mul.lhs(), *mul.rhs(), &value_map, &mut builder)?
+                } else {
+                    let lhs = resolve_value(function, *mul.lhs(), &value_map, &mut builder)?;
+                    let rhs = resolve_value(function, *mul.rhs(), &value_map, &mut builder)?;
+                    builder.ins().imul(lhs, rhs)
+                };
                 if let Some(result) = function.dfg.inst_result(inst_id) {
                     value_map.insert(result, result_val);
                 }
             } else if let Some(neg) = <&sonatina_ir::inst::arith::Neg as sonatina_ir::InstDowncast>::downcast(inst_set, inst_data) {
-                let val = resolve_value(function, *neg.arg(), &value_map, &mut builder)?;
-                let result_val = builder.ins().ineg(val);
+                let result_val = if function.dfg.value_ty(*neg.arg()) == Type::I256 {
+                    emit_i256_neg(function, *neg.arg(), &value_map, &mut builder)?
+                } else {
+                    let val = resolve_value(function, *neg.arg(), &value_map, &mut builder)?;
+                    builder.ins().ineg(val)
+                };
                 if let Some(result) = function.dfg.inst_result(inst_id) {
                     value_map.insert(result, result_val);
                 }
             } else if let Some(div) = <&sonatina_ir::inst::arith::Udiv as sonatina_ir::InstDowncast>::downcast(inst_set, inst_data) {
+                reject_i256_binary(function, *div.lhs(), *div.rhs(), "i256 udiv")?;
                 let lhs = resolve_value(function, *div.lhs(), &value_map, &mut builder)?;
                 let rhs = resolve_value(function, *div.rhs(), &value_map, &mut builder)?;
                 let result_val = builder.ins().udiv(lhs, rhs);
@@ -266,6 +276,7 @@ fn translate_function(
                     value_map.insert(result, result_val);
                 }
             } else if let Some(div) = <&sonatina_ir::inst::arith::Sdiv as sonatina_ir::InstDowncast>::downcast(inst_set, inst_data) {
+                reject_i256_binary(function, *div.lhs(), *div.rhs(), "i256 sdiv")?;
                 let lhs = resolve_value(function, *div.lhs(), &value_map, &mut builder)?;
                 let rhs = resolve_value(function, *div.rhs(), &value_map, &mut builder)?;
                 let result_val = builder.ins().sdiv(lhs, rhs);
@@ -273,6 +284,7 @@ fn translate_function(
                     value_map.insert(result, result_val);
                 }
             } else if let Some(rem) = <&sonatina_ir::inst::arith::Umod as sonatina_ir::InstDowncast>::downcast(inst_set, inst_data) {
+                reject_i256_binary(function, *rem.lhs(), *rem.rhs(), "i256 umod")?;
                 let lhs = resolve_value(function, *rem.lhs(), &value_map, &mut builder)?;
                 let rhs = resolve_value(function, *rem.rhs(), &value_map, &mut builder)?;
                 let result_val = builder.ins().urem(lhs, rhs);
@@ -280,6 +292,7 @@ fn translate_function(
                     value_map.insert(result, result_val);
                 }
             } else if let Some(rem) = <&sonatina_ir::inst::arith::Smod as sonatina_ir::InstDowncast>::downcast(inst_set, inst_data) {
+                reject_i256_binary(function, *rem.lhs(), *rem.rhs(), "i256 smod")?;
                 let lhs = resolve_value(function, *rem.lhs(), &value_map, &mut builder)?;
                 let rhs = resolve_value(function, *rem.rhs(), &value_map, &mut builder)?;
                 let result_val = builder.ins().srem(lhs, rhs);
@@ -287,50 +300,120 @@ fn translate_function(
                     value_map.insert(result, result_val);
                 }
             } else if let Some(shl) = <&sonatina_ir::inst::arith::Shl as sonatina_ir::InstDowncast>::downcast(inst_set, inst_data) {
-                let val = resolve_value(function, *shl.value(), &value_map, &mut builder)?;
-                let bits = resolve_value(function, *shl.bits(), &value_map, &mut builder)?;
-                let result_val = builder.ins().ishl(val, bits);
+                let result_val = if function.dfg.value_ty(*shl.value()) == Type::I256 {
+                    emit_i256_shift(
+                        function,
+                        *shl.value(),
+                        *shl.bits(),
+                        I256ShiftKind::Shl,
+                        &value_map,
+                        &mut builder,
+                    )?
+                } else {
+                    let val = resolve_value(function, *shl.value(), &value_map, &mut builder)?;
+                    let bits = resolve_value(function, *shl.bits(), &value_map, &mut builder)?;
+                    builder.ins().ishl(val, bits)
+                };
                 if let Some(result) = function.dfg.inst_result(inst_id) {
                     value_map.insert(result, result_val);
                 }
             } else if let Some(shr) = <&sonatina_ir::inst::arith::Shr as sonatina_ir::InstDowncast>::downcast(inst_set, inst_data) {
-                let val = resolve_value(function, *shr.value(), &value_map, &mut builder)?;
-                let bits = resolve_value(function, *shr.bits(), &value_map, &mut builder)?;
-                let result_val = builder.ins().ushr(val, bits);
+                let result_val = if function.dfg.value_ty(*shr.value()) == Type::I256 {
+                    emit_i256_shift(
+                        function,
+                        *shr.value(),
+                        *shr.bits(),
+                        I256ShiftKind::Shr,
+                        &value_map,
+                        &mut builder,
+                    )?
+                } else {
+                    let val = resolve_value(function, *shr.value(), &value_map, &mut builder)?;
+                    let bits = resolve_value(function, *shr.bits(), &value_map, &mut builder)?;
+                    builder.ins().ushr(val, bits)
+                };
                 if let Some(result) = function.dfg.inst_result(inst_id) {
                     value_map.insert(result, result_val);
                 }
             } else if let Some(sar) = <&sonatina_ir::inst::arith::Sar as sonatina_ir::InstDowncast>::downcast(inst_set, inst_data) {
-                let val = resolve_value(function, *sar.value(), &value_map, &mut builder)?;
-                let bits = resolve_value(function, *sar.bits(), &value_map, &mut builder)?;
-                let result_val = builder.ins().sshr(val, bits);
+                let result_val = if function.dfg.value_ty(*sar.value()) == Type::I256 {
+                    emit_i256_shift(
+                        function,
+                        *sar.value(),
+                        *sar.bits(),
+                        I256ShiftKind::Sar,
+                        &value_map,
+                        &mut builder,
+                    )?
+                } else {
+                    let val = resolve_value(function, *sar.value(), &value_map, &mut builder)?;
+                    let bits = resolve_value(function, *sar.bits(), &value_map, &mut builder)?;
+                    builder.ins().sshr(val, bits)
+                };
                 if let Some(result) = function.dfg.inst_result(inst_id) {
                     value_map.insert(result, result_val);
                 }
             } else if let Some(and) = <&sonatina_ir::inst::logic::And as sonatina_ir::InstDowncast>::downcast(inst_set, inst_data) {
-                let lhs = resolve_value(function, *and.lhs(), &value_map, &mut builder)?;
-                let rhs = resolve_value(function, *and.rhs(), &value_map, &mut builder)?;
-                let result_val = builder.ins().band(lhs, rhs);
+                let result_val = if function.dfg.value_ty(*and.lhs()) == Type::I256 {
+                    emit_i256_bitwise(
+                        function,
+                        *and.lhs(),
+                        *and.rhs(),
+                        I256BitwiseOp::And,
+                        &value_map,
+                        &mut builder,
+                    )?
+                } else {
+                    let lhs = resolve_value(function, *and.lhs(), &value_map, &mut builder)?;
+                    let rhs = resolve_value(function, *and.rhs(), &value_map, &mut builder)?;
+                    builder.ins().band(lhs, rhs)
+                };
                 if let Some(result) = function.dfg.inst_result(inst_id) {
                     value_map.insert(result, result_val);
                 }
             } else if let Some(or) = <&sonatina_ir::inst::logic::Or as sonatina_ir::InstDowncast>::downcast(inst_set, inst_data) {
-                let lhs = resolve_value(function, *or.lhs(), &value_map, &mut builder)?;
-                let rhs = resolve_value(function, *or.rhs(), &value_map, &mut builder)?;
-                let result_val = builder.ins().bor(lhs, rhs);
+                let result_val = if function.dfg.value_ty(*or.lhs()) == Type::I256 {
+                    emit_i256_bitwise(
+                        function,
+                        *or.lhs(),
+                        *or.rhs(),
+                        I256BitwiseOp::Or,
+                        &value_map,
+                        &mut builder,
+                    )?
+                } else {
+                    let lhs = resolve_value(function, *or.lhs(), &value_map, &mut builder)?;
+                    let rhs = resolve_value(function, *or.rhs(), &value_map, &mut builder)?;
+                    builder.ins().bor(lhs, rhs)
+                };
                 if let Some(result) = function.dfg.inst_result(inst_id) {
                     value_map.insert(result, result_val);
                 }
             } else if let Some(xor) = <&sonatina_ir::inst::logic::Xor as sonatina_ir::InstDowncast>::downcast(inst_set, inst_data) {
-                let lhs = resolve_value(function, *xor.lhs(), &value_map, &mut builder)?;
-                let rhs = resolve_value(function, *xor.rhs(), &value_map, &mut builder)?;
-                let result_val = builder.ins().bxor(lhs, rhs);
+                let result_val = if function.dfg.value_ty(*xor.lhs()) == Type::I256 {
+                    emit_i256_bitwise(
+                        function,
+                        *xor.lhs(),
+                        *xor.rhs(),
+                        I256BitwiseOp::Xor,
+                        &value_map,
+                        &mut builder,
+                    )?
+                } else {
+                    let lhs = resolve_value(function, *xor.lhs(), &value_map, &mut builder)?;
+                    let rhs = resolve_value(function, *xor.rhs(), &value_map, &mut builder)?;
+                    builder.ins().bxor(lhs, rhs)
+                };
                 if let Some(result) = function.dfg.inst_result(inst_id) {
                     value_map.insert(result, result_val);
                 }
             } else if let Some(not) = <&sonatina_ir::inst::logic::Not as sonatina_ir::InstDowncast>::downcast(inst_set, inst_data) {
-                let val = resolve_value(function, *not.arg(), &value_map, &mut builder)?;
-                let result_val = builder.ins().bnot(val);
+                let result_val = if function.dfg.value_ty(*not.arg()) == Type::I256 {
+                    emit_i256_not(function, *not.arg(), &value_map, &mut builder)?
+                } else {
+                    let val = resolve_value(function, *not.arg(), &value_map, &mut builder)?;
+                    builder.ins().bnot(val)
+                };
                 if let Some(result) = function.dfg.inst_result(inst_id) {
                     value_map.insert(result, result_val);
                 }
@@ -546,36 +629,43 @@ fn translate_function(
                     }
                 }
             } else if let Some(uaddo) = <&sonatina_ir::inst::arith::Uaddo as sonatina_ir::InstDowncast>::downcast(inst_set, inst_data) {
+                reject_i256_binary(function, *uaddo.lhs(), *uaddo.rhs(), "i256 uaddo")?;
                 let lhs = resolve_value(function, *uaddo.lhs(), &value_map, &mut builder)?;
                 let rhs = resolve_value(function, *uaddo.rhs(), &value_map, &mut builder)?;
                 let (result_val, overflow) = builder.ins().uadd_overflow(lhs, rhs);
                 insert_clif_results(function, inst_id, [result_val, overflow], &mut value_map);
             } else if let Some(saddo) = <&sonatina_ir::inst::arith::Saddo as sonatina_ir::InstDowncast>::downcast(inst_set, inst_data) {
+                reject_i256_binary(function, *saddo.lhs(), *saddo.rhs(), "i256 saddo")?;
                 let lhs = resolve_value(function, *saddo.lhs(), &value_map, &mut builder)?;
                 let rhs = resolve_value(function, *saddo.rhs(), &value_map, &mut builder)?;
                 let (result_val, overflow) = builder.ins().sadd_overflow(lhs, rhs);
                 insert_clif_results(function, inst_id, [result_val, overflow], &mut value_map);
             } else if let Some(usubo) = <&sonatina_ir::inst::arith::Usubo as sonatina_ir::InstDowncast>::downcast(inst_set, inst_data) {
+                reject_i256_binary(function, *usubo.lhs(), *usubo.rhs(), "i256 usubo")?;
                 let lhs = resolve_value(function, *usubo.lhs(), &value_map, &mut builder)?;
                 let rhs = resolve_value(function, *usubo.rhs(), &value_map, &mut builder)?;
                 let (result_val, overflow) = builder.ins().usub_overflow(lhs, rhs);
                 insert_clif_results(function, inst_id, [result_val, overflow], &mut value_map);
             } else if let Some(ssubo) = <&sonatina_ir::inst::arith::Ssubo as sonatina_ir::InstDowncast>::downcast(inst_set, inst_data) {
+                reject_i256_binary(function, *ssubo.lhs(), *ssubo.rhs(), "i256 ssubo")?;
                 let lhs = resolve_value(function, *ssubo.lhs(), &value_map, &mut builder)?;
                 let rhs = resolve_value(function, *ssubo.rhs(), &value_map, &mut builder)?;
                 let (result_val, overflow) = builder.ins().ssub_overflow(lhs, rhs);
                 insert_clif_results(function, inst_id, [result_val, overflow], &mut value_map);
             } else if let Some(umulo) = <&sonatina_ir::inst::arith::Umulo as sonatina_ir::InstDowncast>::downcast(inst_set, inst_data) {
+                reject_i256_binary(function, *umulo.lhs(), *umulo.rhs(), "i256 umulo")?;
                 let lhs = resolve_value(function, *umulo.lhs(), &value_map, &mut builder)?;
                 let rhs = resolve_value(function, *umulo.rhs(), &value_map, &mut builder)?;
                 let (result_val, overflow) = builder.ins().umul_overflow(lhs, rhs);
                 insert_clif_results(function, inst_id, [result_val, overflow], &mut value_map);
             } else if let Some(smulo) = <&sonatina_ir::inst::arith::Smulo as sonatina_ir::InstDowncast>::downcast(inst_set, inst_data) {
+                reject_i256_binary(function, *smulo.lhs(), *smulo.rhs(), "i256 smulo")?;
                 let lhs = resolve_value(function, *smulo.lhs(), &value_map, &mut builder)?;
                 let rhs = resolve_value(function, *smulo.rhs(), &value_map, &mut builder)?;
                 let (result_val, overflow) = builder.ins().smul_overflow(lhs, rhs);
                 insert_clif_results(function, inst_id, [result_val, overflow], &mut value_map);
             } else if let Some(snego) = <&sonatina_ir::inst::arith::Snego as sonatina_ir::InstDowncast>::downcast(inst_set, inst_data) {
+                reject_i256_unary(function, *snego.arg(), "i256 snego")?;
                 let val = resolve_value(function, *snego.arg(), &value_map, &mut builder)?;
                 let result_val = builder.ins().ineg(val);
                 let ty = builder.func.dfg.value_type(val);
@@ -583,6 +673,7 @@ fn translate_function(
                 let overflow = builder.ins().icmp(IntCC::Equal, val, min);
                 insert_clif_results(function, inst_id, [result_val, overflow], &mut value_map);
             } else if let Some(uaddsat) = <&sonatina_ir::inst::arith::Uaddsat as sonatina_ir::InstDowncast>::downcast(inst_set, inst_data) {
+                reject_i256_binary(function, *uaddsat.lhs(), *uaddsat.rhs(), "i256 uaddsat")?;
                 let lhs = resolve_value(function, *uaddsat.lhs(), &value_map, &mut builder)?;
                 let rhs = resolve_value(function, *uaddsat.rhs(), &value_map, &mut builder)?;
                 let (raw, overflow) = builder.ins().uadd_overflow(lhs, rhs);
@@ -592,6 +683,7 @@ fn translate_function(
                     value_map.insert(result, result_val);
                 }
             } else if let Some(saddsat) = <&sonatina_ir::inst::arith::Saddsat as sonatina_ir::InstDowncast>::downcast(inst_set, inst_data) {
+                reject_i256_binary(function, *saddsat.lhs(), *saddsat.rhs(), "i256 saddsat")?;
                 let lhs = resolve_value(function, *saddsat.lhs(), &value_map, &mut builder)?;
                 let rhs = resolve_value(function, *saddsat.rhs(), &value_map, &mut builder)?;
                 let (raw, overflow) = builder.ins().sadd_overflow(lhs, rhs);
@@ -606,6 +698,7 @@ fn translate_function(
                     value_map.insert(result, result_val);
                 }
             } else if let Some(usubsat) = <&sonatina_ir::inst::arith::Usubsat as sonatina_ir::InstDowncast>::downcast(inst_set, inst_data) {
+                reject_i256_binary(function, *usubsat.lhs(), *usubsat.rhs(), "i256 usubsat")?;
                 let lhs = resolve_value(function, *usubsat.lhs(), &value_map, &mut builder)?;
                 let rhs = resolve_value(function, *usubsat.rhs(), &value_map, &mut builder)?;
                 let (raw, overflow) = builder.ins().usub_overflow(lhs, rhs);
@@ -616,6 +709,7 @@ fn translate_function(
                     value_map.insert(result, result_val);
                 }
             } else if let Some(ssubsat) = <&sonatina_ir::inst::arith::Ssubsat as sonatina_ir::InstDowncast>::downcast(inst_set, inst_data) {
+                reject_i256_binary(function, *ssubsat.lhs(), *ssubsat.rhs(), "i256 ssubsat")?;
                 let lhs = resolve_value(function, *ssubsat.lhs(), &value_map, &mut builder)?;
                 let rhs = resolve_value(function, *ssubsat.rhs(), &value_map, &mut builder)?;
                 let (raw, overflow) = builder.ins().ssub_overflow(lhs, rhs);
@@ -630,6 +724,7 @@ fn translate_function(
                     value_map.insert(result, result_val);
                 }
             } else if let Some(umulsat) = <&sonatina_ir::inst::arith::Umulsat as sonatina_ir::InstDowncast>::downcast(inst_set, inst_data) {
+                reject_i256_binary(function, *umulsat.lhs(), *umulsat.rhs(), "i256 umulsat")?;
                 let lhs = resolve_value(function, *umulsat.lhs(), &value_map, &mut builder)?;
                 let rhs = resolve_value(function, *umulsat.rhs(), &value_map, &mut builder)?;
                 let (raw, overflow) = builder.ins().umul_overflow(lhs, rhs);
@@ -639,6 +734,7 @@ fn translate_function(
                     value_map.insert(result, result_val);
                 }
             } else if let Some(smulsat) = <&sonatina_ir::inst::arith::Smulsat as sonatina_ir::InstDowncast>::downcast(inst_set, inst_data) {
+                reject_i256_binary(function, *smulsat.lhs(), *smulsat.rhs(), "i256 smulsat")?;
                 let lhs = resolve_value(function, *smulsat.lhs(), &value_map, &mut builder)?;
                 let rhs = resolve_value(function, *smulsat.rhs(), &value_map, &mut builder)?;
                 let (raw, overflow) = builder.ins().smul_overflow(lhs, rhs);
@@ -1004,7 +1100,7 @@ fn store_i256_limb(
 }
 
 fn copy_i256(src: clif::Value, dst: clif::Value, builder: &mut FunctionBuilder) {
-    for limb in 0..4 {
+    for limb in 0..I256_LIMBS {
         let value = load_i256_limb(src, limb, builder);
         store_i256_limb(dst, limb, value, builder);
     }
@@ -1057,10 +1153,29 @@ fn materialize_scalar_as_i256(
         zero
     };
 
-    for limb in 1..4 {
+    for limb in 1..I256_LIMBS {
         store_i256_limb(result, limb, fill, builder);
     }
     result
+}
+
+fn reject_i256_unary(function: &Function, arg: ValueId, op: &str) -> Result<(), String> {
+    if function.dfg.value_ty(arg) == Type::I256 {
+        return Err(format!("{op} is not supported by CraneliftBackend yet"));
+    }
+    Ok(())
+}
+
+fn reject_i256_binary(
+    function: &Function,
+    lhs: ValueId,
+    rhs: ValueId,
+    op: &str,
+) -> Result<(), String> {
+    if function.dfg.value_ty(lhs) == Type::I256 || function.dfg.value_ty(rhs) == Type::I256 {
+        return Err(format!("{op} is not supported by CraneliftBackend yet"));
+    }
+    Ok(())
 }
 
 fn emit_i256_add(
@@ -1077,7 +1192,7 @@ fn emit_i256_add(
     let one = builder.ins().iconst(clif::types::I64, 1);
     let mut carry = zero;
 
-    for limb in 0..4 {
+    for limb in 0..I256_LIMBS {
         let lhs_limb = load_i256_limb(lhs, limb, builder);
         let rhs_limb = load_i256_limb(rhs, limb, builder);
         let (sum, carry_from_sum) = builder.ins().uadd_overflow(lhs_limb, rhs_limb);
@@ -1105,7 +1220,7 @@ fn emit_i256_sub(
     let one = builder.ins().iconst(clif::types::I64, 1);
     let mut borrow = zero;
 
-    for limb in 0..4 {
+    for limb in 0..I256_LIMBS {
         let lhs_limb = load_i256_limb(lhs, limb, builder);
         let rhs_limb = load_i256_limb(rhs, limb, builder);
         let (diff, borrow_from_diff) = builder.ins().usub_overflow(lhs_limb, rhs_limb);
@@ -1117,6 +1232,322 @@ fn emit_i256_sub(
     }
 
     Ok(result)
+}
+
+fn emit_i256_mul(
+    function: &Function,
+    lhs: ValueId,
+    rhs: ValueId,
+    value_map: &HashMap<ValueId, clif::Value>,
+    builder: &mut FunctionBuilder,
+) -> Result<clif::Value, String> {
+    let lhs = resolve_value(function, lhs, value_map, builder)?;
+    let rhs = resolve_value(function, rhs, value_map, builder)?;
+    let result = create_i256_slot(builder);
+    let zero64 = builder.ins().iconst(clif::types::I64, 0);
+    let one64 = builder.ins().iconst(clif::types::I64, 1);
+
+    for limb in 0..I256_LIMBS {
+        store_i256_limb(result, limb, zero64, builder);
+    }
+
+    for lhs_limb_idx in 0..I256_LIMBS {
+        let lhs_limb = load_i256_limb(lhs, lhs_limb_idx, builder);
+        let mut carry = zero64;
+
+        for rhs_limb_idx in 0..(I256_LIMBS - lhs_limb_idx) {
+            let result_limb_idx = lhs_limb_idx + rhs_limb_idx;
+            let rhs_limb = load_i256_limb(rhs, rhs_limb_idx, builder);
+            let existing = load_i256_limb(result, result_limb_idx, builder);
+
+            let product_low = builder.ins().imul(lhs_limb, rhs_limb);
+            let product_high = builder.ins().umulhi(lhs_limb, rhs_limb);
+            let (partial, carry_from_existing) = builder.ins().uadd_overflow(product_low, existing);
+            let (partial, carry_from_carry) = builder.ins().uadd_overflow(partial, carry);
+            store_i256_limb(result, result_limb_idx, partial, builder);
+
+            let carry_from_existing = builder.ins().select(carry_from_existing, one64, zero64);
+            let carry_from_carry = builder.ins().select(carry_from_carry, one64, zero64);
+            carry = builder.ins().iadd(product_high, carry_from_existing);
+            carry = builder.ins().iadd(carry, carry_from_carry);
+        }
+    }
+
+    Ok(result)
+}
+
+fn emit_i256_neg(
+    function: &Function,
+    value: ValueId,
+    value_map: &HashMap<ValueId, clif::Value>,
+    builder: &mut FunctionBuilder,
+) -> Result<clif::Value, String> {
+    let value = resolve_value(function, value, value_map, builder)?;
+    let zero = create_i256_slot(builder);
+    let zero_limb = builder.ins().iconst(clif::types::I64, 0);
+    for limb in 0..I256_LIMBS {
+        store_i256_limb(zero, limb, zero_limb, builder);
+    }
+    Ok(emit_i256_sub_values(zero, value, builder))
+}
+
+fn emit_i256_sub_values(
+    lhs: clif::Value,
+    rhs: clif::Value,
+    builder: &mut FunctionBuilder,
+) -> clif::Value {
+    let result = create_i256_slot(builder);
+    let zero = builder.ins().iconst(clif::types::I64, 0);
+    let one = builder.ins().iconst(clif::types::I64, 1);
+    let mut borrow = zero;
+
+    for limb in 0..I256_LIMBS {
+        let lhs_limb = load_i256_limb(lhs, limb, builder);
+        let rhs_limb = load_i256_limb(rhs, limb, builder);
+        let (diff, borrow_from_diff) = builder.ins().usub_overflow(lhs_limb, rhs_limb);
+        let (diff, borrow_from_borrow) = builder.ins().usub_overflow(diff, borrow);
+        store_i256_limb(result, limb, diff, builder);
+        let borrow_from_diff = builder.ins().select(borrow_from_diff, one, zero);
+        let borrow_from_borrow = builder.ins().select(borrow_from_borrow, one, zero);
+        borrow = builder.ins().bor(borrow_from_diff, borrow_from_borrow);
+    }
+
+    result
+}
+
+enum I256BitwiseOp {
+    And,
+    Or,
+    Xor,
+}
+
+fn emit_i256_bitwise(
+    function: &Function,
+    lhs: ValueId,
+    rhs: ValueId,
+    op: I256BitwiseOp,
+    value_map: &HashMap<ValueId, clif::Value>,
+    builder: &mut FunctionBuilder,
+) -> Result<clif::Value, String> {
+    let lhs = resolve_value(function, lhs, value_map, builder)?;
+    let rhs = resolve_value(function, rhs, value_map, builder)?;
+    let result = create_i256_slot(builder);
+
+    for limb in 0..I256_LIMBS {
+        let lhs_limb = load_i256_limb(lhs, limb, builder);
+        let rhs_limb = load_i256_limb(rhs, limb, builder);
+        let value = match op {
+            I256BitwiseOp::And => builder.ins().band(lhs_limb, rhs_limb),
+            I256BitwiseOp::Or => builder.ins().bor(lhs_limb, rhs_limb),
+            I256BitwiseOp::Xor => builder.ins().bxor(lhs_limb, rhs_limb),
+        };
+        store_i256_limb(result, limb, value, builder);
+    }
+
+    Ok(result)
+}
+
+fn emit_i256_not(
+    function: &Function,
+    value: ValueId,
+    value_map: &HashMap<ValueId, clif::Value>,
+    builder: &mut FunctionBuilder,
+) -> Result<clif::Value, String> {
+    let value = resolve_value(function, value, value_map, builder)?;
+    let result = create_i256_slot(builder);
+
+    for limb in 0..I256_LIMBS {
+        let limb_value = load_i256_limb(value, limb, builder);
+        store_i256_limb(result, limb, builder.ins().bnot(limb_value), builder);
+    }
+
+    Ok(result)
+}
+
+enum I256ShiftKind {
+    Shl,
+    Shr,
+    Sar,
+}
+
+fn emit_i256_shift(
+    function: &Function,
+    value: ValueId,
+    bits: ValueId,
+    kind: I256ShiftKind,
+    value_map: &HashMap<ValueId, clif::Value>,
+    builder: &mut FunctionBuilder,
+) -> Result<clif::Value, String> {
+    let value_addr = resolve_value(function, value, value_map, builder)?;
+    let limbs = [
+        load_i256_limb(value_addr, 0, builder),
+        load_i256_limb(value_addr, 1, builder),
+        load_i256_limb(value_addr, 2, builder),
+        load_i256_limb(value_addr, 3, builder),
+    ];
+    let (shift, too_large) = resolve_i256_shift_amount(function, bits, value_map, builder)?;
+    let result = create_i256_slot(builder);
+    let zero = builder.ins().iconst(clif::types::I64, 0);
+    let limb_mask = builder.ins().iconst(clif::types::I64, I256_LIMB_BITS - 1);
+    let limb_shift = builder.ins().ushr_imm(shift, 6);
+    let bit_shift = builder.ins().band(shift, limb_mask);
+    let bit_shift_is_zero = builder.ins().icmp(IntCC::Equal, bit_shift, zero);
+    let limb_bits = builder.ins().iconst(clif::types::I64, I256_LIMB_BITS);
+    let inverse_shift = builder.ins().isub(limb_bits, bit_shift);
+    let high_limb_is_negative =
+        builder
+            .ins()
+            .icmp(IntCC::SignedLessThan, limbs[I256_LIMBS - 1], zero);
+    let all_ones = builder.ins().iconst(clif::types::I64, -1);
+    let sign_fill = builder.ins().select(high_limb_is_negative, all_ones, zero);
+    let overshift_fill = match kind {
+        I256ShiftKind::Sar => sign_fill,
+        I256ShiftKind::Shl | I256ShiftKind::Shr => zero,
+    };
+
+    for result_limb_idx in 0..I256_LIMBS {
+        let shifted = match kind {
+            I256ShiftKind::Shl => emit_i256_shl_limb(
+                result_limb_idx,
+                limbs,
+                limb_shift,
+                bit_shift,
+                inverse_shift,
+                bit_shift_is_zero,
+                builder,
+            ),
+            I256ShiftKind::Shr => emit_i256_right_shift_limb(
+                result_limb_idx,
+                limbs,
+                limb_shift,
+                bit_shift,
+                inverse_shift,
+                bit_shift_is_zero,
+                zero,
+                builder,
+            ),
+            I256ShiftKind::Sar => emit_i256_right_shift_limb(
+                result_limb_idx,
+                limbs,
+                limb_shift,
+                bit_shift,
+                inverse_shift,
+                bit_shift_is_zero,
+                sign_fill,
+                builder,
+            ),
+        };
+        let shifted = builder.ins().select(too_large, overshift_fill, shifted);
+        store_i256_limb(result, result_limb_idx, shifted, builder);
+    }
+
+    Ok(result)
+}
+
+fn resolve_i256_shift_amount(
+    function: &Function,
+    bits: ValueId,
+    value_map: &HashMap<ValueId, clif::Value>,
+    builder: &mut FunctionBuilder,
+) -> Result<(clif::Value, clif::Value), String> {
+    let zero = builder.ins().iconst(clif::types::I64, 0);
+    let max_shift = builder.ins().iconst(clif::types::I64, I256_BITS);
+    let bits_ty = function.dfg.value_ty(bits);
+
+    if bits_ty == Type::I256 {
+        let bits_addr = resolve_value(function, bits, value_map, builder)?;
+        let shift = load_i256_limb(bits_addr, 0, builder);
+        let mut upper_nonzero = bool_const(false, builder);
+        for limb in 1..I256_LIMBS {
+            let limb_value = load_i256_limb(bits_addr, limb, builder);
+            let limb_nonzero = builder.ins().icmp(IntCC::NotEqual, limb_value, zero);
+            upper_nonzero = bool_or(upper_nonzero, limb_nonzero, builder);
+        }
+        let shift_too_large =
+            builder
+                .ins()
+                .icmp(IntCC::UnsignedGreaterThanOrEqual, shift, max_shift);
+        return Ok((shift, bool_or(upper_nonzero, shift_too_large, builder)));
+    }
+
+    let raw = resolve_value(function, bits, value_map, builder)?;
+    let raw_ty = builder.func.dfg.value_type(raw);
+    let shift = resize_int_value(raw, clif::types::I64, false, builder);
+    let shift_too_large = builder
+        .ins()
+        .icmp(IntCC::UnsignedGreaterThanOrEqual, shift, max_shift);
+    if raw_ty.bits() <= I256_LIMB_BITS as u32 {
+        return Ok((shift, shift_too_large));
+    }
+
+    let high_bits = builder.ins().ushr_imm(raw, I256_LIMB_BITS);
+    let zero_raw = builder.ins().iconst(raw_ty, 0);
+    let high_bits_nonzero = builder.ins().icmp(IntCC::NotEqual, high_bits, zero_raw);
+    Ok((shift, bool_or(high_bits_nonzero, shift_too_large, builder)))
+}
+
+fn emit_i256_shl_limb(
+    result_limb_idx: usize,
+    limbs: [clif::Value; I256_LIMBS],
+    limb_shift: clif::Value,
+    bit_shift: clif::Value,
+    inverse_shift: clif::Value,
+    bit_shift_is_zero: clif::Value,
+    builder: &mut FunctionBuilder,
+) -> clif::Value {
+    let zero = builder.ins().iconst(clif::types::I64, 0);
+    let mut result = zero;
+
+    for shifted_limb_count in 0..=result_limb_idx {
+        let low_idx = result_limb_idx - shifted_limb_count;
+        let low = builder.ins().ishl(limbs[low_idx], bit_shift);
+        let high = if low_idx > 0 {
+            let high = builder.ins().ushr(limbs[low_idx - 1], inverse_shift);
+            builder.ins().select(bit_shift_is_zero, zero, high)
+        } else {
+            zero
+        };
+        let combined = builder.ins().bor(low, high);
+        let count = builder
+            .ins()
+            .iconst(clif::types::I64, shifted_limb_count as i64);
+        let matches_count = builder.ins().icmp(IntCC::Equal, limb_shift, count);
+        result = builder.ins().select(matches_count, combined, result);
+    }
+
+    result
+}
+
+#[allow(clippy::too_many_arguments)]
+fn emit_i256_right_shift_limb(
+    result_limb_idx: usize,
+    limbs: [clif::Value; I256_LIMBS],
+    limb_shift: clif::Value,
+    bit_shift: clif::Value,
+    inverse_shift: clif::Value,
+    bit_shift_is_zero: clif::Value,
+    fill: clif::Value,
+    builder: &mut FunctionBuilder,
+) -> clif::Value {
+    let mut result = fill;
+
+    for shifted_limb_count in 0..I256_LIMBS {
+        let low_idx = result_limb_idx + shifted_limb_count;
+        let low_source = limbs.get(low_idx).copied().unwrap_or(fill);
+        let high_source = limbs.get(low_idx + 1).copied().unwrap_or(fill);
+        let low = builder.ins().ushr(low_source, bit_shift);
+        let high = builder.ins().ishl(high_source, inverse_shift);
+        let zero = builder.ins().iconst(clif::types::I64, 0);
+        let high = builder.ins().select(bit_shift_is_zero, zero, high);
+        let combined = builder.ins().bor(low, high);
+        let count = builder
+            .ins()
+            .iconst(clif::types::I64, shifted_limb_count as i64);
+        let matches_count = builder.ins().icmp(IntCC::Equal, limb_shift, count);
+        result = builder.ins().select(matches_count, combined, result);
+    }
+
+    result
 }
 
 fn bool_const(value: bool, builder: &mut FunctionBuilder) -> clif::Value {
