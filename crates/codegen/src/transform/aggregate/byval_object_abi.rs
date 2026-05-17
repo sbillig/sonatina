@@ -853,7 +853,7 @@ impl ObjectAggregateAbi {
                     ) {
                         cursor.insert_inst_data(
                             function,
-                            data::ObjStore::new_unchecked(function.inst_set(), out_arg, value),
+                            data::ObjStore::new(function.inst_set(), out_arg, value),
                         );
                     }
                 }
@@ -886,10 +886,8 @@ impl ObjectAggregateAbi {
         };
         let loc = CursorLocation::BlockTop(entry);
         let mut cursor = InstInserter::at_location(loc);
-        let load_inst = cursor.insert_inst_data(
-            function,
-            data::ObjLoad::new_unchecked(function.inst_set(), object),
-        );
+        let load_inst =
+            cursor.insert_inst_data(function, data::ObjLoad::new(function.inst_set(), object));
         let loaded = cursor.make_result(function, load_inst, ty);
         cursor.attach_result(function, load_inst, loaded);
         loaded
@@ -1116,7 +1114,7 @@ impl ObjectAggregateAbi {
                 RetLowering::Temp => {
                     let alloc_inst = pre_call.insert_inst_data(
                         function,
-                        data::ObjAlloc::new_unchecked(
+                        data::ObjAlloc::new(
                             function.inst_set(),
                             objref_element_ty(function.ctx(), out_ty)
                                 .expect("hidden out arg should be objref"),
@@ -1152,17 +1150,14 @@ impl ObjectAggregateAbi {
                         }
                         let alloc_inst = pre_call.insert_inst_data(
                             function,
-                            data::ObjAlloc::new_unchecked(
-                                function.inst_set(),
-                                arg_plan.original_ty,
-                            ),
+                            data::ObjAlloc::new(function.inst_set(), arg_plan.original_ty),
                         );
                         let object = pre_call.make_result(function, alloc_inst, arg_plan.new_ty);
                         pre_call.attach_result(function, alloc_inst, object);
                         pre_call.set_location(CursorLocation::At(alloc_inst));
                         let store_inst = pre_call.insert_inst_data(
                             function,
-                            data::ObjStore::new_unchecked(function.inst_set(), object, arg),
+                            data::ObjStore::new(function.inst_set(), object, arg),
                         );
                         pre_call.set_location(CursorLocation::At(store_inst));
                         if can_reuse_copy {
@@ -1234,7 +1229,7 @@ impl ObjectAggregateAbi {
                     }
                     let load_inst = post_call.insert_inst_data(
                         function,
-                        data::ObjLoad::new_unchecked(function.inst_set(), out_root),
+                        data::ObjLoad::new(function.inst_set(), out_root),
                     );
                     let loaded = post_call.make_result(function, load_inst, ret_plan.original_ty);
                     post_call.attach_result(function, load_inst, loaded);

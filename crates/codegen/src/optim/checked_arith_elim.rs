@@ -180,50 +180,50 @@ fn insert_plain_value(
             let [lhs, rhs] = args else {
                 panic!("add rewrite requires two arguments");
             };
-            func.dfg.make_inst(Add::new_unchecked(is, *lhs, *rhs))
+            func.dfg.make_inst(Add::new(is, *lhs, *rhs))
         }
         PlainOpKind::Sub => {
             let [lhs, rhs] = args else {
                 panic!("sub rewrite requires two arguments");
             };
-            func.dfg.make_inst(Sub::new_unchecked(is, *lhs, *rhs))
+            func.dfg.make_inst(Sub::new(is, *lhs, *rhs))
         }
         PlainOpKind::Mul => {
             let [lhs, rhs] = args else {
                 panic!("mul rewrite requires two arguments");
             };
-            func.dfg.make_inst(Mul::new_unchecked(is, *lhs, *rhs))
+            func.dfg.make_inst(Mul::new(is, *lhs, *rhs))
         }
         PlainOpKind::SnegAsSubZero => {
             let [arg] = args else {
                 panic!("sneg rewrite requires one argument");
             };
             let zero = func.dfg.make_imm_value(Immediate::zero(ty));
-            func.dfg.make_inst(Sub::new_unchecked(is, zero, *arg))
+            func.dfg.make_inst(Sub::new(is, zero, *arg))
         }
         PlainOpKind::EvmUdiv => {
             let [lhs, rhs] = args else {
                 panic!("evm_udiv rewrite requires two arguments");
             };
-            func.dfg.make_inst(EvmUdiv::new_unchecked(is, *lhs, *rhs))
+            func.dfg.make_inst(EvmUdiv::new(is, *lhs, *rhs))
         }
         PlainOpKind::EvmUmod => {
             let [lhs, rhs] = args else {
                 panic!("evm_umod rewrite requires two arguments");
             };
-            func.dfg.make_inst(EvmUmod::new_unchecked(is, *lhs, *rhs))
+            func.dfg.make_inst(EvmUmod::new(is, *lhs, *rhs))
         }
         PlainOpKind::EvmSdiv => {
             let [lhs, rhs] = args else {
                 panic!("evm_sdiv rewrite requires two arguments");
             };
-            func.dfg.make_inst(EvmSdiv::new_unchecked(is, *lhs, *rhs))
+            func.dfg.make_inst(EvmSdiv::new(is, *lhs, *rhs))
         }
         PlainOpKind::EvmSmod => {
             let [lhs, rhs] = args else {
                 panic!("evm_smod rewrite requires two arguments");
             };
-            func.dfg.make_inst(EvmSmod::new_unchecked(is, *lhs, *rhs))
+            func.dfg.make_inst(EvmSmod::new(is, *lhs, *rhs))
         }
     };
     let value = func.dfg.make_value(Value::Inst {

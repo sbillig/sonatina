@@ -649,7 +649,7 @@ impl ObjectReturnOutParam {
             let mut cursor = InstInserter::at_location(original_loc);
             let out_alloc = cursor.insert_inst_data(
                 function,
-                data::ObjAlloc::new_unchecked(function.inst_set(), callee_plan.out_elem_ty),
+                data::ObjAlloc::new(function.inst_set(), callee_plan.out_elem_ty),
             );
             let out_arg = cursor.make_result(function, out_alloc, callee_plan.out_ty);
             cursor.attach_result(function, out_alloc, out_arg);

@@ -148,7 +148,7 @@ impl SnapshotRoot {
 
         let casted = builder.insert_with_result(
             func,
-            cast::Bitcast::new_unchecked(func.inst_set(), raw, result_ty),
+            cast::Bitcast::new(func.inst_set(), raw, result_ty),
             result_ty,
         );
         self.cast_leaf_cache
@@ -311,7 +311,7 @@ impl AggregateLowerToMemoryLegalize {
             .entry_block()
             .expect("function must have entry block");
         let ptr_ty = ty.to_ptr(func.ctx());
-        let alloca = data::Alloca::new_unchecked(func.inst_set(), ty);
+        let alloca = data::Alloca::new(func.inst_set(), ty);
         let mut cursor = InstInserter::at_location(CursorLocation::BlockTop(entry));
         let inst = cursor.prepend_inst_data(func, alloca);
         let ptr = func.dfg.make_value(Value::Inst {
@@ -493,7 +493,7 @@ impl AggregateLowerToMemoryLegalize {
             } else {
                 builder.insert_with_result(
                     func,
-                    cast::Bitcast::new_unchecked(func.inst_set(), from, leaf.ty),
+                    cast::Bitcast::new(func.inst_set(), from, leaf.ty),
                     leaf.ty,
                 )
             };
@@ -529,7 +529,7 @@ impl AggregateLowerToMemoryLegalize {
                 let mut builder = BeforeCursor::new_before_inst(func, inst);
                 builder.insert_with_result(
                     func,
-                    cast::Bitcast::new_unchecked(func.inst_set(), raw, to_ty),
+                    cast::Bitcast::new(func.inst_set(), raw, to_ty),
                     to_ty,
                 )
             }
@@ -543,7 +543,7 @@ impl AggregateLowerToMemoryLegalize {
             } else {
                 builder.insert_with_result(
                     func,
-                    cast::Bitcast::new_unchecked(func.inst_set(), loaded, to_ty),
+                    cast::Bitcast::new(func.inst_set(), loaded, to_ty),
                     to_ty,
                 )
             }
@@ -710,7 +710,7 @@ impl AggregateLowerToMemoryLegalize {
                 let mut builder = BeforeCursor::new_before_inst(func, inst);
                 builder.insert_with_result(
                     func,
-                    cast::Bitcast::new_unchecked(func.inst_set(), raw, result_ty),
+                    cast::Bitcast::new(func.inst_set(), raw, result_ty),
                     result_ty,
                 )
             };
@@ -1234,7 +1234,7 @@ impl AggregateLowerToMemoryLegalize {
             } else {
                 builder.insert_with_result(
                     func,
-                    cast::Bitcast::new_unchecked(func.inst_set(), raw, dst_leaf.ty),
+                    cast::Bitcast::new(func.inst_set(), raw, dst_leaf.ty),
                     dst_leaf.ty,
                 )
             };
@@ -1371,7 +1371,7 @@ impl AggregateLowerToMemoryLegalize {
             } else {
                 builder.insert_with_result(
                     func,
-                    cast::Bitcast::new_unchecked(func.inst_set(), loaded, dst_leaf.ty),
+                    cast::Bitcast::new(func.inst_set(), loaded, dst_leaf.ty),
                     dst_leaf.ty,
                 )
             };
@@ -1459,11 +1459,7 @@ impl AggregateLowerToMemoryLegalize {
         ty: Type,
     ) -> ValueId {
         let ptr = self.emit_gep_to_path(func, builder, base_ptr, path, ty);
-        builder.insert_with_result(
-            func,
-            data::Mload::new_unchecked(func.inst_set(), ptr, ty),
-            ty,
-        )
+        builder.insert_with_result(func, data::Mload::new(func.inst_set(), ptr, ty), ty)
     }
 
     fn emit_store_scalar_to_path(
@@ -1476,10 +1472,7 @@ impl AggregateLowerToMemoryLegalize {
         ty: Type,
     ) {
         let ptr = self.emit_gep_to_path(func, builder, base_ptr, path, ty);
-        builder.insert_no_result(
-            func,
-            data::Mstore::new_unchecked(func.inst_set(), ptr, value, ty),
-        );
+        builder.insert_no_result(func, data::Mstore::new(func.inst_set(), ptr, value, ty));
     }
 
     fn aggregate_addr_as_typed_ptr(
@@ -1497,14 +1490,14 @@ impl AggregateLowerToMemoryLegalize {
         if addr_ty.is_pointer(func.ctx()) {
             return builder.insert_with_result(
                 func,
-                cast::Bitcast::new_unchecked(func.inst_set(), addr, ptr_ty),
+                cast::Bitcast::new(func.inst_set(), addr, ptr_ty),
                 ptr_ty,
             );
         }
         if addr_ty.is_integral() {
             return builder.insert_with_result(
                 func,
-                cast::IntToPtr::new_unchecked(func.inst_set(), addr, ptr_ty),
+                cast::IntToPtr::new(func.inst_set(), addr, ptr_ty),
                 ptr_ty,
             );
         }
@@ -1527,11 +1520,7 @@ impl AggregateLowerToMemoryLegalize {
             values.push(func.dfg.make_imm_value(i64::from(idx)));
         }
         let ptr_ty = leaf_ty.to_ptr(func.ctx());
-        builder.insert_with_result(
-            func,
-            data::Gep::new_unchecked(func.inst_set(), values),
-            ptr_ty,
-        )
+        builder.insert_with_result(func, data::Gep::new(func.inst_set(), values), ptr_ty)
     }
 
     fn emit_gep_array_element_ptr(
@@ -1545,11 +1534,7 @@ impl AggregateLowerToMemoryLegalize {
         let values: SmallVec<[ValueId; 8]> =
             smallvec![base_ptr, func.dfg.make_imm_value(0i64), idx_value];
         let ptr_ty = elem_ty.to_ptr(func.ctx());
-        builder.insert_with_result(
-            func,
-            data::Gep::new_unchecked(func.inst_set(), values),
-            ptr_ty,
-        )
+        builder.insert_with_result(func, data::Gep::new(func.inst_set(), values), ptr_ty)
     }
 
     fn remove_dead_materialized_slots(&mut self, func: &mut Function) -> bool {

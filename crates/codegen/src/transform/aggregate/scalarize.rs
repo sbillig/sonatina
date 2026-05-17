@@ -1389,7 +1389,7 @@ impl AggregateScalarize {
                 let mut leaf_phis: LeafValues = SmallVec::new();
                 for leaf in shape.leaves {
                     let mut cursor = InstInserter::at_location(CursorLocation::BlockTop(block));
-                    let phi = control_flow::Phi::new_unchecked(func.inst_set(), Vec::new());
+                    let phi = control_flow::Phi::new(func.inst_set(), Vec::new());
                     let phi_inst = cursor.prepend_inst_data(func, phi);
                     let phi_res = func.dfg.make_value(Value::Inst {
                         inst: phi_inst,
@@ -2541,8 +2541,7 @@ impl AggregateScalarize {
             current_ty = next_ty;
         }
 
-        let load =
-            cursor.insert_inst_data(func, data::ObjLoad::new_unchecked(func.inst_set(), object));
+        let load = cursor.insert_inst_data(func, data::ObjLoad::new(func.inst_set(), object));
         let result = cursor.make_result(func, load, leaf.ty);
         cursor.attach_result(func, load, result);
         result
@@ -2628,10 +2627,8 @@ impl AggregateScalarize {
             current_ty = next_ty;
         }
 
-        let store = cursor.insert_inst_data(
-            func,
-            data::ObjStore::new_unchecked(func.inst_set(), object, value),
-        );
+        let store =
+            cursor.insert_inst_data(func, data::ObjStore::new(func.inst_set(), object, value));
         cursor.set_location(CursorLocation::At(store));
     }
 
@@ -2732,11 +2729,11 @@ fn insert_object_child_ref(
     let inst = match current_ty.resolve_compound(module) {
         Some(CompoundType::Array { .. }) => cursor.insert_inst_data(
             func,
-            data::ObjIndex::new_unchecked(func.inst_set(), object, idx_value),
+            data::ObjIndex::new(func.inst_set(), object, idx_value),
         ),
         Some(CompoundType::Struct(_)) => cursor.insert_inst_data(
             func,
-            data::ObjProj::new_unchecked(func.inst_set(), smallvec![object, idx_value]),
+            data::ObjProj::new(func.inst_set(), smallvec![object, idx_value]),
         ),
         other => {
             panic!("unexpected aggregate scalarization path step for {current_ty:?}: {other:?}")
@@ -2817,7 +2814,7 @@ fn eq_before_inst(func: &mut Function, inst: InstId, lhs: ValueId, rhs: ValueId)
         CursorLocation::At,
     );
     let mut cursor = InstInserter::at_location(loc);
-    let eq_inst = cursor.insert_inst_data(func, cmp::Eq::new_unchecked(func.inst_set(), lhs, rhs));
+    let eq_inst = cursor.insert_inst_data(func, cmp::Eq::new(func.inst_set(), lhs, rhs));
     let eq_value = func.dfg.make_value(Value::Inst {
         inst: eq_inst,
         result_idx: 0,

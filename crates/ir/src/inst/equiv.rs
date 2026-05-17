@@ -399,7 +399,6 @@ mod tests {
         inst::{
             data::{GetFunctionPtr, SymAddr, SymSize, SymbolRef},
             evm::EvmUaddsat,
-            inst_set::InstSetBase,
         },
         isa::Isa,
         module::FuncRef,
@@ -411,9 +410,9 @@ mod tests {
     fn opaque_key_distinguishes_get_function_ptr_targets() {
         let isa = test_isa();
         let is = isa.inst_set();
-        let i1 = GetFunctionPtr::new(is.has_get_function_ptr().unwrap(), FuncRef::from_u32(1));
-        let i2 = GetFunctionPtr::new(is.has_get_function_ptr().unwrap(), FuncRef::from_u32(2));
-        let i3 = GetFunctionPtr::new(is.has_get_function_ptr().unwrap(), FuncRef::from_u32(1));
+        let i1 = GetFunctionPtr::new(is, FuncRef::from_u32(1));
+        let i2 = GetFunctionPtr::new(is, FuncRef::from_u32(2));
+        let i3 = GetFunctionPtr::new(is, FuncRef::from_u32(1));
 
         let k1 = OwnedInstKey::from_inst(&i1, &[]);
         let k2 = OwnedInstKey::from_inst(&i2, &[]);
@@ -426,18 +425,9 @@ mod tests {
     fn opaque_key_distinguishes_sym_addr_symbol_refs() {
         let isa = test_isa();
         let is = isa.inst_set();
-        let by_func = SymAddr::new(
-            is.has_sym_addr().unwrap(),
-            SymbolRef::Func(FuncRef::from_u32(10)),
-        );
-        let by_global = SymAddr::new(
-            is.has_sym_addr().unwrap(),
-            SymbolRef::Global(GlobalVariableRef::from_u32(10)),
-        );
-        let by_embed = SymAddr::new(
-            is.has_sym_addr().unwrap(),
-            SymbolRef::Embed(EmbedSymbol::from("foo")),
-        );
+        let by_func = SymAddr::new(is, SymbolRef::Func(FuncRef::from_u32(10)));
+        let by_global = SymAddr::new(is, SymbolRef::Global(GlobalVariableRef::from_u32(10)));
+        let by_embed = SymAddr::new(is, SymbolRef::Embed(EmbedSymbol::from("foo")));
 
         assert_ne!(
             OwnedInstKey::from_inst(&by_func, &[]),
@@ -453,18 +443,9 @@ mod tests {
     fn opaque_key_distinguishes_sym_size_symbol_refs() {
         let isa = test_isa();
         let is = isa.inst_set();
-        let by_func = SymSize::new(
-            is.has_sym_size().unwrap(),
-            SymbolRef::Func(FuncRef::from_u32(10)),
-        );
-        let by_global = SymSize::new(
-            is.has_sym_size().unwrap(),
-            SymbolRef::Global(GlobalVariableRef::from_u32(10)),
-        );
-        let by_embed = SymSize::new(
-            is.has_sym_size().unwrap(),
-            SymbolRef::Embed(EmbedSymbol::from("foo")),
-        );
+        let by_func = SymSize::new(is, SymbolRef::Func(FuncRef::from_u32(10)));
+        let by_global = SymSize::new(is, SymbolRef::Global(GlobalVariableRef::from_u32(10)));
+        let by_embed = SymSize::new(is, SymbolRef::Embed(EmbedSymbol::from("foo")));
 
         assert_ne!(
             OwnedInstKey::from_inst(&by_func, &[]),
@@ -482,8 +463,8 @@ mod tests {
         let is = isa.inst_set();
         let lhs = ValueId::from_u32(0);
         let rhs = ValueId::from_u32(1);
-        let i8 = EvmUaddsat::new(is.has_evm_uaddsat().unwrap(), lhs, rhs, Type::I8);
-        let i16 = EvmUaddsat::new(is.has_evm_uaddsat().unwrap(), lhs, rhs, Type::I16);
+        let i8 = EvmUaddsat::new(is, lhs, rhs, Type::I8);
+        let i16 = EvmUaddsat::new(is, lhs, rhs, Type::I16);
 
         assert_ne!(
             OwnedInstKey::from_inst(&i8, &[Type::I256]),

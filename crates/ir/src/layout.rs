@@ -452,16 +452,15 @@ impl InstNode {
 mod tests {
     use super::{super::dfg::DataFlowGraph, *};
     use crate::{
-        HasInst,
         builder::test_util::test_isa,
-        inst::{self, InstId, arith::Add},
+        inst::{self, InstId, inst_set::InstSetBase},
         isa::Isa,
         module::ModuleCtx,
     };
 
     impl DataFlowGraph {
         /// Returns dummy instruction.
-        fn make_dummy_inst(&mut self, is: &impl HasInst<Add>) -> InstId {
+        fn make_dummy_inst(&mut self, is: &dyn InstSetBase) -> InstId {
             let v0 = self.make_imm_value(1i32);
             let v1 = self.make_imm_value(2i32);
             let add = inst::arith::Add::new(is, v0, v1);

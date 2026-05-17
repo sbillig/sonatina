@@ -28,7 +28,7 @@ pub(super) fn emit_obj_init(
         insert_before_no_result(
             func,
             before,
-            data::ObjStore::new_unchecked(func.inst_set(), object, value),
+            data::ObjStore::new(func.inst_set(), object, value),
         );
         return;
     }
@@ -43,7 +43,7 @@ pub(super) fn emit_obj_init(
                 let slot = insert_before_one(
                     func,
                     before,
-                    data::ObjIndex::new_unchecked(func.inst_set(), object, index),
+                    data::ObjIndex::new(func.inst_set(), object, index),
                     elem.to_obj_ref(func.ctx()),
                 );
                 emit_obj_init(func, before, slot, elem, item);
@@ -67,7 +67,7 @@ pub(super) fn emit_obj_init(
                 let slot = insert_before_one(
                     func,
                     before,
-                    data::ObjProj::new_unchecked(func.inst_set(), smallvec![object, index]),
+                    data::ObjProj::new(func.inst_set(), smallvec![object, index]),
                     field_ty.to_obj_ref(func.ctx()),
                 );
                 emit_obj_init(func, before, slot, field_ty, field);
@@ -87,20 +87,20 @@ pub(super) fn emit_obj_zero_fill(func: &mut Function, before: InstId, object: Va
     let dst = insert_before_one(
         func,
         before,
-        data::ObjMaterializeStack::new_unchecked(func.inst_set(), object),
+        data::ObjMaterializeStack::new(func.inst_set(), object),
         ty.to_ptr(func.ctx()),
     );
     let code_size = insert_before_one(
         func,
         before,
-        evm::EvmCodeSize::new_unchecked(func.inst_set()),
+        evm::EvmCodeSize::new(func.inst_set()),
         Type::I256,
     );
     let len = imm_i256(func, len);
     insert_before_no_result(
         func,
         before,
-        evm::EvmCodeCopy::new_unchecked(func.inst_set(), dst, code_size, len),
+        evm::EvmCodeCopy::new(func.inst_set(), dst, code_size, len),
     );
 }
 
@@ -121,21 +121,21 @@ pub(super) fn emit_obj_splat_fill(
     let dst = insert_before_one(
         func,
         before,
-        data::ObjMaterializeStack::new_unchecked(func.inst_set(), object),
+        data::ObjMaterializeStack::new(func.inst_set(), object),
         ty.to_ptr(func.ctx()),
     );
     let word_ptr_ty = Type::I256.to_ptr(func.ctx());
     let dst = insert_before_one(
         func,
         before,
-        cast::Bitcast::new_unchecked(func.inst_set(), dst, word_ptr_ty),
+        cast::Bitcast::new(func.inst_set(), dst, word_ptr_ty),
         word_ptr_ty,
     );
     let value_id = func.dfg.make_imm_value(value);
     insert_before_no_result(
         func,
         before,
-        data::Mstore::new_unchecked(func.inst_set(), dst, value_id, value.ty()),
+        data::Mstore::new(func.inst_set(), dst, value_id, value.ty()),
     );
 
     let mut filled = 32u32;
@@ -146,7 +146,7 @@ pub(super) fn emit_obj_splat_fill(
         insert_before_no_result(
             func,
             before,
-            evm::EvmMcopy::new_unchecked(func.inst_set(), dest, dst, copy_len),
+            evm::EvmMcopy::new(func.inst_set(), dest, dst, copy_len),
         );
         filled += chunk;
     }
@@ -166,7 +166,7 @@ pub(super) fn gep_word_offset(
     insert_before_one(
         func,
         before,
-        data::Gep::new_unchecked(func.inst_set(), smallvec![base, index]),
+        data::Gep::new(func.inst_set(), smallvec![base, index]),
         Type::I256.to_ptr(func.ctx()),
     )
 }
@@ -182,14 +182,14 @@ pub(super) fn emit_obj_init_from_codecopy(
     let dst = insert_before_one(
         func,
         before,
-        data::ObjMaterializeStack::new_unchecked(func.inst_set(), object),
+        data::ObjMaterializeStack::new(func.inst_set(), object),
         ty.to_ptr(func.ctx()),
     );
     let copy_len = imm_i256(func, copy_len_bytes);
     insert_before_no_result(
         func,
         before,
-        evm::EvmCodeCopy::new_unchecked(func.inst_set(), dst, addr, copy_len),
+        evm::EvmCodeCopy::new(func.inst_set(), dst, addr, copy_len),
     );
 }
 
@@ -203,7 +203,7 @@ pub(super) fn emit_obj_init_from_addr(
     let scratch = insert_before_one(
         func,
         before,
-        data::Alloca::new_unchecked(func.inst_set(), Type::I256),
+        data::Alloca::new(func.inst_set(), Type::I256),
         Type::I256.to_ptr(func.ctx()),
     );
     emit_obj_init_from_addr_with_scratch(func, before, object, ty, addr, scratch);
@@ -222,7 +222,7 @@ fn emit_obj_init_from_addr_with_scratch(
         insert_before_no_result(
             func,
             before,
-            data::ObjStore::new_unchecked(func.inst_set(), object, value),
+            data::ObjStore::new(func.inst_set(), object, value),
         );
         return;
     }
@@ -241,7 +241,7 @@ fn emit_obj_init_from_addr_with_scratch(
                 let slot = insert_before_one(
                     func,
                     before,
-                    data::ObjIndex::new_unchecked(func.inst_set(), object, index),
+                    data::ObjIndex::new(func.inst_set(), object, index),
                     elem.to_obj_ref(func.ctx()),
                 );
                 let child_addr = const_addr_with_offset(
@@ -271,7 +271,7 @@ fn emit_obj_init_from_addr_with_scratch(
                 let slot = insert_before_one(
                     func,
                     before,
-                    data::ObjProj::new_unchecked(func.inst_set(), smallvec![object, index]),
+                    data::ObjProj::new(func.inst_set(), smallvec![object, index]),
                     field_ty.to_obj_ref(func.ctx()),
                 );
                 let child_addr =

@@ -329,17 +329,14 @@ mod tests {
     use std::collections::HashMap;
 
     use crate::{
-        DataFlowGraph, HasInst, Immediate, Type,
+        DataFlowGraph, Immediate, Type,
         builder::test_util::test_isa,
         interpret::EvalResults,
+        isa::Isa,
         module::{FuncRef, ModuleCtx},
     };
 
     use super::*;
-
-    struct TestHasInst;
-    impl<I: crate::Inst> HasInst<I> for TestHasInst {}
-
     struct TestState {
         dfg: DataFlowGraph,
         values: HashMap<crate::ValueId, EvalValue>,
@@ -392,7 +389,8 @@ mod tests {
 
     #[test]
     fn div_mod_by_zero_returns_undef() {
-        let hi = TestHasInst;
+        let isa = test_isa();
+        let hi = isa.inst_set();
         let lhs = crate::ValueId::from_u32(0);
         let rhs = crate::ValueId::from_u32(1);
 
@@ -402,26 +400,27 @@ mod tests {
         ]);
 
         assert_eq!(
-            Sdiv::new(&hi, lhs, rhs).interpret(&mut state),
+            Sdiv::new(hi, lhs, rhs).interpret(&mut state),
             super::single_result(EvalValue::Undef)
         );
         assert_eq!(
-            Udiv::new(&hi, lhs, rhs).interpret(&mut state),
+            Udiv::new(hi, lhs, rhs).interpret(&mut state),
             super::single_result(EvalValue::Undef)
         );
         assert_eq!(
-            Umod::new(&hi, lhs, rhs).interpret(&mut state),
+            Umod::new(hi, lhs, rhs).interpret(&mut state),
             super::single_result(EvalValue::Undef)
         );
         assert_eq!(
-            Smod::new(&hi, lhs, rhs).interpret(&mut state),
+            Smod::new(hi, lhs, rhs).interpret(&mut state),
             super::single_result(EvalValue::Undef)
         );
     }
 
     #[test]
     fn shift_right_uses_expected_signedness() {
-        let hi = TestHasInst;
+        let isa = test_isa();
+        let hi = isa.inst_set();
         let bits = crate::ValueId::from_u32(0);
         let value = crate::ValueId::from_u32(1);
         let mut state = TestState::new([
@@ -430,18 +429,19 @@ mod tests {
         ]);
 
         assert_eq!(
-            Shr::new(&hi, bits, value).interpret(&mut state),
+            Shr::new(hi, bits, value).interpret(&mut state),
             super::single_result(EvalValue::Imm(Immediate::I8(124)))
         );
         assert_eq!(
-            Sar::new(&hi, bits, value).interpret(&mut state),
+            Sar::new(hi, bits, value).interpret(&mut state),
             super::single_result(EvalValue::Imm(Immediate::I8(-4)))
         );
     }
 
     #[test]
     fn shift_right_is_width_aware_for_subword_operands() {
-        let hi = TestHasInst;
+        let isa = test_isa();
+        let hi = isa.inst_set();
         let bits = crate::ValueId::from_u32(0);
         let value = crate::ValueId::from_u32(1);
         let mut state = TestState::new([
@@ -450,11 +450,11 @@ mod tests {
         ]);
 
         assert_eq!(
-            Shr::new(&hi, bits, value).interpret(&mut state),
+            Shr::new(hi, bits, value).interpret(&mut state),
             super::single_result(EvalValue::Imm(Immediate::I32(0x00ff_ffff)))
         );
         assert_eq!(
-            Sar::new(&hi, bits, value).interpret(&mut state),
+            Sar::new(hi, bits, value).interpret(&mut state),
             super::single_result(EvalValue::Imm(Immediate::I32(-1)))
         );
 
@@ -463,18 +463,19 @@ mod tests {
             (value, EvalValue::Imm(Immediate::I32(-1))),
         ]);
         assert_eq!(
-            Shr::new(&hi, bits, value).interpret(&mut overshift_state),
+            Shr::new(hi, bits, value).interpret(&mut overshift_state),
             super::single_result(EvalValue::Imm(Immediate::I32(0)))
         );
         assert_eq!(
-            Sar::new(&hi, bits, value).interpret(&mut overshift_state),
+            Sar::new(hi, bits, value).interpret(&mut overshift_state),
             super::single_result(EvalValue::Imm(Immediate::I32(-1)))
         );
     }
 
     #[test]
     fn uaddo_returns_sum_and_overflow_flag() {
-        let hi = TestHasInst;
+        let isa = test_isa();
+        let hi = isa.inst_set();
         let lhs = crate::ValueId::from_u32(0);
         let rhs = crate::ValueId::from_u32(1);
         let mut state = TestState::new([
@@ -483,7 +484,7 @@ mod tests {
         ]);
 
         assert_eq!(
-            Uaddo::new(&hi, lhs, rhs).interpret(&mut state),
+            Uaddo::new(hi, lhs, rhs).interpret(&mut state),
             crate::interpret::EvalResults::from_vec(vec![
                 EvalValue::Imm(Immediate::I8(0)),
                 EvalValue::Imm(Immediate::I1(true))
@@ -493,7 +494,8 @@ mod tests {
 
     #[test]
     fn signed_overflow_ops_return_wrapped_values_and_flags() {
-        let hi = TestHasInst;
+        let isa = test_isa();
+        let hi = isa.inst_set();
         let lhs = crate::ValueId::from_u32(0);
         let rhs = crate::ValueId::from_u32(1);
         let mut state = TestState::new([
@@ -502,21 +504,21 @@ mod tests {
         ]);
 
         assert_eq!(
-            Saddo::new(&hi, lhs, rhs).interpret(&mut state),
+            Saddo::new(hi, lhs, rhs).interpret(&mut state),
             crate::interpret::EvalResults::from_vec(vec![
                 EvalValue::Imm(Immediate::I8(127)),
                 EvalValue::Imm(Immediate::I1(true))
             ])
         );
         assert_eq!(
-            Ssubo::new(&hi, lhs, rhs).interpret(&mut state),
+            Ssubo::new(hi, lhs, rhs).interpret(&mut state),
             crate::interpret::EvalResults::from_vec(vec![
                 EvalValue::Imm(Immediate::I8(-127)),
                 EvalValue::Imm(Immediate::I1(false))
             ])
         );
         assert_eq!(
-            Snego::new(&hi, lhs).interpret(&mut state),
+            Snego::new(hi, lhs).interpret(&mut state),
             crate::interpret::EvalResults::from_vec(vec![
                 EvalValue::Imm(Immediate::I8(-128)),
                 EvalValue::Imm(Immediate::I1(true))
@@ -526,7 +528,8 @@ mod tests {
 
     #[test]
     fn unsigned_and_signed_mul_sub_ops_cover_overflow_cases() {
-        let hi = TestHasInst;
+        let isa = test_isa();
+        let hi = isa.inst_set();
         let lhs = crate::ValueId::from_u32(0);
         let rhs = crate::ValueId::from_u32(1);
         let mut state = TestState::new([
@@ -535,21 +538,21 @@ mod tests {
         ]);
 
         assert_eq!(
-            Usubo::new(&hi, rhs, lhs).interpret(&mut state),
+            Usubo::new(hi, rhs, lhs).interpret(&mut state),
             crate::interpret::EvalResults::from_vec(vec![
                 EvalValue::Imm(Immediate::I8(3)),
                 EvalValue::Imm(Immediate::I1(true))
             ])
         );
         assert_eq!(
-            Umulo::new(&hi, lhs, rhs).interpret(&mut state),
+            Umulo::new(hi, lhs, rhs).interpret(&mut state),
             crate::interpret::EvalResults::from_vec(vec![
                 EvalValue::Imm(Immediate::I8(-2)),
                 EvalValue::Imm(Immediate::I1(true))
             ])
         );
         assert_eq!(
-            Smulo::new(&hi, lhs, rhs).interpret(&mut state),
+            Smulo::new(hi, lhs, rhs).interpret(&mut state),
             crate::interpret::EvalResults::from_vec(vec![
                 EvalValue::Imm(Immediate::I8(-2)),
                 EvalValue::Imm(Immediate::I1(false))
@@ -559,7 +562,8 @@ mod tests {
 
     #[test]
     fn saturating_ops_clamp_at_bounds() {
-        let hi = TestHasInst;
+        let isa = test_isa();
+        let hi = isa.inst_set();
         let lhs = crate::ValueId::from_u32(0);
         let rhs = crate::ValueId::from_u32(1);
 
@@ -568,14 +572,14 @@ mod tests {
             (rhs, EvalValue::Imm(Immediate::I8(20))),
         ]);
         assert_eq!(
-            Saddsat::new(&hi, lhs, rhs).interpret(&mut state),
+            Saddsat::new(hi, lhs, rhs).interpret(&mut state),
             super::single_result(EvalValue::Imm(Immediate::I8(127)))
         );
 
         state.values.insert(lhs, EvalValue::Imm(Immediate::I8(3)));
         state.values.insert(rhs, EvalValue::Imm(Immediate::I8(5)));
         assert_eq!(
-            Usubsat::new(&hi, lhs, rhs).interpret(&mut state),
+            Usubsat::new(hi, lhs, rhs).interpret(&mut state),
             super::single_result(EvalValue::Imm(Immediate::I8(0)))
         );
 
@@ -584,28 +588,28 @@ mod tests {
             .insert(lhs, EvalValue::Imm(Immediate::I8(-120)));
         state.values.insert(rhs, EvalValue::Imm(Immediate::I8(20)));
         assert_eq!(
-            Ssubsat::new(&hi, lhs, rhs).interpret(&mut state),
+            Ssubsat::new(hi, lhs, rhs).interpret(&mut state),
             super::single_result(EvalValue::Imm(Immediate::I8(-128)))
         );
 
         state.values.insert(lhs, EvalValue::Imm(Immediate::I8(-56)));
         state.values.insert(rhs, EvalValue::Imm(Immediate::I8(3)));
         assert_eq!(
-            Umulsat::new(&hi, lhs, rhs).interpret(&mut state),
+            Umulsat::new(hi, lhs, rhs).interpret(&mut state),
             super::single_result(EvalValue::Imm(Immediate::I8(-1)))
         );
 
         state.values.insert(lhs, EvalValue::Imm(Immediate::I8(100)));
         state.values.insert(rhs, EvalValue::Imm(Immediate::I8(2)));
         assert_eq!(
-            Smulsat::new(&hi, lhs, rhs).interpret(&mut state),
+            Smulsat::new(hi, lhs, rhs).interpret(&mut state),
             super::single_result(EvalValue::Imm(Immediate::I8(127)))
         );
 
         state.values.insert(lhs, EvalValue::Imm(Immediate::I8(-6)));
         state.values.insert(rhs, EvalValue::Imm(Immediate::I8(10)));
         assert_eq!(
-            Uaddsat::new(&hi, lhs, rhs).interpret(&mut state),
+            Uaddsat::new(hi, lhs, rhs).interpret(&mut state),
             super::single_result(EvalValue::Imm(Immediate::I8(-1)))
         );
     }

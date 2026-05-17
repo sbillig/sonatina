@@ -529,8 +529,7 @@ impl AggregateCombine {
                 true
             }
             AggregateFieldLookup::BaseNeedsExtract(base) if base != *extract.dest() => {
-                let new_extract =
-                    data::ExtractValue::new_unchecked(func.inst_set(), base, *extract.idx());
+                let new_extract = data::ExtractValue::new(func.inst_set(), base, *extract.idx());
                 func.dfg.replace_inst(inst, Box::new(new_extract));
                 true
             }
@@ -652,7 +651,7 @@ impl AggregateCombine {
                 downcast::<&data::InsertValue>(func.inst_set(), func.dfg.inst(prev_inst))
             && equivalent_indices(func, *insert.idx(), *prev.idx())
         {
-            let rewritten = data::InsertValue::new_unchecked(
+            let rewritten = data::InsertValue::new(
                 func.inst_set(),
                 *prev.dest(),
                 *insert.idx(),
@@ -738,7 +737,7 @@ impl AggregateCombine {
         let new_extract = append_non_phi_after_phi_region(
             func,
             block,
-            data::ExtractValue::new_unchecked(func.inst_set(), agg_phi_value, idx_value),
+            data::ExtractValue::new(func.inst_set(), agg_phi_value, idx_value),
             res_ty,
         );
 
@@ -816,7 +815,7 @@ impl AggregateCombine {
         let new_insert = append_non_phi_after_phi_region(
             func,
             block,
-            data::InsertValue::new_unchecked(func.inst_set(), base_phi, idx_value, payload_phi),
+            data::InsertValue::new(func.inst_set(), base_phi, idx_value, payload_phi),
             result_ty,
         );
 
@@ -1854,7 +1853,7 @@ fn append_phi_at_block_top(
     ty: Type,
     args: Vec<(ValueId, BlockId)>,
 ) -> ValueId {
-    let phi = control_flow::Phi::new_unchecked(func.inst_set(), args);
+    let phi = control_flow::Phi::new(func.inst_set(), args);
     let mut cursor = InstInserter::at_location(CursorLocation::BlockTop(block));
     let inst = cursor.prepend_inst_data(func, phi);
     let value = func.dfg.make_value(Value::Inst {

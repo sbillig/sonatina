@@ -336,7 +336,7 @@ fn rewrite_inst(
         let eq = insert_result_inst(
             function,
             inst,
-            Box::new(cmp::Eq::new_unchecked(function.inst_set(), tag, tag_const)),
+            Box::new(cmp::Eq::new(function.inst_set(), tag, tag_const)),
             Type::I1,
         );
         alias_and_remove_inst(function, inst, Some(eq));
@@ -386,7 +386,7 @@ fn rewrite_inst(
         insert_no_result_inst(
             function,
             inst,
-            Box::new(data::ObjStore::new_unchecked(
+            Box::new(data::ObjStore::new(
                 function.inst_set(),
                 tag_slot,
                 tag_value,
@@ -408,11 +408,7 @@ fn rewrite_inst(
             insert_no_result_inst(
                 function,
                 inst,
-                Box::new(data::ObjStore::new_unchecked(
-                    function.inst_set(),
-                    field_obj,
-                    value,
-                )),
+                Box::new(data::ObjStore::new(function.inst_set(), field_obj, value)),
             );
         }
 
@@ -424,7 +420,7 @@ fn rewrite_inst(
         insert_no_result_inst(
             function,
             inst,
-            Box::new(data::ObjStore::new_unchecked(
+            Box::new(data::ObjStore::new(
                 function.inst_set(),
                 tag_slot,
                 tag_value,
@@ -450,7 +446,7 @@ fn rewrite_inst(
         let tag = insert_result_inst(
             function,
             inst,
-            Box::new(data::ObjLoad::new_unchecked(function.inst_set(), tag_slot)),
+            Box::new(data::ObjLoad::new(function.inst_set(), tag_slot)),
             layout.tag_ty,
         );
         alias_and_remove_inst(function, inst, Some(tag));
@@ -589,7 +585,7 @@ fn insert_insert_value_before(
     insert_result_inst(
         function,
         inst,
-        Box::new(data::InsertValue::new_unchecked(
+        Box::new(data::InsertValue::new(
             function.inst_set(),
             dest,
             idx_value,
@@ -610,7 +606,7 @@ fn insert_extract_value_before(
     insert_result_inst(
         function,
         inst,
-        Box::new(data::ExtractValue::new_unchecked(
+        Box::new(data::ExtractValue::new(
             function.inst_set(),
             dest,
             idx_value,
@@ -633,7 +629,7 @@ fn insert_obj_proj_before(
     insert_result_inst(
         function,
         inst,
-        Box::new(data::ObjProj::new_unchecked(
+        Box::new(data::ObjProj::new(
             function.inst_set(),
             smallvec![object, idx_value],
         )),

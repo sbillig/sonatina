@@ -16,9 +16,8 @@ use cranelift_entity::SecondaryMap;
 use rustc_hash::{FxHashMap, FxHashSet};
 use smallvec::{SmallVec, smallvec};
 use sonatina_ir::{
-    BlockId, Directive, Immediate, InstId, InstSetBase, InstSetExt, Module, ValueId,
-    cfg::ControlFlowGraph, inst::evm::inst_set::EvmInstKind, ir_writer::FuncWriter, isa::Isa,
-    object::SectionName,
+    BlockId, Directive, Immediate, InstId, InstSetExt, Module, ValueId, cfg::ControlFlowGraph,
+    inst::evm::inst_set::EvmInstKind, ir_writer::FuncWriter, isa::Isa, object::SectionName,
 };
 use sonatina_parser::parse_module;
 use sonatina_triple::{Architecture, EvmVersion, OperatingSystem, TargetTriple, Vendor};

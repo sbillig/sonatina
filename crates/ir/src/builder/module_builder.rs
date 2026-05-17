@@ -468,13 +468,7 @@ mod tests {
         let mut func_builder = builder.func_builder::<crate::func_cursor::InstInserter>(caller);
         let entry = func_builder.append_block();
         func_builder.switch_to_block(entry);
-        func_builder.insert_inst_no_result_with(|| {
-            Call::new(
-                is.has_call().expect("target ISA must support `call`"),
-                callee,
-                smallvec![],
-            )
-        });
+        func_builder.insert_inst_no_result_with(|| Call::new(is, callee, smallvec![]));
         func_builder.insert_inst_no_result_with(|| Return::new(is, smallvec![].into()));
         func_builder.seal_all();
         func_builder.finish();

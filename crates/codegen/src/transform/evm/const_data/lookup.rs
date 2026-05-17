@@ -108,7 +108,7 @@ fn emit_packed_bool_lookup(
     Some(insert_before_one(
         func,
         before,
-        cmp::Ne::new_unchecked(func.inst_set(), masked, zero),
+        cmp::Ne::new(func.inst_set(), masked, zero),
         Type::I1,
     ))
 }
@@ -140,7 +140,7 @@ fn emit_packed_byte_lookup(
     let byte = insert_before_one(
         func,
         before,
-        evm::EvmByte::new_unchecked(func.inst_set(), pos, table),
+        evm::EvmByte::new(func.inst_set(), pos, table),
         Type::I256,
     );
     Some(trunc_i256_to(func, before, byte, Type::I8))
@@ -329,7 +329,7 @@ fn emit_sparse_lookup(
         let is_exception = insert_before_one(
             func,
             before,
-            cmp::Eq::new_unchecked(func.inst_set(), index, exception_idx),
+            cmp::Eq::new(func.inst_set(), index, exception_idx),
             Type::I1,
         );
         let selector = zext_to_ty(func, before, is_exception, result_ty);
@@ -337,14 +337,14 @@ fn emit_sparse_lookup(
         let selected_delta = insert_before_one(
             func,
             before,
-            arith::Mul::new_unchecked(func.inst_set(), selector, delta),
+            arith::Mul::new(func.inst_set(), selector, delta),
             result_ty,
         );
         value = Some(if let Some(value) = value {
             insert_before_one(
                 func,
                 before,
-                arith::Add::new_unchecked(func.inst_set(), value, selected_delta),
+                arith::Add::new(func.inst_set(), value, selected_delta),
                 result_ty,
             )
         } else {

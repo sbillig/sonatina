@@ -457,17 +457,14 @@ mod tests {
     use std::collections::HashMap;
 
     use crate::{
-        DataFlowGraph, HasInst, Immediate, Type,
+        DataFlowGraph, Immediate, Type,
         builder::test_util::test_isa,
         interpret::EvalResults,
+        isa::Isa,
         module::{FuncRef, ModuleCtx},
     };
 
     use super::*;
-
-    struct TestHasInst;
-    impl<I: crate::Inst> HasInst<I> for TestHasInst {}
-
     struct TestState {
         dfg: DataFlowGraph,
         values: HashMap<crate::ValueId, EvalValue>,
@@ -520,7 +517,8 @@ mod tests {
 
     #[test]
     fn narrow_unsigned_saturating_ops_zero_extend_results() {
-        let hi = TestHasInst;
+        let isa = test_isa();
+        let hi = isa.inst_set();
         let lhs = crate::ValueId::from_u32(0);
         let rhs = crate::ValueId::from_u32(1);
         let mut state = TestState::new([
@@ -535,14 +533,14 @@ mod tests {
         ]);
 
         assert_eq!(
-            EvmUaddsat::new(&hi, lhs, rhs, Type::I8).interpret(&mut state),
+            EvmUaddsat::new(hi, lhs, rhs, Type::I8).interpret(&mut state),
             single_result(EvalValue::Imm(Immediate::from_i256(
                 I256::from(255u16),
                 Type::I256,
             )))
         );
         assert_eq!(
-            EvmUsubsat::new(&hi, rhs, lhs, Type::I8).interpret(&mut state),
+            EvmUsubsat::new(hi, rhs, lhs, Type::I8).interpret(&mut state),
             single_result(EvalValue::Imm(Immediate::from_i256(
                 I256::from(0u8),
                 Type::I256,
@@ -558,7 +556,7 @@ mod tests {
             EvalValue::Imm(Immediate::from_i256(I256::from(2u8), Type::I256)),
         );
         assert_eq!(
-            EvmUmulsat::new(&hi, lhs, rhs, Type::I8).interpret(&mut state),
+            EvmUmulsat::new(hi, lhs, rhs, Type::I8).interpret(&mut state),
             single_result(EvalValue::Imm(Immediate::from_i256(
                 I256::from(255u16),
                 Type::I256,
@@ -568,7 +566,8 @@ mod tests {
 
     #[test]
     fn narrow_signed_saturating_ops_sign_extend_results() {
-        let hi = TestHasInst;
+        let isa = test_isa();
+        let hi = isa.inst_set();
         let lhs = crate::ValueId::from_u32(0);
         let rhs = crate::ValueId::from_u32(1);
         let mut state = TestState::new([
@@ -583,7 +582,7 @@ mod tests {
         ]);
 
         assert_eq!(
-            EvmSaddsat::new(&hi, lhs, rhs, Type::I8).interpret(&mut state),
+            EvmSaddsat::new(hi, lhs, rhs, Type::I8).interpret(&mut state),
             single_result(EvalValue::Imm(Immediate::from_i256(
                 I256::from(127u8),
                 Type::I256,
@@ -595,7 +594,7 @@ mod tests {
             EvalValue::Imm(Immediate::from_i256(I256::from(-128i16), Type::I256)),
         );
         assert_eq!(
-            EvmSsubsat::new(&hi, lhs, rhs, Type::I8).interpret(&mut state),
+            EvmSsubsat::new(hi, lhs, rhs, Type::I8).interpret(&mut state),
             single_result(EvalValue::Imm(Immediate::from_i256(
                 I256::from(-128i16),
                 Type::I256,
@@ -611,7 +610,7 @@ mod tests {
             EvalValue::Imm(Immediate::from_i256(I256::from(2u8), Type::I256)),
         );
         assert_eq!(
-            EvmSmulsat::new(&hi, lhs, rhs, Type::I8).interpret(&mut state),
+            EvmSmulsat::new(hi, lhs, rhs, Type::I8).interpret(&mut state),
             single_result(EvalValue::Imm(Immediate::from_i256(
                 I256::from(127u8),
                 Type::I256,

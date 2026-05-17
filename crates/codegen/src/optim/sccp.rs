@@ -1232,22 +1232,22 @@ mod tests {
                 let op = rng.next() % 9;
 
                 let value = match op {
-                    0 => fb.insert_inst(arith::Add::new_unchecked(is, lhs, rhs), ty),
-                    1 => fb.insert_inst(arith::Sub::new_unchecked(is, lhs, rhs), ty),
-                    2 => fb.insert_inst(arith::Mul::new_unchecked(is, lhs, rhs), ty),
-                    3 => fb.insert_inst(arith::Shl::new_unchecked(is, lhs, rhs), ty),
-                    4 => fb.insert_inst(arith::Shr::new_unchecked(is, lhs, rhs), ty),
-                    5 => fb.insert_inst(arith::Sar::new_unchecked(is, lhs, rhs), ty),
-                    6 => fb.insert_inst(logic::And::new_unchecked(is, lhs, rhs), ty),
-                    7 => fb.insert_inst(logic::Or::new_unchecked(is, lhs, rhs), ty),
-                    _ => fb.insert_inst(logic::Xor::new_unchecked(is, lhs, rhs), ty),
+                    0 => fb.insert_inst(arith::Add::new(is, lhs, rhs), ty),
+                    1 => fb.insert_inst(arith::Sub::new(is, lhs, rhs), ty),
+                    2 => fb.insert_inst(arith::Mul::new(is, lhs, rhs), ty),
+                    3 => fb.insert_inst(arith::Shl::new(is, lhs, rhs), ty),
+                    4 => fb.insert_inst(arith::Shr::new(is, lhs, rhs), ty),
+                    5 => fb.insert_inst(arith::Sar::new(is, lhs, rhs), ty),
+                    6 => fb.insert_inst(logic::And::new(is, lhs, rhs), ty),
+                    7 => fb.insert_inst(logic::Or::new(is, lhs, rhs), ty),
+                    _ => fb.insert_inst(logic::Xor::new(is, lhs, rhs), ty),
                 };
 
                 values.push(value);
             }
 
             let ret = *values.last().unwrap();
-            fb.insert_inst_no_result(Return::new_unchecked(is, smallvec![ret].into()));
+            fb.insert_inst_no_result(Return::new(is, smallvec![ret].into()));
             fb.seal_all();
             fb.finish();
 
@@ -1278,7 +1278,7 @@ mod tests {
         let ptr = fb.insert_inst(IntToPtr::new(is, word, ptr_ty), ptr_ty);
         let roundtrip = fb.insert_inst(PtrToInt::new(is, ptr, Type::I256), Type::I256);
 
-        fb.insert_inst_no_result(Return::new_unchecked(is, smallvec![roundtrip].into()));
+        fb.insert_inst_no_result(Return::new(is, smallvec![roundtrip].into()));
         fb.seal_all();
         fb.finish();
 
@@ -1305,7 +1305,7 @@ mod tests {
         let is = isa.inst_set();
         let one = fb.make_imm_value(Immediate::one(Type::I1));
         let widened = fb.insert_inst(Bitcast::new(is, one, Type::I256), Type::I256);
-        fb.insert_inst_no_result(Return::new_unchecked(is, smallvec![widened].into()));
+        fb.insert_inst_no_result(Return::new(is, smallvec![widened].into()));
         fb.seal_all();
         fb.finish();
 
@@ -1372,10 +1372,10 @@ block0:
         let base_word = fb.make_imm_value(Immediate::from_i256(I256::from(64u64), Type::I256));
         let ptr = fb.insert_inst(IntToPtr::new(is, base_word, ptr_ty), ptr_ty);
         let zero = fb.make_imm_value(Immediate::zero(Type::I256));
-        let addr = fb.insert_inst(arith::Add::new_unchecked(is, ptr, zero), Type::I256);
+        let addr = fb.insert_inst(arith::Add::new(is, ptr, zero), Type::I256);
         let one = fb.make_imm_value(Immediate::one(Type::I256));
         fb.insert_inst_no_result(Mstore::new(is, addr, one, Type::I256));
-        fb.insert_inst_no_result(Return::new_unchecked(is, smallvec![one].into()));
+        fb.insert_inst_no_result(Return::new(is, smallvec![one].into()));
         fb.seal_all();
         fb.finish();
 
@@ -1429,7 +1429,7 @@ block0:
         let zero = fb.make_imm_value(Immediate::zero(Type::I8));
         let gep = fb.insert_inst(Gep::new(is, smallvec![base_ptr, zero, zero]), ptr_i256_ty);
         let roundtrip = fb.insert_inst(PtrToInt::new(is, gep, Type::I256), Type::I256);
-        fb.insert_inst_no_result(Return::new_unchecked(is, smallvec![roundtrip].into()));
+        fb.insert_inst_no_result(Return::new(is, smallvec![roundtrip].into()));
         fb.seal_all();
         fb.finish();
 

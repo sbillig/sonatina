@@ -281,10 +281,7 @@ impl ObjectLowerToMemory {
                 Materialization::Stack => {
                     func.dfg.replace_inst(
                         inst,
-                        Box::new(data::Alloca::new_unchecked(
-                            func.inst_set(),
-                            *obj_alloc.ty(),
-                        )),
+                        Box::new(data::Alloca::new(func.inst_set(), *obj_alloc.ty())),
                     );
                 }
                 Materialization::Heap => {
@@ -295,10 +292,8 @@ impl ObjectLowerToMemory {
                     let size = func
                         .dfg
                         .make_imm_value(Immediate::I256(I256::from(size as u64)));
-                    func.dfg.replace_inst(
-                        inst,
-                        Box::new(evm::EvmMalloc::new_unchecked(func.inst_set(), size)),
-                    );
+                    func.dfg
+                        .replace_inst(inst, Box::new(evm::EvmMalloc::new(func.inst_set(), size)));
                 }
             }
             return true;
@@ -316,10 +311,8 @@ impl ObjectLowerToMemory {
             values.push(base);
             values.push(zero);
             values.extend(rest.iter().copied());
-            func.dfg.replace_inst(
-                inst,
-                Box::new(data::Gep::new_unchecked(func.inst_set(), values)),
-            );
+            func.dfg
+                .replace_inst(inst, Box::new(data::Gep::new(func.inst_set(), values)));
             return true;
         }
 
@@ -334,10 +327,8 @@ impl ObjectLowerToMemory {
                 func.ctx().type_layout.pointer_repl(),
             );
             let values = smallvec![*obj_index.object(), zero, index];
-            func.dfg.replace_inst(
-                inst,
-                Box::new(data::Gep::new_unchecked(func.inst_set(), values)),
-            );
+            func.dfg
+                .replace_inst(inst, Box::new(data::Gep::new(func.inst_set(), values)));
             return true;
         }
 
@@ -348,7 +339,7 @@ impl ObjectLowerToMemory {
                 .expect("obj.load requires pointer-typed operand after object lowering");
             func.dfg.replace_inst(
                 inst,
-                Box::new(data::Mload::new_unchecked(
+                Box::new(data::Mload::new(
                     func.inst_set(),
                     *obj_load.object(),
                     pointee_ty,
@@ -364,7 +355,7 @@ impl ObjectLowerToMemory {
                 .expect("obj.store requires pointer-typed operand after object lowering");
             func.dfg.replace_inst(
                 inst,
-                Box::new(data::Mstore::new_unchecked(
+                Box::new(data::Mstore::new(
                     func.inst_set(),
                     *obj_store.object(),
                     *obj_store.value(),
@@ -391,10 +382,7 @@ impl ObjectLowerToMemory {
         {
             func.dfg.replace_inst(
                 inst,
-                Box::new(evm::EvmMalloc::new_unchecked(
-                    func.inst_set(),
-                    *mem_alloc.size(),
-                )),
+                Box::new(evm::EvmMalloc::new(func.inst_set(), *mem_alloc.size())),
             );
             return true;
         }
@@ -593,7 +581,7 @@ fn zext_before(func: &mut Function, before: InstId, value: ValueId, ty: Type) ->
 
     let inst = func
         .dfg
-        .make_inst(cast::Zext::new_unchecked(func.inst_set(), value, ty));
+        .make_inst(cast::Zext::new(func.inst_set(), value, ty));
     func.layout.insert_inst_before(inst, before);
     let result = func.dfg.make_value(Value::Inst {
         inst,

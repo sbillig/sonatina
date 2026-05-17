@@ -630,7 +630,7 @@ fn materialize_invariant_in_preheader(
                     insert_with_result_before_terminator(
                         func,
                         preheader,
-                        Bitcast::new_unchecked(func.inst_set(), from, *cast.ty()),
+                        Bitcast::new(func.inst_set(), from, *cast.ty()),
                         *cast.ty(),
                     )
                 } else if let Some(cast) =
@@ -648,7 +648,7 @@ fn materialize_invariant_in_preheader(
                     insert_with_result_before_terminator(
                         func,
                         preheader,
-                        IntToPtr::new_unchecked(func.inst_set(), from, *cast.ty()),
+                        IntToPtr::new(func.inst_set(), from, *cast.ty()),
                         *cast.ty(),
                     )
                 } else if let Some(cast) =
@@ -666,7 +666,7 @@ fn materialize_invariant_in_preheader(
                     insert_with_result_before_terminator(
                         func,
                         preheader,
-                        PtrToInt::new_unchecked(func.inst_set(), from, *cast.ty()),
+                        PtrToInt::new(func.inst_set(), from, *cast.ty()),
                         *cast.ty(),
                     )
                 } else if let Some(add) =
@@ -698,7 +698,7 @@ fn materialize_invariant_in_preheader(
                     insert_with_result_before_terminator(
                         func,
                         preheader,
-                        Add::new_unchecked(func.inst_set(), lhs, rhs),
+                        Add::new(func.inst_set(), lhs, rhs),
                         func.dfg.value_ty(value),
                     )
                 } else if let Some(sub) =
@@ -730,7 +730,7 @@ fn materialize_invariant_in_preheader(
                     insert_with_result_before_terminator(
                         func,
                         preheader,
-                        Sub::new_unchecked(func.inst_set(), lhs, rhs),
+                        Sub::new(func.inst_set(), lhs, rhs),
                         func.dfg.value_ty(value),
                     )
                 } else if let Some(gep) =
@@ -747,7 +747,7 @@ fn materialize_invariant_in_preheader(
                     insert_with_result_before_terminator(
                         func,
                         preheader,
-                        Gep::new_unchecked(func.inst_set(), values),
+                        Gep::new(func.inst_set(), values),
                         func.dfg.value_ty(value),
                     )
                 } else {
@@ -782,7 +782,7 @@ fn materialize_addr_base_i256(
     let converted = insert_with_result_before_terminator(
         func,
         preheader,
-        PtrToInt::new_unchecked(func.inst_set(), value, Type::I256),
+        PtrToInt::new(func.inst_set(), value, Type::I256),
         Type::I256,
     );
     cache.addr_i256_values.insert(value, converted);
@@ -807,7 +807,7 @@ fn emit_init_addr(
                 insert_with_result_before_terminator(
                     func,
                     plan.preheader,
-                    Mul::new_unchecked(func.inst_set(), plan.biv.init, coeff),
+                    Mul::new(func.inst_set(), plan.biv.init, coeff),
                     Type::I256,
                 )
             };
@@ -815,14 +815,14 @@ fn emit_init_addr(
                 insert_with_result_before_terminator(
                     func,
                     plan.preheader,
-                    Add::new_unchecked(func.inst_set(), addr, scaled_init),
+                    Add::new(func.inst_set(), addr, scaled_init),
                     Type::I256,
                 )
             } else {
                 insert_with_result_before_terminator(
                     func,
                     plan.preheader,
-                    Sub::new_unchecked(func.inst_set(), addr, scaled_init),
+                    Sub::new(func.inst_set(), addr, scaled_init),
                     Type::I256,
                 )
             };
@@ -838,14 +838,14 @@ fn emit_init_addr(
         insert_with_result_before_terminator(
             func,
             plan.preheader,
-            Add::new_unchecked(func.inst_set(), addr, delta),
+            Add::new(func.inst_set(), addr, delta),
             Type::I256,
         )
     } else {
         insert_with_result_before_terminator(
             func,
             plan.preheader,
-            Sub::new_unchecked(func.inst_set(), addr, delta),
+            Sub::new(func.inst_set(), addr, delta),
             Type::I256,
         )
     })
@@ -862,14 +862,14 @@ fn emit_addr_step(
         insert_with_result_before_terminator(
             func,
             latch,
-            Add::new_unchecked(func.inst_set(), addr_phi, delta),
+            Add::new(func.inst_set(), addr_phi, delta),
             Type::I256,
         )
     } else {
         insert_with_result_before_terminator(
             func,
             latch,
-            Sub::new_unchecked(func.inst_set(), addr_phi, delta),
+            Sub::new(func.inst_set(), addr_phi, delta),
             Type::I256,
         )
     })
@@ -956,14 +956,14 @@ fn emit_addr_offset_before_use(
         insert_with_result_before_inst(
             func,
             user,
-            Add::new_unchecked(func.inst_set(), addr_phi, delta),
+            Add::new(func.inst_set(), addr_phi, delta),
             Type::I256,
         )
     } else {
         insert_with_result_before_inst(
             func,
             user,
-            Sub::new_unchecked(func.inst_set(), addr_phi, delta),
+            Sub::new(func.inst_set(), addr_phi, delta),
             Type::I256,
         )
     }
@@ -972,21 +972,14 @@ fn emit_addr_offset_before_use(
 fn rewrite_mem_addr(func: &mut Function, inst: InstId, new_addr: ValueId) {
     let is = func.inst_set();
     if let Some(mload) = <&Mload as InstDowncast>::downcast(is, func.dfg.inst(inst)).cloned() {
-        func.dfg.replace_inst_preserving_results(
-            inst,
-            Box::new(Mload::new_unchecked(is, new_addr, *mload.ty())),
-        );
+        func.dfg
+            .replace_inst_preserving_results(inst, Box::new(Mload::new(is, new_addr, *mload.ty())));
         return;
     }
     if let Some(mstore) = <&Mstore as InstDowncast>::downcast(is, func.dfg.inst(inst)).cloned() {
         func.dfg.replace_inst_preserving_results(
             inst,
-            Box::new(Mstore::new_unchecked(
-                is,
-                new_addr,
-                *mstore.value(),
-                *mstore.ty(),
-            )),
+            Box::new(Mstore::new(is, new_addr, *mstore.value(), *mstore.ty())),
         );
         return;
     }
@@ -994,7 +987,7 @@ fn rewrite_mem_addr(func: &mut Function, inst: InstId, new_addr: ValueId) {
     {
         func.dfg.replace_inst_preserving_results(
             inst,
-            Box::new(EvmMstore8::new_unchecked(is, new_addr, *mstore8.val())),
+            Box::new(EvmMstore8::new(is, new_addr, *mstore8.val())),
         );
     }
 }

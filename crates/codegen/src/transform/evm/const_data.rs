@@ -359,7 +359,7 @@ impl ConstDataLower {
             let replacement = insert_before_one(
                 func,
                 candidate.inst,
-                data::Mload::new_unchecked(func.inst_set(), ptr, candidate.result_ty),
+                data::Mload::new(func.inst_set(), ptr, candidate.result_ty),
                 candidate.result_ty,
             );
             replace_with_alias(func, candidate.inst, replacement);
@@ -394,14 +394,14 @@ impl ConstDataLower {
         let row_alloc = insert_before_one(
             func,
             before,
-            data::Alloca::new_unchecked(func.inst_set(), row_ty),
+            data::Alloca::new(func.inst_set(), row_ty),
             row_ty.to_ptr(func.ctx()),
         );
         let row_ptr_ty = Type::I256.to_ptr(func.ctx());
         let row_ptr = insert_before_one(
             func,
             before,
-            cast::Bitcast::new_unchecked(func.inst_set(), row_alloc, row_ptr_ty),
+            cast::Bitcast::new(func.inst_set(), row_alloc, row_ptr_ty),
             row_ptr_ty,
         );
         let copy_len = imm_i256(
@@ -411,7 +411,7 @@ impl ConstDataLower {
         insert_before_no_result(
             func,
             before,
-            evm::EvmCodeCopy::new_unchecked(func.inst_set(), row_ptr, row_addr, copy_len),
+            evm::EvmCodeCopy::new(func.inst_set(), row_ptr, row_addr, copy_len),
         );
         row_ptr
     }
@@ -444,7 +444,7 @@ impl ConstDataLower {
         insert_before_one(
             func,
             before,
-            data::SymAddr::new_unchecked(func.inst_set(), data::SymbolRef::Global(blob)),
+            data::SymAddr::new(func.inst_set(), data::SymbolRef::Global(blob)),
             func.ctx().type_layout.pointer_repl(),
         )
     }
@@ -787,7 +787,7 @@ impl ConstDataLower {
         let addr = insert_before_one(
             func,
             before,
-            data::SymAddr::new_unchecked(func.inst_set(), data::SymbolRef::Global(blob)),
+            data::SymAddr::new(func.inst_set(), data::SymbolRef::Global(blob)),
             func.ctx().type_layout.pointer_repl(),
         );
         let copy_len_bytes = shape::runtime_size_bytes(func.ctx(), ty)
@@ -817,7 +817,7 @@ impl ConstDataLower {
                     let slot = insert_before_one(
                         func,
                         before,
-                        data::ObjIndex::new_unchecked(func.inst_set(), object, index),
+                        data::ObjIndex::new(func.inst_set(), object, index),
                         elem.to_obj_ref(func.ctx()),
                     );
                     self.emit_known_obj_init_for_ty(
@@ -843,7 +843,7 @@ impl ConstDataLower {
                     let slot = insert_before_one(
                         func,
                         before,
-                        data::ObjProj::new_unchecked(func.inst_set(), smallvec![object, index]),
+                        data::ObjProj::new(func.inst_set(), smallvec![object, index]),
                         field_ty.to_obj_ref(func.ctx()),
                     );
                     self.emit_known_obj_init_for_ty(
@@ -871,7 +871,7 @@ impl ConstDataLower {
         let base_addr = insert_before_one(
             func,
             before,
-            data::SymAddr::new_unchecked(func.inst_set(), data::SymbolRef::Global(blob)),
+            data::SymAddr::new(func.inst_set(), data::SymbolRef::Global(blob)),
             func.ctx().type_layout.pointer_repl(),
         );
         let root_ty = module.ctx.with_gv_store(|store| store.ty(path.global));
@@ -945,7 +945,7 @@ impl ConstDataLower {
         let base_addr = insert_before_one(
             func,
             before,
-            data::SymAddr::new_unchecked(func.inst_set(), data::SymbolRef::Global(blob)),
+            data::SymAddr::new(func.inst_set(), data::SymbolRef::Global(blob)),
             func.ctx().type_layout.pointer_repl(),
         );
         Some(const_addr_with_offset(
@@ -1539,7 +1539,7 @@ pub(super) fn emit_const_load_from_addr(
         insert_before_one(
             func,
             before,
-            data::Alloca::new_unchecked(func.inst_set(), Type::I256),
+            data::Alloca::new(func.inst_set(), Type::I256),
             Type::I256.to_ptr(func.ctx()),
         )
     });
@@ -1547,12 +1547,12 @@ pub(super) fn emit_const_load_from_addr(
     insert_before_no_result(
         func,
         before,
-        evm::EvmCodeCopy::new_unchecked(func.inst_set(), scratch, addr, copy_len),
+        evm::EvmCodeCopy::new(func.inst_set(), scratch, addr, copy_len),
     );
     insert_before_one(
         func,
         before,
-        data::Mload::new_unchecked(func.inst_set(), scratch, result_ty),
+        data::Mload::new(func.inst_set(), scratch, result_ty),
         result_ty,
     )
 }
@@ -1564,7 +1564,7 @@ pub(super) fn zext_to_i256(func: &mut Function, before: InstId, value: ValueId) 
         insert_before_one(
             func,
             before,
-            cast::Zext::new_unchecked(func.inst_set(), value, Type::I256),
+            cast::Zext::new(func.inst_set(), value, Type::I256),
             Type::I256,
         )
     }
@@ -1577,7 +1577,7 @@ pub(super) fn zext_to_ty(func: &mut Function, before: InstId, value: ValueId, ty
         insert_before_one(
             func,
             before,
-            cast::Zext::new_unchecked(func.inst_set(), value, ty),
+            cast::Zext::new(func.inst_set(), value, ty),
             ty,
         )
     }
@@ -1595,7 +1595,7 @@ pub(super) fn trunc_i256_to(
         insert_before_one(
             func,
             before,
-            cast::Trunc::new_unchecked(func.inst_set(), value, ty),
+            cast::Trunc::new(func.inst_set(), value, ty),
             ty,
         )
     }
@@ -1605,7 +1605,7 @@ pub(super) fn add_i256(func: &mut Function, before: InstId, lhs: ValueId, rhs: V
     insert_before_one(
         func,
         before,
-        arith::Add::new_unchecked(func.inst_set(), lhs, rhs),
+        arith::Add::new(func.inst_set(), lhs, rhs),
         Type::I256,
     )
 }
@@ -1614,7 +1614,7 @@ pub(super) fn sub_i256(func: &mut Function, before: InstId, lhs: ValueId, rhs: V
     insert_before_one(
         func,
         before,
-        arith::Sub::new_unchecked(func.inst_set(), lhs, rhs),
+        arith::Sub::new(func.inst_set(), lhs, rhs),
         Type::I256,
     )
 }
@@ -1628,7 +1628,7 @@ pub(super) fn shl_i256(
     insert_before_one(
         func,
         before,
-        arith::Shl::new_unchecked(func.inst_set(), bits, value),
+        arith::Shl::new(func.inst_set(), bits, value),
         Type::I256,
     )
 }
@@ -1642,7 +1642,7 @@ pub(super) fn umod_i256(
     insert_before_one(
         func,
         before,
-        evm::EvmUmod::new_unchecked(func.inst_set(), lhs, rhs),
+        evm::EvmUmod::new(func.inst_set(), lhs, rhs),
         Type::I256,
     )
 }
@@ -1656,7 +1656,7 @@ pub(super) fn shr_i256(
     insert_before_one(
         func,
         before,
-        arith::Shr::new_unchecked(func.inst_set(), bits, value),
+        arith::Shr::new(func.inst_set(), bits, value),
         Type::I256,
     )
 }
@@ -1665,7 +1665,7 @@ pub(super) fn and_i256(func: &mut Function, before: InstId, lhs: ValueId, rhs: V
     insert_before_one(
         func,
         before,
-        logic::And::new_unchecked(func.inst_set(), lhs, rhs),
+        logic::And::new(func.inst_set(), lhs, rhs),
         Type::I256,
     )
 }
@@ -1674,7 +1674,7 @@ pub(super) fn mul_i256(func: &mut Function, before: InstId, lhs: ValueId, rhs: V
     insert_before_one(
         func,
         before,
-        arith::Mul::new_unchecked(func.inst_set(), lhs, rhs),
+        arith::Mul::new(func.inst_set(), lhs, rhs),
         Type::I256,
     )
 }

@@ -821,7 +821,7 @@ mod tests {
         let mut dfg = DataFlowGraph::new(ModuleCtx::new(&isa));
         let lhs = dfg.make_imm_value(Immediate::I32(1));
         let rhs = dfg.make_imm_value(Immediate::I32(2));
-        let inst = dfg.make_inst(Uaddo::new(dfg.inst_set().has_uaddo().unwrap(), lhs, rhs));
+        let inst = dfg.make_inst(Uaddo::new(dfg.inst_set(), lhs, rhs));
 
         assert!(dfg.inst_results(inst).is_empty());
 
@@ -853,7 +853,7 @@ mod tests {
         let mut dfg = DataFlowGraph::new(ModuleCtx::new(&isa));
         let lhs = dfg.make_imm_value(Immediate::I32(1));
         let rhs = dfg.make_imm_value(Immediate::I32(2));
-        let inst = dfg.make_inst(Uaddo::new(dfg.inst_set().has_uaddo().unwrap(), lhs, rhs));
+        let inst = dfg.make_inst(Uaddo::new(dfg.inst_set(), lhs, rhs));
         let sum = dfg.make_value(Value::Inst {
             inst,
             result_idx: 0,
@@ -877,7 +877,7 @@ mod tests {
         let dead_block = dfg.make_block();
         let lhs = dfg.make_imm_value(Immediate::I32(1));
         let rhs = dfg.make_imm_value(Immediate::I32(2));
-        let inst = dfg.make_inst(Uaddo::new(dfg.inst_set().has_uaddo().unwrap(), lhs, rhs));
+        let inst = dfg.make_inst(Uaddo::new(dfg.inst_set(), lhs, rhs));
         let sum = dfg.make_value(Value::Inst {
             inst,
             result_idx: 0,
@@ -926,7 +926,7 @@ mod tests {
         let lhs = dfg.make_imm_value(Immediate::I32(1));
         let rhs = dfg.make_imm_value(Immediate::I32(2));
 
-        let producer = dfg.make_inst(Add::new(dfg.inst_set().has_add().unwrap(), lhs, rhs));
+        let producer = dfg.make_inst(Add::new(dfg.inst_set(), lhs, rhs));
         let produced = dfg.make_value(Value::Inst {
             inst: producer,
             result_idx: 0,
@@ -934,7 +934,7 @@ mod tests {
         });
         dfg.attach_result(producer, produced);
 
-        let consumer = dfg.make_inst(Add::new(dfg.inst_set().has_add().unwrap(), produced, lhs));
+        let consumer = dfg.make_inst(Add::new(dfg.inst_set(), produced, lhs));
         let consumer_result = dfg.make_value(Value::Inst {
             inst: consumer,
             result_idx: 0,

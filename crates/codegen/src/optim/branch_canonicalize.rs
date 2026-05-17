@@ -32,7 +32,7 @@ impl BranchCanonicalize {
 
             func.dfg.replace_inst(
                 term,
-                Box::new(Br::new_unchecked(
+                Box::new(Br::new(
                     func.inst_set(),
                     plan.cond,
                     plan.nz_dest,
@@ -265,16 +265,16 @@ fn insert_compare_before(
 ) -> ValueId {
     let is = func.inst_set();
     let inst = match kind {
-        BinaryInstKind::Lt => func.dfg.make_inst(cmp::Lt::new_unchecked(is, lhs, rhs)),
-        BinaryInstKind::Gt => func.dfg.make_inst(cmp::Gt::new_unchecked(is, lhs, rhs)),
-        BinaryInstKind::Slt => func.dfg.make_inst(cmp::Slt::new_unchecked(is, lhs, rhs)),
-        BinaryInstKind::Sgt => func.dfg.make_inst(cmp::Sgt::new_unchecked(is, lhs, rhs)),
-        BinaryInstKind::Le => func.dfg.make_inst(cmp::Le::new_unchecked(is, lhs, rhs)),
-        BinaryInstKind::Ge => func.dfg.make_inst(cmp::Ge::new_unchecked(is, lhs, rhs)),
-        BinaryInstKind::Sle => func.dfg.make_inst(cmp::Sle::new_unchecked(is, lhs, rhs)),
-        BinaryInstKind::Sge => func.dfg.make_inst(cmp::Sge::new_unchecked(is, lhs, rhs)),
-        BinaryInstKind::Eq => func.dfg.make_inst(cmp::Eq::new_unchecked(is, lhs, rhs)),
-        BinaryInstKind::Ne => func.dfg.make_inst(cmp::Ne::new_unchecked(is, lhs, rhs)),
+        BinaryInstKind::Lt => func.dfg.make_inst(cmp::Lt::new(is, lhs, rhs)),
+        BinaryInstKind::Gt => func.dfg.make_inst(cmp::Gt::new(is, lhs, rhs)),
+        BinaryInstKind::Slt => func.dfg.make_inst(cmp::Slt::new(is, lhs, rhs)),
+        BinaryInstKind::Sgt => func.dfg.make_inst(cmp::Sgt::new(is, lhs, rhs)),
+        BinaryInstKind::Le => func.dfg.make_inst(cmp::Le::new(is, lhs, rhs)),
+        BinaryInstKind::Ge => func.dfg.make_inst(cmp::Ge::new(is, lhs, rhs)),
+        BinaryInstKind::Sle => func.dfg.make_inst(cmp::Sle::new(is, lhs, rhs)),
+        BinaryInstKind::Sge => func.dfg.make_inst(cmp::Sge::new(is, lhs, rhs)),
+        BinaryInstKind::Eq => func.dfg.make_inst(cmp::Eq::new(is, lhs, rhs)),
+        BinaryInstKind::Ne => func.dfg.make_inst(cmp::Ne::new(is, lhs, rhs)),
         _ => unreachable!("non-compare kind"),
     };
     let value = func.dfg.make_value(Value::Inst {

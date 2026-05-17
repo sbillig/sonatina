@@ -1,4 +1,4 @@
-use ir::{HasInst, builder::FunctionBuilder, inst::control_flow::*};
+use ir::{builder::FunctionBuilder, inst::control_flow::*};
 use smallvec::SmallVec;
 
 use crate::{BuildCtx, Error, ast};
@@ -15,7 +15,6 @@ fn build_br_table(
     ctx: &mut BuildCtx,
     fb: &mut FunctionBuilder<ir::func_cursor::InstInserter>,
     args: &[ast::InstArg],
-    has_inst: &dyn HasInst<BrTable>,
 ) -> Result<BrTable, Box<Error>> {
     let mut args = args.iter().peekable();
     let scrutinee = super::process_arg!(ctx, fb, args, ValueId);
@@ -43,7 +42,6 @@ fn build_phi(
     ctx: &mut BuildCtx,
     fb: &mut FunctionBuilder<ir::func_cursor::InstInserter>,
     args: &[ast::InstArg],
-    has_inst: &dyn HasInst<Phi>,
 ) -> Result<Phi, Box<Error>> {
     let mut ast_args = args.iter().peekable();
     let mut args = Vec::new();
@@ -71,7 +69,6 @@ fn build_call(
     ctx: &mut BuildCtx,
     fb: &mut FunctionBuilder<ir::func_cursor::InstInserter>,
     args: &[ast::InstArg],
-    has_inst: &dyn HasInst<Call>,
 ) -> Result<Call, Box<Error>> {
     let mut ast_args = args.iter().peekable();
     let callee = super::process_arg!(ctx, fb, ast_args, FuncRef);
@@ -99,7 +96,6 @@ fn build_return(
     ctx: &mut BuildCtx,
     fb: &mut FunctionBuilder<ir::func_cursor::InstInserter>,
     args: &[ast::InstArg],
-    has_inst: &dyn HasInst<Return>,
 ) -> Result<Return, Box<Error>> {
     let mut ast_args = args.iter().peekable();
     let args = match ast_args.next() {

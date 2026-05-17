@@ -1,4 +1,4 @@
-use ir::{HasInst, ValueId, builder::FunctionBuilder, inst::data::*};
+use ir::{ValueId, builder::FunctionBuilder, inst::data::*};
 use smallvec::SmallVec;
 
 use crate::{BuildCtx, Error, ast};
@@ -40,7 +40,6 @@ fn build_sym_addr(
     ctx: &mut BuildCtx,
     fb: &mut FunctionBuilder<ir::func_cursor::InstInserter>,
     args: &[ast::InstArg],
-    has_inst: &dyn HasInst<SymAddr>,
 ) -> Result<SymAddr, Box<Error>> {
     let sym = build_symbol_ref(ctx, fb, args)?;
     Ok(SymAddr::new(fb.inst_set(), sym))
@@ -50,7 +49,6 @@ fn build_const_ref(
     ctx: &mut BuildCtx,
     fb: &mut FunctionBuilder<ir::func_cursor::InstInserter>,
     args: &[ast::InstArg],
-    has_inst: &dyn HasInst<ConstRef>,
 ) -> Result<ConstRef, Box<Error>> {
     let global = build_global_ref(ctx, fb, args)?;
     Ok(ConstRef::new(fb.inst_set(), global.into()))
@@ -60,7 +58,6 @@ fn build_sym_size(
     ctx: &mut BuildCtx,
     fb: &mut FunctionBuilder<ir::func_cursor::InstInserter>,
     args: &[ast::InstArg],
-    has_inst: &dyn HasInst<SymSize>,
 ) -> Result<SymSize, Box<Error>> {
     let sym = build_symbol_ref(ctx, fb, args)?;
     Ok(SymSize::new(fb.inst_set(), sym))
@@ -169,7 +166,6 @@ fn build_const_proj(
     ctx: &mut BuildCtx,
     fb: &mut FunctionBuilder<ir::func_cursor::InstInserter>,
     args: &[ast::InstArg],
-    has_inst: &dyn HasInst<ConstProj>,
 ) -> Result<ConstProj, Box<Error>> {
     let mut values = SmallVec::new();
     let mut ast_args = args.iter().peekable();
@@ -188,7 +184,6 @@ fn build_gep(
     ctx: &mut BuildCtx,
     fb: &mut FunctionBuilder<ir::func_cursor::InstInserter>,
     args: &[ast::InstArg],
-    has_inst: &dyn HasInst<Gep>,
 ) -> Result<Gep, Box<Error>> {
     let mut values = SmallVec::new();
     let mut ast_args = args.iter().peekable();
@@ -207,7 +202,6 @@ fn build_obj_proj(
     ctx: &mut BuildCtx,
     fb: &mut FunctionBuilder<ir::func_cursor::InstInserter>,
     args: &[ast::InstArg],
-    has_inst: &dyn HasInst<ObjProj>,
 ) -> Result<ObjProj, Box<Error>> {
     let mut values = SmallVec::new();
     let mut ast_args = args.iter().peekable();
@@ -226,7 +220,6 @@ fn build_enum_make(
     ctx: &mut BuildCtx,
     fb: &mut FunctionBuilder<ir::func_cursor::InstInserter>,
     args: &[ast::InstArg],
-    has_inst: &dyn HasInst<EnumMake>,
 ) -> Result<EnumMake, Box<Error>> {
     let enum_ty = ctx.type_(&fb.module_builder, (&args[0]).try_into()?);
     let variant_name: &ast::VariantName = (&args[1]).try_into()?;
@@ -239,7 +232,6 @@ fn build_enum_is_variant(
     ctx: &mut BuildCtx,
     fb: &mut FunctionBuilder<ir::func_cursor::InstInserter>,
     args: &[ast::InstArg],
-    has_inst: &dyn HasInst<EnumIsVariant>,
 ) -> Result<EnumIsVariant, Box<Error>> {
     let value = ctx.value(fb, (&args[0]).try_into()?);
     let variant_name: &ast::VariantName = (&args[1]).try_into()?;
@@ -252,7 +244,6 @@ fn build_enum_assert_variant(
     ctx: &mut BuildCtx,
     fb: &mut FunctionBuilder<ir::func_cursor::InstInserter>,
     args: &[ast::InstArg],
-    has_inst: &dyn HasInst<EnumAssertVariant>,
 ) -> Result<EnumAssertVariant, Box<Error>> {
     let value = ctx.value(fb, (&args[0]).try_into()?);
     let variant_name: &ast::VariantName = (&args[1]).try_into()?;
@@ -265,7 +256,6 @@ fn build_enum_extract(
     ctx: &mut BuildCtx,
     fb: &mut FunctionBuilder<ir::func_cursor::InstInserter>,
     args: &[ast::InstArg],
-    has_inst: &dyn HasInst<EnumExtract>,
 ) -> Result<EnumExtract, Box<Error>> {
     let value = ctx.value(fb, (&args[0]).try_into()?);
     let variant_name: &ast::VariantName = (&args[1]).try_into()?;
@@ -279,7 +269,6 @@ fn build_enum_assert_variant_ref(
     ctx: &mut BuildCtx,
     fb: &mut FunctionBuilder<ir::func_cursor::InstInserter>,
     args: &[ast::InstArg],
-    has_inst: &dyn HasInst<EnumAssertVariantRef>,
 ) -> Result<EnumAssertVariantRef, Box<Error>> {
     let object = ctx.value(fb, (&args[0]).try_into()?);
     let variant_name: &ast::VariantName = (&args[1]).try_into()?;
@@ -301,7 +290,6 @@ fn build_enum_set_tag(
     ctx: &mut BuildCtx,
     fb: &mut FunctionBuilder<ir::func_cursor::InstInserter>,
     args: &[ast::InstArg],
-    has_inst: &dyn HasInst<EnumSetTag>,
 ) -> Result<EnumSetTag, Box<Error>> {
     let object = ctx.value(fb, (&args[0]).try_into()?);
     let variant_name: &ast::VariantName = (&args[1]).try_into()?;
@@ -323,7 +311,6 @@ fn build_enum_write_variant(
     ctx: &mut BuildCtx,
     fb: &mut FunctionBuilder<ir::func_cursor::InstInserter>,
     args: &[ast::InstArg],
-    has_inst: &dyn HasInst<EnumWriteVariant>,
 ) -> Result<EnumWriteVariant, Box<Error>> {
     let object = ctx.value(fb, (&args[0]).try_into()?);
     let variant_name: &ast::VariantName = (&args[1]).try_into()?;
@@ -351,7 +338,6 @@ fn build_enum_proj(
     ctx: &mut BuildCtx,
     fb: &mut FunctionBuilder<ir::func_cursor::InstInserter>,
     args: &[ast::InstArg],
-    has_inst: &dyn HasInst<EnumProj>,
 ) -> Result<EnumProj, Box<Error>> {
     let object = ctx.value(fb, (&args[0]).try_into()?);
     let variant_name: &ast::VariantName = (&args[1]).try_into()?;

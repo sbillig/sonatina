@@ -488,7 +488,7 @@ fn insert_value_before_inst(
     let mut cursor = InstInserter::at_location(loc);
     let insert_inst = cursor.insert_inst_data(
         func,
-        data::InsertValue::new_unchecked(func.inst_set(), dest, idx_value, value),
+        data::InsertValue::new(func.inst_set(), dest, idx_value, value),
     );
     let insert_value = func.dfg.make_value(Value::Inst {
         inst: insert_inst,

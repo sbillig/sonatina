@@ -148,7 +148,7 @@ fn trim_after_noreturn_call(editor: &mut CfgEditor<'_>) -> bool {
 
                 let inst_set = editor.func().inst_set();
                 InstInserter::at_location(CursorLocation::BlockBottom(block))
-                    .insert_inst_data(editor.func_mut(), Unreachable::new_unchecked(inst_set));
+                    .insert_inst_data(editor.func_mut(), Unreachable::new(inst_set));
 
                 editor.recompute_cfg();
                 let unreachable = collect_unreachable_blocks(editor);
@@ -199,7 +199,7 @@ fn ensure_blocks_terminated(func: &mut Function, mode: CleanupMode) -> bool {
         match mode {
             CleanupMode::Strict => panic!("block {block:?} does not end with a terminator"),
             CleanupMode::RepairWithUndef => {
-                let unreachable = Unreachable::new_unchecked(func.inst_set());
+                let unreachable = Unreachable::new(func.inst_set());
                 InstInserter::at_location(CursorLocation::BlockBottom(block))
                     .insert_inst_data(func, unreachable);
                 changed = true;
