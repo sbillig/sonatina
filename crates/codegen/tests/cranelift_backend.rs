@@ -1028,6 +1028,75 @@ fn cranelift_emits_sp1_riscv64im_elf_for_integer_main() {
 }
 
 #[test]
+fn cranelift_sp1_runtime_satisfies_primitive_guest_api_imports() {
+    if !sp1_toolchain_available() {
+        return;
+    }
+
+    let isa = sp1_riscv64im_isa();
+    let is = isa.inst_set();
+    let mb = sp1_riscv64im_module_builder();
+
+    let read_u32 = mb
+        .declare_function(Signature::new_single(
+            "sys_sp1_read_u32",
+            Linkage::External,
+            &[],
+            Type::I32,
+        ))
+        .unwrap();
+    let commit_u32 = mb
+        .declare_function(Signature::new_unit(
+            "sys_sp1_commit_u32",
+            Linkage::External,
+            &[Type::I32],
+        ))
+        .unwrap();
+    let commit_u64 = mb
+        .declare_function(Signature::new_unit(
+            "sys_sp1_commit_u64",
+            Linkage::External,
+            &[Type::I64],
+        ))
+        .unwrap();
+    let main = mb
+        .declare_function(Signature::new_single(
+            "main",
+            Linkage::Public,
+            &[],
+            Type::I32,
+        ))
+        .unwrap();
+
+    let mut fb = mb.func_builder::<InstInserter>(main);
+    let entry = fb.append_block();
+    fb.switch_to_block(entry);
+    let input = fb.insert_inst(
+        control_flow::Call::new(is, read_u32, smallvec::smallvec![]),
+        Type::I32,
+    );
+    fb.insert_inst_no_result_with(|| {
+        control_flow::Call::new(is, commit_u32, smallvec::smallvec![input])
+    });
+    let wide = fb.make_imm_value(7i64);
+    fb.insert_inst_no_result_with(|| {
+        control_flow::Call::new(is, commit_u64, smallvec::smallvec![wide])
+    });
+    let status = fb.make_imm_value(0i32);
+    fb.insert_inst_no_result(control_flow::Return::new_single(is, status));
+    fb.seal_all();
+    fb.finish();
+
+    let module = mb.build();
+    let artifact = CraneliftBackend::new()
+        .compile_module_to_sp1_elf(&module)
+        .expect("SP1 ELF compilation failed");
+
+    assert!(!artifact.bytes.is_empty());
+    assert_sp1_elf_executable(&artifact.bytes, 2);
+}
+
+#[test]
 fn cranelift_emits_native_object_with_external_import_call() {
     let isa = native_isa();
     let is = isa.inst_set();

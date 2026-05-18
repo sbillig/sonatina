@@ -235,31 +235,25 @@ fn run_command(mut command: Command, context: &str) -> Result<Output, CraneliftE
 }
 
 fn runtime_source(target: Sp1Target) -> String {
-    format!(
-        r##"#![no_std]
+    r##"#![no_std]
 #![no_main]
 
-use core::arch::{{asm, global_asm}};
+use core::arch::{asm, global_asm};
 use core::panic::PanicInfo;
 
 const COMMIT: u32 = 0x10;
 const COMMIT_DEFERRED_PROOFS: u32 = 0x1a;
+const FD_PUBLIC_VALUES: u32 = 13;
 const HALT: u32 = 0x00;
+const HINT_LEN: u32 = 0xf0;
+const HINT_READ: u32 = 0xf1;
 const WRITE: u32 = 0x02;
-const STACK_TOP: {stack_type} = 0x7800_0000;
-const SHA256_EMPTY: [u32; 8] = [
-    u32::from_le_bytes([0xe3, 0xb0, 0xc4, 0x42]),
-    u32::from_le_bytes([0x98, 0xfc, 0x1c, 0x14]),
-    u32::from_le_bytes([0x9a, 0xfb, 0xf4, 0xc8]),
-    u32::from_le_bytes([0x99, 0x6f, 0xb9, 0x24]),
-    u32::from_le_bytes([0x27, 0xae, 0x41, 0xe4]),
-    u32::from_le_bytes([0x64, 0x9b, 0x93, 0x4c]),
-    u32::from_le_bytes([0xa4, 0x95, 0x99, 0x1b]),
-    u32::from_le_bytes([0x78, 0x52, 0xb8, 0x55]),
-];
+const STACK_TOP: __STACK_TYPE__ = 0x7800_0000;
 
 #[used]
-static _STACK_TOP: {stack_type} = STACK_TOP;
+static _STACK_TOP: __STACK_TYPE__ = STACK_TOP;
+
+static mut PUBLIC_VALUES_HASHER: Sha256 = Sha256::new();
 
 global_asm!(
     r#"
@@ -270,52 +264,53 @@ _start:
     .option norelax;
     la gp, __global_pointer$;
     .option pop;
-    la sp, {{stack_top}}
-    {stack_load} sp, 0(sp)
+    la sp, {stack_top}
+    __STACK_LOAD__ sp, 0(sp)
     call __start
 "#,
     stack_top = sym _STACK_TOP,
 );
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn __start() -> ! {{
-    unsafe extern "C" {{
+unsafe extern "C" fn __start() -> ! {
+    unsafe extern "C" {
         fn main() -> i32;
-    }}
-    let exit_code = unsafe {{ main() }};
+    }
+    let exit_code = unsafe { main() };
     syscall_halt((exit_code & 0xff) as u8);
-}}
+}
 
 #[unsafe(no_mangle)]
-pub extern "C" fn syscall_halt(exit_code: u8) -> ! {{
+pub extern "C" fn syscall_halt(exit_code: u8) -> ! {
+    let digest = unsafe { (*core::ptr::addr_of_mut!(PUBLIC_VALUES_HASHER)).finalize() };
     let mut i = 0usize;
-    while i < SHA256_EMPTY.len() {{
-        let word = SHA256_EMPTY[i] as usize;
-        unsafe {{
+    while i < 8 {
+        let word = unsafe { *digest.as_ptr().add(i) }.swap_bytes() as usize;
+        unsafe {
             asm!("ecall", in("t0") COMMIT, in("a0") i, in("a1") word);
-        }}
+        }
         i += 1;
-    }}
+    }
 
     let mut i = 0usize;
-    while i < 8 {{
-        unsafe {{
+    while i < 8 {
+        unsafe {
             asm!("ecall", in("t0") COMMIT_DEFERRED_PROOFS, in("a0") i, in("a1") 0usize);
-        }}
+        }
         i += 1;
-    }}
+    }
 
-    unsafe {{
+    unsafe {
         asm!("ecall", in("t0") HALT, in("a0") exit_code as usize);
-    }}
-    loop {{
+    }
+    loop {
         core::hint::spin_loop();
-    }}
-}}
+    }
+}
 
 #[unsafe(no_mangle)]
-pub extern "C" fn syscall_write(fd: u32, ptr: *const u8, len: usize) {{
-    unsafe {{
+pub extern "C" fn syscall_write(fd: u32, ptr: *const u8, len: usize) {
+    unsafe {
         asm!(
             "ecall",
             in("t0") WRITE,
@@ -323,47 +318,342 @@ pub extern "C" fn syscall_write(fd: u32, ptr: *const u8, len: usize) {{
             in("a1") ptr as usize,
             in("a2") len,
         );
-    }}
-}}
+    }
+    if fd == FD_PUBLIC_VALUES {
+        unsafe {
+            (*core::ptr::addr_of_mut!(PUBLIC_VALUES_HASHER)).update(ptr, len);
+        }
+    }
+}
 
 #[unsafe(no_mangle)]
-pub extern "C" fn sys_write(fd: u32, ptr: *const u8, len: usize) {{
+pub extern "C" fn syscall_hint_len() -> usize {
+    let len: usize;
+    unsafe {
+        asm!("ecall", in("t0") HINT_LEN, lateout("t0") len);
+    }
+    len
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn syscall_hint_read(ptr: *mut u8, len: usize) {
+    unsafe {
+        asm!("ecall", in("t0") HINT_READ, in("a0") ptr as usize, in("a1") len);
+    }
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn sys_write(fd: u32, ptr: *const u8, len: usize) {
     syscall_write(fd, ptr, len);
-}}
+}
 
 #[unsafe(no_mangle)]
-pub extern "C" fn sys_panic(ptr: *const u8, len: usize) -> ! {{
+pub extern "C" fn sys_panic(ptr: *const u8, len: usize) -> ! {
     sys_write(2, ptr, len);
     syscall_halt(1);
-}}
+}
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn memcpy(dst: *mut u8, src: *const u8, len: usize) -> *mut u8 {{
-    let mut offset = 0usize;
-    while offset < len {{
-        let byte = unsafe {{ src.add(offset).read() }};
-        unsafe {{ dst.add(offset).write(byte) }};
-        offset += 1;
-    }}
-    dst
-}}
+pub extern "C" fn sys_sp1_read_u32() -> u32 {
+    let buffer = read_hint_buffer(4);
+    unsafe {
+        u32::from_le_bytes([
+            *buffer.bytes.as_ptr().add(0),
+            *buffer.bytes.as_ptr().add(1),
+            *buffer.bytes.as_ptr().add(2),
+            *buffer.bytes.as_ptr().add(3),
+        ])
+    }
+}
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn memset(dst: *mut u8, value: i32, len: usize) -> *mut u8 {{
+pub extern "C" fn sys_sp1_read_i32() -> i32 {
+    let buffer = read_hint_buffer(4);
+    unsafe {
+        i32::from_le_bytes([
+            *buffer.bytes.as_ptr().add(0),
+            *buffer.bytes.as_ptr().add(1),
+            *buffer.bytes.as_ptr().add(2),
+            *buffer.bytes.as_ptr().add(3),
+        ])
+    }
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn sys_sp1_read_u64() -> u64 {
+    let buffer = read_hint_buffer(8);
+    unsafe {
+        u64::from_le_bytes([
+            *buffer.bytes.as_ptr().add(0),
+            *buffer.bytes.as_ptr().add(1),
+            *buffer.bytes.as_ptr().add(2),
+            *buffer.bytes.as_ptr().add(3),
+            *buffer.bytes.as_ptr().add(4),
+            *buffer.bytes.as_ptr().add(5),
+            *buffer.bytes.as_ptr().add(6),
+            *buffer.bytes.as_ptr().add(7),
+        ])
+    }
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn sys_sp1_commit_u32(value: u32) {
+    let bytes = value.to_le_bytes();
+    syscall_write(FD_PUBLIC_VALUES, bytes.as_ptr(), bytes.len());
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn sys_sp1_commit_i32(value: i32) {
+    let bytes = value.to_le_bytes();
+    syscall_write(FD_PUBLIC_VALUES, bytes.as_ptr(), bytes.len());
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn sys_sp1_commit_u64(value: u64) {
+    let bytes = value.to_le_bytes();
+    syscall_write(FD_PUBLIC_VALUES, bytes.as_ptr(), bytes.len());
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn sys_sp1_write_stdout_u8(value: u8) {
+    syscall_write(1, &value as *const u8, 1);
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn sys_sp1_write_stderr_u8(value: u8) {
+    syscall_write(2, &value as *const u8, 1);
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn sys_sp1_halt_invalid_hint() -> ! {
+    syscall_halt(3);
+}
+
+#[repr(align(8))]
+struct AlignedHintBuffer {
+    bytes: [u8; 8],
+}
+
+fn read_hint_buffer(len: usize) -> AlignedHintBuffer {
+    if syscall_hint_len() != len {
+        syscall_halt(3);
+    }
+    let mut buffer = AlignedHintBuffer { bytes: [0; 8] };
+    syscall_hint_read(buffer.bytes.as_mut_ptr(), len);
+    buffer
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn memcpy(dst: *mut u8, src: *const u8, len: usize) -> *mut u8 {
     let mut offset = 0usize;
-    while offset < len {{
-        unsafe {{ dst.add(offset).write(value as u8) }};
+    while offset < len {
+        let byte = unsafe { src.add(offset).read() };
+        unsafe { dst.add(offset).write(byte) };
         offset += 1;
-    }}
+    }
     dst
-}}
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn memset(dst: *mut u8, value: i32, len: usize) -> *mut u8 {
+    let mut offset = 0usize;
+    while offset < len {
+        unsafe { dst.add(offset).write(value as u8) };
+        offset += 1;
+    }
+    dst
+}
+
+struct Sha256 {
+    state: [u32; 8],
+    len_bytes: u64,
+    buffer: [u8; 64],
+    buffer_len: usize,
+}
+
+impl Sha256 {
+    const fn new() -> Self {
+        Self {
+            state: [
+                0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a,
+                0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19,
+            ],
+            len_bytes: 0,
+            buffer: [0; 64],
+            buffer_len: 0,
+        }
+    }
+
+    fn update(&mut self, ptr: *const u8, len: usize) {
+        let mut offset = 0usize;
+        while offset < len {
+            let remaining = 64 - self.buffer_len;
+            let take = if len - offset < remaining { len - offset } else { remaining };
+            let mut i = 0usize;
+            while i < take {
+                unsafe {
+                    self.buffer
+                        .as_mut_ptr()
+                        .add(self.buffer_len + i)
+                        .write(ptr.add(offset + i).read());
+                }
+                i += 1;
+            }
+            self.buffer_len += take;
+            offset += take;
+            if self.buffer_len == 64 {
+                let block = self.buffer;
+                self.compress(&block);
+                self.len_bytes += 64;
+                self.buffer_len = 0;
+            }
+        }
+    }
+
+    fn finalize(&mut self) -> [u32; 8] {
+        let total_bits = (self.len_bytes + self.buffer_len as u64) * 8;
+        unsafe {
+            self.buffer.as_mut_ptr().add(self.buffer_len).write(0x80);
+        }
+        self.buffer_len += 1;
+
+        if self.buffer_len > 56 {
+            while self.buffer_len < 64 {
+                unsafe {
+                    self.buffer.as_mut_ptr().add(self.buffer_len).write(0);
+                }
+                self.buffer_len += 1;
+            }
+            let block = self.buffer;
+            self.compress(&block);
+            self.buffer = [0; 64];
+            self.buffer_len = 0;
+        }
+
+        while self.buffer_len < 56 {
+            unsafe {
+                self.buffer.as_mut_ptr().add(self.buffer_len).write(0);
+            }
+            self.buffer_len += 1;
+        }
+
+        let len_bytes = total_bits.to_be_bytes();
+        let mut i = 0usize;
+        while i < 8 {
+            unsafe {
+                self.buffer
+                    .as_mut_ptr()
+                    .add(56 + i)
+                    .write(*len_bytes.as_ptr().add(i));
+            }
+            i += 1;
+        }
+        let block = self.buffer;
+        self.compress(&block);
+        self.state
+    }
+
+    fn compress(&mut self, block: &[u8; 64]) {
+        const K: [u32; 64] = [
+            0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5,
+            0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,
+            0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3,
+            0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174,
+            0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc,
+            0x2de92c6f, 0x4a7484aa, 0x5cb0a9dc, 0x76f988da,
+            0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7,
+            0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967,
+            0x27b70a85, 0x2e1b2138, 0x4d2c6dfc, 0x53380d13,
+            0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85,
+            0xa2bfe8a1, 0xa81a664b, 0xc24b8b70, 0xc76c51a3,
+            0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070,
+            0x19a4c116, 0x1e376c08, 0x2748774c, 0x34b0bcb5,
+            0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
+            0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208,
+            0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2,
+        ];
+
+        let mut w = [0u32; 64];
+        let mut i = 0usize;
+        while i < 16 {
+            let j = i * 4;
+            unsafe {
+                w.as_mut_ptr().add(i).write(u32::from_be_bytes([
+                    *block.as_ptr().add(j),
+                    *block.as_ptr().add(j + 1),
+                    *block.as_ptr().add(j + 2),
+                    *block.as_ptr().add(j + 3),
+                ]));
+            }
+            i += 1;
+        }
+        while i < 64 {
+            unsafe {
+                let wm15 = *w.as_ptr().add(i - 15);
+                let wm2 = *w.as_ptr().add(i - 2);
+                let s0 = wm15.rotate_right(7) ^ wm15.rotate_right(18) ^ (wm15 >> 3);
+                let s1 = wm2.rotate_right(17) ^ wm2.rotate_right(19) ^ (wm2 >> 10);
+                let value = (*w.as_ptr().add(i - 16))
+                    .wrapping_add(s0)
+                    .wrapping_add(*w.as_ptr().add(i - 7))
+                    .wrapping_add(s1);
+                w.as_mut_ptr().add(i).write(value);
+            }
+            i += 1;
+        }
+
+        let mut a = unsafe { *self.state.as_ptr().add(0) };
+        let mut b = unsafe { *self.state.as_ptr().add(1) };
+        let mut c = unsafe { *self.state.as_ptr().add(2) };
+        let mut d = unsafe { *self.state.as_ptr().add(3) };
+        let mut e = unsafe { *self.state.as_ptr().add(4) };
+        let mut f = unsafe { *self.state.as_ptr().add(5) };
+        let mut g = unsafe { *self.state.as_ptr().add(6) };
+        let mut h = unsafe { *self.state.as_ptr().add(7) };
+
+        i = 0;
+        while i < 64 {
+            let s1 = e.rotate_right(6) ^ e.rotate_right(11) ^ e.rotate_right(25);
+            let ch = (e & f) ^ ((!e) & g);
+            let temp1 = h
+                .wrapping_add(s1)
+                .wrapping_add(ch)
+                .wrapping_add(unsafe { *K.as_ptr().add(i) })
+                .wrapping_add(unsafe { *w.as_ptr().add(i) });
+            let s0 = a.rotate_right(2) ^ a.rotate_right(13) ^ a.rotate_right(22);
+            let maj = (a & b) ^ (a & c) ^ (b & c);
+            let temp2 = s0.wrapping_add(maj);
+
+            h = g;
+            g = f;
+            f = e;
+            e = d.wrapping_add(temp1);
+            d = c;
+            c = b;
+            b = a;
+            a = temp1.wrapping_add(temp2);
+            i += 1;
+        }
+
+        unsafe {
+            let state = self.state.as_mut_ptr();
+            state.add(0).write((*state.add(0)).wrapping_add(a));
+            state.add(1).write((*state.add(1)).wrapping_add(b));
+            state.add(2).write((*state.add(2)).wrapping_add(c));
+            state.add(3).write((*state.add(3)).wrapping_add(d));
+            state.add(4).write((*state.add(4)).wrapping_add(e));
+            state.add(5).write((*state.add(5)).wrapping_add(f));
+            state.add(6).write((*state.add(6)).wrapping_add(g));
+            state.add(7).write((*state.add(7)).wrapping_add(h));
+        }
+    }
+}
 
 #[panic_handler]
-fn panic(_: &PanicInfo<'_>) -> ! {{
+fn panic(_: &PanicInfo<'_>) -> ! {
     syscall_halt(1)
-}}
-"##,
-        stack_type = target.stack_type(),
-        stack_load = target.stack_load(),
-    )
+}
+"##
+    .replace("__STACK_TYPE__", target.stack_type())
+    .replace("__STACK_LOAD__", target.stack_load())
 }

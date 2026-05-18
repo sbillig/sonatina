@@ -13,6 +13,7 @@ use sonatina_ir::{
     ir_writer::{FuncWriteCtx, InstStatement, IrWrite},
     module::{FuncRef, ModuleCtx},
 };
+use sonatina_triple::{Architecture, OperatingSystem, Vendor};
 
 const I256_LIMBS: usize = 4;
 const I256_PRODUCT_LIMBS: usize = I256_LIMBS * 2;
@@ -655,6 +656,9 @@ fn translate_function(
                     let clif_func_id = func_id_map.get(&callee)
                         .ok_or_else(|| format!("unknown callee {:?}", callee))?;
                     let clif_func_ref = clif_module.declare_func_in_func(*clif_func_id, builder.func);
+                    if uses_static_external_calls(module, callee) {
+                        builder.func.dfg.ext_funcs[clif_func_ref].colocated = true;
+                    }
                     let ir_results = function.dfg.inst_results(inst_id);
                     let callee_returns_indirect = ir_results.len() == 1
                         && uses_indirect_return_abi(function.dfg.value_ty(ir_results[0]));
@@ -1241,6 +1245,19 @@ fn translate_function(
     }
 
     Ok(())
+}
+
+fn uses_static_external_calls(module: &Module, callee: FuncRef) -> bool {
+    let triple = module.ctx.triple;
+    module.ctx.func_linkage(callee).is_external()
+        && matches!(
+            (triple.architecture, triple.vendor, triple.operating_system),
+            (
+                Architecture::Riscv32im | Architecture::Riscv64im,
+                Vendor::Succinct,
+                OperatingSystem::ZkvmElf
+            )
+        )
 }
 
 fn resolve_scalar_value(
