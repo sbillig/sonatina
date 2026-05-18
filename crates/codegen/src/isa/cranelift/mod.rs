@@ -207,7 +207,7 @@ impl CraneliftBackend {
                 .map_err(|e| vec![CraneliftError::Compilation(e.to_string())])?;
         let mut object = ObjectModule::new(builder);
 
-        let func_map = translate::translate_module(module, &mut object, true)
+        let func_map = translate::translate_module(module, &mut object)
             .map_err(|e| vec![CraneliftError::Translation(e)])?;
         let product = object.finish();
         let bytes = product
@@ -273,7 +273,7 @@ impl Backend for CraneliftBackend {
 
         let mut jit = JITModule::new(builder);
 
-        let func_map = translate::translate_module(module, &mut jit, false)
+        let func_map = translate::translate_module(module, &mut jit)
             .map_err(|e| vec![CraneliftError::Translation(e)])?;
 
         jit.finalize_definitions()

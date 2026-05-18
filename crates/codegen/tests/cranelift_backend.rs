@@ -2,7 +2,10 @@
 
 use std::process::Command;
 
-use sonatina_codegen::{Backend, Compile, OptLevel, isa::cranelift::CraneliftBackend};
+use sonatina_codegen::{
+    Backend, Compile, OptLevel,
+    isa::cranelift::{CraneliftBackend, CraneliftError},
+};
 use sonatina_ir::{
     I256, Immediate, Linkage, Signature, Type, U256,
     builder::ModuleBuilder,
@@ -225,6 +228,45 @@ fn cranelift_add_two_i64s() {
     assert_eq!(add_fn(3, 4), 7);
     assert_eq!(add_fn(-10, 25), 15);
     assert_eq!(add_fn(0, 0), 0);
+}
+
+#[test]
+fn cranelift_jit_reports_translation_failure_before_finalization() {
+    let isa = native_isa();
+    let is = isa.inst_set();
+    let mb = native_module_builder();
+
+    let sig = Signature::new_single("bad_cmp", Linkage::Public, &[Type::I64], Type::I1);
+    let func_ref = mb.declare_function(sig).unwrap();
+
+    let mut fb = mb.func_builder::<InstInserter>(func_ref);
+    let entry = fb.append_block();
+    fb.switch_to_block(entry);
+
+    let lhs = fb.args()[0];
+    let rhs = fb.make_imm_value(Immediate::from_i256(I256::from(3u8), Type::I256));
+    let result = fb.insert_inst(cmp::Lt::new(is, lhs, rhs), Type::I1);
+    fb.insert_inst_no_result(control_flow::Return::new_single(is, result));
+    fb.seal_all();
+    fb.finish();
+
+    let module = mb.build();
+    let result = CraneliftBackend::new().compile_module(&module);
+
+    let Err(errors) = result else {
+        panic!("JIT compilation should fail before finalizing an undefined function")
+    };
+    let [CraneliftError::Translation(message)] = errors.as_slice() else {
+        panic!("expected a single translation error, got {errors:?}");
+    };
+    assert!(
+        message.contains("failed to translate function bad_cmp"),
+        "translation error should name the failed local function: {message}"
+    );
+    assert!(
+        message.contains("cannot compare mismatched i256 and scalar values"),
+        "translation error should preserve the root translation failure: {message}"
+    );
 }
 
 #[test]

@@ -23,7 +23,6 @@ const I256_LIMB_BITS: i64 = 64;
 pub(super) fn translate_module(
     module: &Module,
     clif_module: &mut impl ClifModule,
-    fail_on_unsupported: bool,
 ) -> Result<HashMap<String, FuncId>, String> {
     let mut func_map: HashMap<String, FuncId> = HashMap::new();
     let mut func_id_map: HashMap<FuncRef, FuncId> = HashMap::new();
@@ -71,13 +70,7 @@ pub(super) fn translate_module(
             )
         });
         if let Some(Err(e)) = translated {
-            if fail_on_unsupported {
-                return Err(format!("failed to translate function {name}: {e}"));
-            } else {
-                // Skip functions with unsupported instructions rather than
-                // failing the whole module. They'll error at call time if needed.
-                eprintln!("[cranelift] skipping function {name}: {e}");
-            }
+            return Err(format!("failed to translate function {name}: {e}"));
         }
     }
 
