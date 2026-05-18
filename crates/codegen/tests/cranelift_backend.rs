@@ -1,5 +1,7 @@
 #![allow(clippy::crosspointer_transmute)]
 
+use std::process::Command;
+
 use sonatina_codegen::{Backend, Compile, OptLevel, isa::cranelift::CraneliftBackend};
 use sonatina_ir::{
     I256, Immediate, Linkage, Signature, Type, U256,
@@ -47,16 +49,59 @@ fn riscv32im_module_builder() -> ModuleBuilder {
     ModuleBuilder::new(ctx)
 }
 
+fn sp1_riscv32im_isa() -> Native {
+    Native::new(TargetTriple::new(
+        Architecture::Riscv32im,
+        Vendor::Succinct,
+        OperatingSystem::ZkvmElf,
+    ))
+}
+
+fn sp1_riscv32im_module_builder() -> ModuleBuilder {
+    let isa = sp1_riscv32im_isa();
+    let ctx = ModuleCtx::new(&isa);
+    ModuleBuilder::new(ctx)
+}
+
+fn sp1_riscv64im_module_builder() -> ModuleBuilder {
+    let isa = Native::new(TargetTriple::new(
+        Architecture::Riscv64im,
+        Vendor::Succinct,
+        OperatingSystem::ZkvmElf,
+    ));
+    let ctx = ModuleCtx::new(&isa);
+    ModuleBuilder::new(ctx)
+}
+
 fn assert_riscv32_elf_object(bytes: &[u8]) {
     assert!(bytes.len() >= 40, "ELF header is truncated");
     assert_eq!(&bytes[0..4], b"\x7fELF");
     assert_eq!(bytes[4], 1, "expected ELFCLASS32");
     assert_eq!(bytes[5], 1, "expected little-endian ELF");
-    assert_eq!(
-        u16::from_le_bytes([bytes[18], bytes[19]]),
-        243,
-        "expected EM_RISCV"
+    assert_eq!(read_le_u16(bytes, 18), 243, "expected EM_RISCV");
+}
+
+fn assert_sp1_elf_executable(bytes: &[u8], elf_class: u8) {
+    assert!(bytes.len() >= 64, "ELF header is truncated");
+    assert_eq!(&bytes[0..4], b"\x7fELF");
+    assert_eq!(bytes[4], elf_class, "unexpected ELF class");
+    assert_eq!(bytes[5], 1, "expected little-endian ELF");
+    assert_eq!(read_le_u16(bytes, 16), 2, "expected ET_EXEC");
+    assert_eq!(read_le_u16(bytes, 18), 243, "expected EM_RISCV");
+
+    let entry = if elf_class == 1 {
+        read_le_u32(bytes, 24) as u64
+    } else {
+        read_le_u64(bytes, 24)
+    };
+    assert!(
+        entry >= 0x7800_0000,
+        "SP1 entry point should be linked above STACK_TOP"
     );
+}
+
+fn read_le_u16(bytes: &[u8], offset: usize) -> u16 {
+    u16::from_le_bytes([bytes[offset], bytes[offset + 1]])
 }
 
 fn read_le_u32(bytes: &[u8], offset: usize) -> u32 {
@@ -66,6 +111,27 @@ fn read_le_u32(bytes: &[u8], offset: usize) -> u32 {
         bytes[offset + 2],
         bytes[offset + 3],
     ])
+}
+
+fn read_le_u64(bytes: &[u8], offset: usize) -> u64 {
+    u64::from_le_bytes([
+        bytes[offset],
+        bytes[offset + 1],
+        bytes[offset + 2],
+        bytes[offset + 3],
+        bytes[offset + 4],
+        bytes[offset + 5],
+        bytes[offset + 6],
+        bytes[offset + 7],
+    ])
+}
+
+fn sp1_toolchain_available() -> bool {
+    Command::new("rustc")
+        .arg("+succinct")
+        .arg("--version")
+        .output()
+        .is_ok_and(|output| output.status.success())
 }
 
 fn assert_host_object_linker_metadata(bytes: &[u8]) {
@@ -893,6 +959,54 @@ fn cranelift_emits_riscv32im_object_for_integer_main() {
     assert!(!artifact.bytes.is_empty());
     assert!(artifact.func_map.contains_key("main"));
     assert_riscv32_elf_object(&artifact.bytes);
+}
+
+#[test]
+fn cranelift_emits_sp1_riscv32im_elf_for_integer_main() {
+    if !sp1_toolchain_available() {
+        return;
+    }
+
+    let isa = sp1_riscv32im_isa();
+    let is = isa.inst_set();
+    let mb = sp1_riscv32im_module_builder();
+
+    let sig = Signature::new_single("main", Linkage::Public, &[], Type::I32);
+    let func_ref = mb.declare_function(sig).unwrap();
+
+    let mut fb = mb.func_builder::<InstInserter>(func_ref);
+    let entry = fb.append_block();
+    fb.switch_to_block(entry);
+    let status = fb.make_imm_value(42i32);
+    fb.insert_inst_no_result(control_flow::Return::new_single(is, status));
+    fb.seal_all();
+    fb.finish();
+
+    let module = mb.build();
+    let artifact = CraneliftBackend::new()
+        .compile_module_to_sp1_elf(&module)
+        .expect("SP1 ELF compilation failed");
+
+    assert!(!artifact.bytes.is_empty());
+    assert!(artifact.func_map.contains_key("main"));
+    assert_sp1_elf_executable(&artifact.bytes, 1);
+}
+
+#[test]
+fn cranelift_rejects_sp1_riscv64im_until_soft_float_abi_is_supported() {
+    let module = sp1_riscv64im_module_builder().build();
+    let errors = CraneliftBackend::new()
+        .compile_module_to_sp1_elf(&module)
+        .err()
+        .expect("SP1 RV64 should be rejected");
+    let message = errors
+        .into_iter()
+        .map(|error| error.to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    assert!(message.contains("LP64 soft-float ABI"));
+    assert!(message.contains("LP64D hard-float"));
 }
 
 #[test]

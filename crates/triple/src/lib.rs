@@ -37,19 +37,13 @@ impl TargetTriple {
                 .next()
                 .ok_or_else(|| InvalidTriple::InvalidFormat(s.to_string()))?,
         )?;
-        let version = OperatingSystem::parse(
-            arch,
-            chain,
-            triple
-                .next()
-                .ok_or_else(|| InvalidTriple::InvalidFormat(s.to_string()))?,
-        )?;
-
-        if triple.next().is_none() {
-            Ok(Self::new(arch, chain, version))
-        } else {
-            Err(InvalidTriple::InvalidFormat(s.to_string()))
+        let os_parts = triple.collect::<Vec<_>>();
+        if os_parts.is_empty() {
+            return Err(InvalidTriple::InvalidFormat(s.to_string()));
         }
+        let version = OperatingSystem::parse(arch, chain, &os_parts.join("-"))?;
+
+        Ok(Self::new(arch, chain, version))
     }
 }
 
@@ -69,6 +63,7 @@ pub enum Architecture {
     X86_64,
     Aarch64,
     Riscv32im,
+    Riscv64im,
 }
 
 impl Architecture {
@@ -78,6 +73,7 @@ impl Architecture {
             "x86_64" => Ok(Self::X86_64),
             "aarch64" => Ok(Self::Aarch64),
             "riscv32im" => Ok(Self::Riscv32im),
+            "riscv64im" => Ok(Self::Riscv64im),
             _ => Err(InvalidTriple::ArchitectureNotSupported),
         }
     }
@@ -90,6 +86,7 @@ impl Display for Architecture {
             Self::X86_64 => write!(f, "x86_64"),
             Self::Aarch64 => write!(f, "aarch64"),
             Self::Riscv32im => write!(f, "riscv32im"),
+            Self::Riscv64im => write!(f, "riscv64im"),
         }
     }
 }
@@ -97,6 +94,7 @@ impl Display for Architecture {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Vendor {
     Ethereum,
+    Succinct,
     Unknown,
 }
 
@@ -104,6 +102,7 @@ impl Vendor {
     fn parse(s: &str) -> Result<Self, InvalidTriple> {
         match s {
             "ethereum" => Ok(Vendor::Ethereum),
+            "succinct" => Ok(Vendor::Succinct),
             "unknown" => Ok(Vendor::Unknown),
             _ => Err(InvalidTriple::VendorNotSupported),
         }
@@ -114,6 +113,7 @@ impl Display for Vendor {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
             Vendor::Ethereum => write!(f, "ethereum"),
+            Vendor::Succinct => write!(f, "succinct"),
             Vendor::Unknown => write!(f, "unknown"),
         }
     }
@@ -124,6 +124,7 @@ pub enum OperatingSystem {
     Evm(EvmVersion),
     Native,
     None,
+    ZkvmElf,
 }
 
 impl OperatingSystem {
@@ -150,8 +151,12 @@ impl OperatingSystem {
                 "native" => Ok(Self::Native),
                 _ => Err(InvalidTriple::OsNotSupported),
             },
-            (Architecture::Riscv32im, Vendor::Unknown) => match s {
+            (Architecture::Riscv32im | Architecture::Riscv64im, Vendor::Unknown) => match s {
                 "none" => Ok(Self::None),
+                _ => Err(InvalidTriple::OsNotSupported),
+            },
+            (Architecture::Riscv32im | Architecture::Riscv64im, Vendor::Succinct) => match s {
+                "zkvm-elf" => Ok(Self::ZkvmElf),
                 _ => Err(InvalidTriple::OsNotSupported),
             },
             _ => Err(InvalidTriple::InvalidCombination),
@@ -165,6 +170,7 @@ impl Display for OperatingSystem {
             Self::Evm(evm_version) => write!(f, "{evm_version}"),
             Self::Native => write!(f, "native"),
             Self::None => write!(f, "none"),
+            Self::ZkvmElf => write!(f, "zkvm-elf"),
         }
     }
 }
@@ -259,6 +265,18 @@ mod tests {
         assert_eq!(triple.vendor, Vendor::Unknown);
         assert_eq!(triple.operating_system, OperatingSystem::None);
         assert_eq!("riscv32im-unknown-none", triple.to_string());
+
+        let triple = TargetTriple::parse("riscv64im-unknown-none").unwrap();
+        assert_eq!(triple.architecture, Architecture::Riscv64im);
+        assert_eq!(triple.vendor, Vendor::Unknown);
+        assert_eq!(triple.operating_system, OperatingSystem::None);
+        assert_eq!("riscv64im-unknown-none", triple.to_string());
+
+        let triple = TargetTriple::parse("riscv64im-succinct-zkvm-elf").unwrap();
+        assert_eq!(triple.architecture, Architecture::Riscv64im);
+        assert_eq!(triple.vendor, Vendor::Succinct);
+        assert_eq!(triple.operating_system, OperatingSystem::ZkvmElf);
+        assert_eq!("riscv64im-succinct-zkvm-elf", triple.to_string());
     }
 
     #[test]
@@ -266,5 +284,6 @@ mod tests {
         assert!(TargetTriple::parse("evm-unknown-native").is_err());
         assert!(TargetTriple::parse("x86_64-ethereum-osaka").is_err());
         assert!(TargetTriple::parse("riscv32im-unknown-native").is_err());
+        assert!(TargetTriple::parse("riscv64im-succinct-none").is_err());
     }
 }

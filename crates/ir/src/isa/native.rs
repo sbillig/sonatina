@@ -46,7 +46,10 @@ impl Native {
     pub fn new(triple: TargetTriple) -> Self {
         assert!(matches!(
             triple.architecture,
-            Architecture::X86_64 | Architecture::Aarch64 | Architecture::Riscv32im
+            Architecture::X86_64
+                | Architecture::Aarch64
+                | Architecture::Riscv32im
+                | Architecture::Riscv64im
         ));
         Self { triple }
     }
@@ -61,7 +64,9 @@ impl Isa for Native {
 
     fn type_layout(&self) -> &'static dyn TypeLayout {
         match self.triple.architecture {
-            Architecture::X86_64 | Architecture::Aarch64 => &NATIVE64_TYPE_LAYOUT,
+            Architecture::X86_64 | Architecture::Aarch64 | Architecture::Riscv64im => {
+                &NATIVE64_TYPE_LAYOUT
+            }
             Architecture::Riscv32im => &NATIVE32_TYPE_LAYOUT,
             Architecture::Evm => unreachable!("native ISA does not support EVM targets"),
         }

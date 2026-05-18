@@ -1,3 +1,4 @@
+mod sp1;
 mod translate;
 pub mod u256_runtime;
 
@@ -16,11 +17,15 @@ use sonatina_triple::{Architecture, TargetTriple};
 
 use crate::backend::Backend;
 
+pub use sp1::Sp1ElfArtifact;
+
 #[derive(Debug)]
 pub enum CraneliftError {
     UnsupportedTarget(String),
     Translation(String),
     Compilation(String),
+    Linking(String),
+    Toolchain(String),
 }
 
 impl std::fmt::Display for CraneliftError {
@@ -29,6 +34,8 @@ impl std::fmt::Display for CraneliftError {
             Self::UnsupportedTarget(msg) => write!(f, "unsupported target: {msg}"),
             Self::Translation(msg) => write!(f, "translation error: {msg}"),
             Self::Compilation(msg) => write!(f, "compilation error: {msg}"),
+            Self::Linking(msg) => write!(f, "linking error: {msg}"),
+            Self::Toolchain(msg) => write!(f, "toolchain error: {msg}"),
         }
     }
 }
@@ -125,13 +132,18 @@ impl CraneliftBackend {
         &self,
         triple: TargetTriple,
     ) -> Result<Arc<dyn clif_isa::TargetIsa>, CraneliftError> {
-        let is_pic = !matches!(triple.architecture, Architecture::Riscv32im);
+        let is_pic = !matches!(
+            triple.architecture,
+            Architecture::Riscv32im | Architecture::Riscv64im
+        );
         let flags = self.flags(is_pic)?;
         let builder = match triple.architecture {
             Architecture::X86_64 | Architecture::Aarch64 => {
                 return self.build_host_object_isa(triple, is_pic);
             }
             Architecture::Riscv32im => clif_isa::lookup_by_name("riscv32im-unknown-none-elf")
+                .map_err(|e| CraneliftError::UnsupportedTarget(e.to_string()))?,
+            Architecture::Riscv64im => clif_isa::lookup_by_name("riscv64-unknown-none-elf")
                 .map_err(|e| CraneliftError::UnsupportedTarget(e.to_string()))?,
             Architecture::Evm => {
                 return Err(CraneliftError::UnsupportedTarget(format!(
@@ -162,7 +174,10 @@ impl CraneliftBackend {
         let triple = module.ctx.triple;
         if matches!(
             triple.architecture,
-            Architecture::X86_64 | Architecture::Aarch64 | Architecture::Riscv32im
+            Architecture::X86_64
+                | Architecture::Aarch64
+                | Architecture::Riscv32im
+                | Architecture::Riscv64im
         ) {
             Ok(())
         } else {
