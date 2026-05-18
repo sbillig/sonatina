@@ -143,7 +143,7 @@ impl CraneliftBackend {
             }
             Architecture::Riscv32im => clif_isa::lookup_by_name("riscv32im-unknown-none-elf")
                 .map_err(|e| CraneliftError::UnsupportedTarget(e.to_string()))?,
-            Architecture::Riscv64im => clif_isa::lookup_by_name("riscv64-unknown-none-elf")
+            Architecture::Riscv64im => clif_isa::lookup_by_name("riscv64im-unknown-none-elf")
                 .map_err(|e| CraneliftError::UnsupportedTarget(e.to_string()))?,
             Architecture::Evm => {
                 return Err(CraneliftError::UnsupportedTarget(format!(

@@ -14,3 +14,6 @@ members = [
 
 [workspace.package]
 edition = "2024"
+
+[patch.crates-io]
+target-lexicon = { path = "/Users/sean/src/wasmtime/vendor/target-lexicon" }

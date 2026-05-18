@@ -24,6 +24,7 @@ pub struct Sp1ElfArtifact {
 #[derive(Clone, Copy)]
 enum Sp1Target {
     Riscv32im,
+    Riscv64im,
 }
 
 impl Sp1Target {
@@ -34,11 +35,7 @@ impl Sp1Target {
                 Ok(Self::Riscv32im)
             }
             (Architecture::Riscv64im, Vendor::Succinct, OperatingSystem::ZkvmElf) => {
-                Err(CraneliftError::UnsupportedTarget(
-                    "SP1 RV64 requires the LP64 soft-float ABI, but Cranelift's current RV64 \
-                     backend implements LP64D hard-float"
-                        .into(),
-                ))
+                Ok(Self::Riscv64im)
             }
             _ => Err(CraneliftError::UnsupportedTarget(format!(
                 "SP1 ELF emission requires riscv32im-succinct-zkvm-elf or \
@@ -50,24 +47,28 @@ impl Sp1Target {
     fn rust_target(self) -> &'static str {
         match self {
             Self::Riscv32im => "riscv32im-succinct-zkvm-elf",
+            Self::Riscv64im => "riscv64im-succinct-zkvm-elf",
         }
     }
 
     fn linker_machine(self) -> &'static str {
         match self {
             Self::Riscv32im => "elf32lriscv",
+            Self::Riscv64im => "elf64lriscv",
         }
     }
 
     fn stack_type(self) -> &'static str {
         match self {
             Self::Riscv32im => "u32",
+            Self::Riscv64im => "u64",
         }
     }
 
     fn stack_load(self) -> &'static str {
         match self {
             Self::Riscv32im => "lw",
+            Self::Riscv64im => "ld",
         }
     }
 }

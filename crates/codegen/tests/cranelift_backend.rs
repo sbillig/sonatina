@@ -63,12 +63,16 @@ fn sp1_riscv32im_module_builder() -> ModuleBuilder {
     ModuleBuilder::new(ctx)
 }
 
-fn sp1_riscv64im_module_builder() -> ModuleBuilder {
-    let isa = Native::new(TargetTriple::new(
+fn sp1_riscv64im_isa() -> Native {
+    Native::new(TargetTriple::new(
         Architecture::Riscv64im,
         Vendor::Succinct,
         OperatingSystem::ZkvmElf,
-    ));
+    ))
+}
+
+fn sp1_riscv64im_module_builder() -> ModuleBuilder {
+    let isa = sp1_riscv64im_isa();
     let ctx = ModuleCtx::new(&isa);
     ModuleBuilder::new(ctx)
 }
@@ -993,20 +997,34 @@ fn cranelift_emits_sp1_riscv32im_elf_for_integer_main() {
 }
 
 #[test]
-fn cranelift_rejects_sp1_riscv64im_until_soft_float_abi_is_supported() {
-    let module = sp1_riscv64im_module_builder().build();
-    let errors = CraneliftBackend::new()
-        .compile_module_to_sp1_elf(&module)
-        .err()
-        .expect("SP1 RV64 should be rejected");
-    let message = errors
-        .into_iter()
-        .map(|error| error.to_string())
-        .collect::<Vec<_>>()
-        .join("\n");
+fn cranelift_emits_sp1_riscv64im_elf_for_integer_main() {
+    if !sp1_toolchain_available() {
+        return;
+    }
 
-    assert!(message.contains("LP64 soft-float ABI"));
-    assert!(message.contains("LP64D hard-float"));
+    let isa = sp1_riscv64im_isa();
+    let is = isa.inst_set();
+    let mb = sp1_riscv64im_module_builder();
+
+    let sig = Signature::new_single("main", Linkage::Public, &[], Type::I32);
+    let func_ref = mb.declare_function(sig).unwrap();
+
+    let mut fb = mb.func_builder::<InstInserter>(func_ref);
+    let entry = fb.append_block();
+    fb.switch_to_block(entry);
+    let status = fb.make_imm_value(42i32);
+    fb.insert_inst_no_result(control_flow::Return::new_single(is, status));
+    fb.seal_all();
+    fb.finish();
+
+    let module = mb.build();
+    let artifact = CraneliftBackend::new()
+        .compile_module_to_sp1_elf(&module)
+        .expect("SP1 RV64 ELF compilation failed");
+
+    assert!(!artifact.bytes.is_empty());
+    assert!(artifact.func_map.contains_key("main"));
+    assert_sp1_elf_executable(&artifact.bytes, 2);
 }
 
 #[test]
