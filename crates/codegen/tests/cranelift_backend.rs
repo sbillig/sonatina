@@ -1153,12 +1153,112 @@ fn cranelift_sp1_runtime_satisfies_primitive_guest_api_imports() {
     let is = isa.inst_set();
     let mb = sp1_riscv64im_module_builder();
 
+    let hint_len = mb
+        .declare_function(Signature::new_single(
+            "sys_sp1_hint_len",
+            Linkage::External,
+            &[],
+            Type::I64,
+        ))
+        .unwrap();
+    let read_u8 = mb
+        .declare_function(Signature::new_single(
+            "sys_sp1_read_u8",
+            Linkage::External,
+            &[],
+            Type::I8,
+        ))
+        .unwrap();
+    let read_i8 = mb
+        .declare_function(Signature::new_single(
+            "sys_sp1_read_i8",
+            Linkage::External,
+            &[],
+            Type::I8,
+        ))
+        .unwrap();
+    let read_u16 = mb
+        .declare_function(Signature::new_single(
+            "sys_sp1_read_u16",
+            Linkage::External,
+            &[],
+            Type::I16,
+        ))
+        .unwrap();
+    let read_i16 = mb
+        .declare_function(Signature::new_single(
+            "sys_sp1_read_i16",
+            Linkage::External,
+            &[],
+            Type::I16,
+        ))
+        .unwrap();
     let read_u32 = mb
         .declare_function(Signature::new_single(
             "sys_sp1_read_u32",
             Linkage::External,
             &[],
             Type::I32,
+        ))
+        .unwrap();
+    let read_i32 = mb
+        .declare_function(Signature::new_single(
+            "sys_sp1_read_i32",
+            Linkage::External,
+            &[],
+            Type::I32,
+        ))
+        .unwrap();
+    let read_u64 = mb
+        .declare_function(Signature::new_single(
+            "sys_sp1_read_u64",
+            Linkage::External,
+            &[],
+            Type::I64,
+        ))
+        .unwrap();
+    let read_i64 = mb
+        .declare_function(Signature::new_single(
+            "sys_sp1_read_i64",
+            Linkage::External,
+            &[],
+            Type::I64,
+        ))
+        .unwrap();
+    let read_bool = mb
+        .declare_function(Signature::new_single(
+            "sys_sp1_read_bool",
+            Linkage::External,
+            &[],
+            Type::I1,
+        ))
+        .unwrap();
+    let commit_u8 = mb
+        .declare_function(Signature::new_unit(
+            "sys_sp1_commit_u8",
+            Linkage::External,
+            &[Type::I8],
+        ))
+        .unwrap();
+    let commit_i8 = mb
+        .declare_function(Signature::new_unit(
+            "sys_sp1_commit_i8",
+            Linkage::External,
+            &[Type::I8],
+        ))
+        .unwrap();
+    let commit_u16 = mb
+        .declare_function(Signature::new_unit(
+            "sys_sp1_commit_u16",
+            Linkage::External,
+            &[Type::I16],
+        ))
+        .unwrap();
+    let commit_i16 = mb
+        .declare_function(Signature::new_unit(
+            "sys_sp1_commit_i16",
+            Linkage::External,
+            &[Type::I16],
         ))
         .unwrap();
     let commit_u32 = mb
@@ -1168,11 +1268,77 @@ fn cranelift_sp1_runtime_satisfies_primitive_guest_api_imports() {
             &[Type::I32],
         ))
         .unwrap();
+    let commit_i32 = mb
+        .declare_function(Signature::new_unit(
+            "sys_sp1_commit_i32",
+            Linkage::External,
+            &[Type::I32],
+        ))
+        .unwrap();
     let commit_u64 = mb
         .declare_function(Signature::new_unit(
             "sys_sp1_commit_u64",
             Linkage::External,
             &[Type::I64],
+        ))
+        .unwrap();
+    let commit_i64 = mb
+        .declare_function(Signature::new_unit(
+            "sys_sp1_commit_i64",
+            Linkage::External,
+            &[Type::I64],
+        ))
+        .unwrap();
+    let commit_bool = mb
+        .declare_function(Signature::new_unit(
+            "sys_sp1_commit_bool",
+            Linkage::External,
+            &[Type::I1],
+        ))
+        .unwrap();
+    let write_u8 = mb
+        .declare_function(Signature::new_unit(
+            "sys_sp1_write_u8",
+            Linkage::External,
+            &[Type::I32, Type::I8],
+        ))
+        .unwrap();
+    let enter_unconstrained = mb
+        .declare_function(Signature::new_single(
+            "sys_sp1_enter_unconstrained",
+            Linkage::External,
+            &[],
+            Type::I1,
+        ))
+        .unwrap();
+    let exit_unconstrained = mb
+        .declare_function(Signature::new_unit(
+            "sys_sp1_exit_unconstrained",
+            Linkage::External,
+            &[],
+        ))
+        .unwrap();
+    let verify_sp1_proof = mb
+        .declare_function(Signature::new_unit(
+            "sys_sp1_verify_sp1_proof",
+            Linkage::External,
+            &[
+                Type::I64,
+                Type::I64,
+                Type::I64,
+                Type::I64,
+                Type::I64,
+                Type::I64,
+                Type::I64,
+                Type::I64,
+            ],
+        ))
+        .unwrap();
+    let halt = mb
+        .declare_function(Signature::new_unit(
+            "sys_sp1_halt",
+            Linkage::External,
+            &[Type::I8],
         ))
         .unwrap();
     let main = mb
@@ -1187,16 +1353,98 @@ fn cranelift_sp1_runtime_satisfies_primitive_guest_api_imports() {
     let mut fb = mb.func_builder::<InstInserter>(main);
     let entry = fb.append_block();
     fb.switch_to_block(entry);
+    let _ = fb.insert_inst(
+        control_flow::Call::new(is, hint_len, smallvec::smallvec![]),
+        Type::I64,
+    );
+    let byte = fb.insert_inst(
+        control_flow::Call::new(is, read_u8, smallvec::smallvec![]),
+        Type::I8,
+    );
+    let sbyte = fb.insert_inst(
+        control_flow::Call::new(is, read_i8, smallvec::smallvec![]),
+        Type::I8,
+    );
+    let short = fb.insert_inst(
+        control_flow::Call::new(is, read_u16, smallvec::smallvec![]),
+        Type::I16,
+    );
+    let sshort = fb.insert_inst(
+        control_flow::Call::new(is, read_i16, smallvec::smallvec![]),
+        Type::I16,
+    );
     let input = fb.insert_inst(
         control_flow::Call::new(is, read_u32, smallvec::smallvec![]),
         Type::I32,
     );
+    let sinput = fb.insert_inst(
+        control_flow::Call::new(is, read_i32, smallvec::smallvec![]),
+        Type::I32,
+    );
+    let wide_input = fb.insert_inst(
+        control_flow::Call::new(is, read_u64, smallvec::smallvec![]),
+        Type::I64,
+    );
+    let signed_wide_input = fb.insert_inst(
+        control_flow::Call::new(is, read_i64, smallvec::smallvec![]),
+        Type::I64,
+    );
+    let flag = fb.insert_inst(
+        control_flow::Call::new(is, read_bool, smallvec::smallvec![]),
+        Type::I1,
+    );
+    fb.insert_inst_no_result_with(|| {
+        control_flow::Call::new(is, commit_u8, smallvec::smallvec![byte])
+    });
+    fb.insert_inst_no_result_with(|| {
+        control_flow::Call::new(is, commit_i8, smallvec::smallvec![sbyte])
+    });
+    fb.insert_inst_no_result_with(|| {
+        control_flow::Call::new(is, commit_u16, smallvec::smallvec![short])
+    });
+    fb.insert_inst_no_result_with(|| {
+        control_flow::Call::new(is, commit_i16, smallvec::smallvec![sshort])
+    });
     fb.insert_inst_no_result_with(|| {
         control_flow::Call::new(is, commit_u32, smallvec::smallvec![input])
+    });
+    fb.insert_inst_no_result_with(|| {
+        control_flow::Call::new(is, commit_i32, smallvec::smallvec![sinput])
+    });
+    fb.insert_inst_no_result_with(|| {
+        control_flow::Call::new(is, commit_u64, smallvec::smallvec![wide_input])
+    });
+    fb.insert_inst_no_result_with(|| {
+        control_flow::Call::new(is, commit_i64, smallvec::smallvec![signed_wide_input])
+    });
+    fb.insert_inst_no_result_with(|| {
+        control_flow::Call::new(is, commit_bool, smallvec::smallvec![flag])
+    });
+    let stdout = fb.make_imm_value(1i32);
+    fb.insert_inst_no_result_with(|| {
+        control_flow::Call::new(is, write_u8, smallvec::smallvec![stdout, byte])
+    });
+    let _ = fb.insert_inst(
+        control_flow::Call::new(is, enter_unconstrained, smallvec::smallvec![]),
+        Type::I1,
+    );
+    fb.insert_inst_no_result_with(|| {
+        control_flow::Call::new(is, exit_unconstrained, smallvec::smallvec![])
     });
     let wide = fb.make_imm_value(7i64);
     fb.insert_inst_no_result_with(|| {
         control_flow::Call::new(is, commit_u64, smallvec::smallvec![wide])
+    });
+    fb.insert_inst_no_result_with(|| {
+        control_flow::Call::new(
+            is,
+            verify_sp1_proof,
+            smallvec::smallvec![wide, wide, wide, wide, wide, wide, wide, wide],
+        )
+    });
+    let halt_code = fb.make_imm_value(0i8);
+    fb.insert_inst_no_result_with(|| {
+        control_flow::Call::new(is, halt, smallvec::smallvec![halt_code])
     });
     let status = fb.make_imm_value(0i32);
     fb.insert_inst_no_result(control_flow::Return::new_single(is, status));

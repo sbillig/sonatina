@@ -243,10 +243,13 @@ use core::panic::PanicInfo;
 
 const COMMIT: u32 = 0x10;
 const COMMIT_DEFERRED_PROOFS: u32 = 0x1a;
+const ENTER_UNCONSTRAINED: u32 = 0x03;
+const EXIT_UNCONSTRAINED: u32 = 0x04;
 const FD_PUBLIC_VALUES: u32 = 13;
 const HALT: u32 = 0x00;
 const HINT_LEN: u32 = 0xf0;
 const HINT_READ: u32 = 0xf1;
+const VERIFY_SP1_PROOF: u32 = 0x1b;
 const WRITE: u32 = 0x02;
 const STACK_TOP: __STACK_TYPE__ = 0x7800_0000;
 
@@ -354,6 +357,34 @@ pub extern "C" fn sys_panic(ptr: *const u8, len: usize) -> ! {
 }
 
 #[unsafe(no_mangle)]
+pub extern "C" fn sys_sp1_hint_len() -> usize {
+    syscall_hint_len()
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn sys_sp1_read_u8() -> u8 {
+    let buffer = read_hint_buffer(1);
+    unsafe { *buffer.bytes.as_ptr().add(0) }
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn sys_sp1_read_i8() -> i8 {
+    i8::from_le_bytes([sys_sp1_read_u8()])
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn sys_sp1_read_u16() -> u16 {
+    let buffer = read_hint_buffer(2);
+    unsafe { u16::from_le_bytes([*buffer.bytes.as_ptr().add(0), *buffer.bytes.as_ptr().add(1)]) }
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn sys_sp1_read_i16() -> i16 {
+    let buffer = read_hint_buffer(2);
+    unsafe { i16::from_le_bytes([*buffer.bytes.as_ptr().add(0), *buffer.bytes.as_ptr().add(1)]) }
+}
+
+#[unsafe(no_mangle)]
 pub extern "C" fn sys_sp1_read_u32() -> u32 {
     let buffer = read_hint_buffer(4);
     unsafe {
@@ -397,6 +428,51 @@ pub extern "C" fn sys_sp1_read_u64() -> u64 {
 }
 
 #[unsafe(no_mangle)]
+pub extern "C" fn sys_sp1_read_i64() -> i64 {
+    let buffer = read_hint_buffer(8);
+    unsafe {
+        i64::from_le_bytes([
+            *buffer.bytes.as_ptr().add(0),
+            *buffer.bytes.as_ptr().add(1),
+            *buffer.bytes.as_ptr().add(2),
+            *buffer.bytes.as_ptr().add(3),
+            *buffer.bytes.as_ptr().add(4),
+            *buffer.bytes.as_ptr().add(5),
+            *buffer.bytes.as_ptr().add(6),
+            *buffer.bytes.as_ptr().add(7),
+        ])
+    }
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn sys_sp1_read_bool() -> bool {
+    sys_sp1_read_u8() != 0
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn sys_sp1_commit_u8(value: u8) {
+    syscall_write(FD_PUBLIC_VALUES, &value as *const u8, 1);
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn sys_sp1_commit_i8(value: i8) {
+    let bytes = value.to_le_bytes();
+    syscall_write(FD_PUBLIC_VALUES, bytes.as_ptr(), bytes.len());
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn sys_sp1_commit_u16(value: u16) {
+    let bytes = value.to_le_bytes();
+    syscall_write(FD_PUBLIC_VALUES, bytes.as_ptr(), bytes.len());
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn sys_sp1_commit_i16(value: i16) {
+    let bytes = value.to_le_bytes();
+    syscall_write(FD_PUBLIC_VALUES, bytes.as_ptr(), bytes.len());
+}
+
+#[unsafe(no_mangle)]
 pub extern "C" fn sys_sp1_commit_u32(value: u32) {
     let bytes = value.to_le_bytes();
     syscall_write(FD_PUBLIC_VALUES, bytes.as_ptr(), bytes.len());
@@ -415,13 +491,63 @@ pub extern "C" fn sys_sp1_commit_u64(value: u64) {
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn sys_sp1_write_stdout_u8(value: u8) {
-    syscall_write(1, &value as *const u8, 1);
+pub extern "C" fn sys_sp1_commit_i64(value: i64) {
+    let bytes = value.to_le_bytes();
+    syscall_write(FD_PUBLIC_VALUES, bytes.as_ptr(), bytes.len());
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn sys_sp1_write_stderr_u8(value: u8) {
-    syscall_write(2, &value as *const u8, 1);
+pub extern "C" fn sys_sp1_commit_bool(value: bool) {
+    sys_sp1_commit_u8(value as u8);
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn sys_sp1_write_u8(fd: u32, value: u8) {
+    syscall_write(fd, &value as *const u8, 1);
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn sys_sp1_enter_unconstrained() -> bool {
+    let value: usize;
+    unsafe {
+        asm!("ecall", in("t0") ENTER_UNCONSTRAINED, lateout("t0") value);
+    }
+    value != 0
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn sys_sp1_exit_unconstrained() {
+    unsafe {
+        asm!("ecall", in("t0") EXIT_UNCONSTRAINED);
+    }
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn sys_sp1_verify_sp1_proof(
+    vk0: u64,
+    vk1: u64,
+    vk2: u64,
+    vk3: u64,
+    pv0: u64,
+    pv1: u64,
+    pv2: u64,
+    pv3: u64,
+) {
+    let vk_digest = [vk0, vk1, vk2, vk3];
+    let pv_digest = [pv0, pv1, pv2, pv3];
+    unsafe {
+        asm!(
+            "ecall",
+            in("t0") VERIFY_SP1_PROOF,
+            in("a0") vk_digest.as_ptr() as usize,
+            in("a1") pv_digest.as_ptr() as usize,
+        );
+    }
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn sys_sp1_halt(exit_code: u8) -> ! {
+    syscall_halt(exit_code)
 }
 
 #[unsafe(no_mangle)]
