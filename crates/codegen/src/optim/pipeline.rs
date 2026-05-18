@@ -209,7 +209,18 @@ impl Pass {
     }
 
     const fn invalidates_object_facts(self) -> bool {
-        !matches!(self, Pass::RebuildUsers)
+        matches!(
+            self,
+            Pass::LegalizeMultiResult
+                | Pass::CfgCleanup
+                | Pass::AggregateCombine
+                | Pass::ObjectLoadStore
+                | Pass::AggregateScalarize
+                | Pass::Sccp
+                | Pass::Adce
+                | Pass::Licm
+                | Pass::Gvn
+        )
     }
 }
 
@@ -301,6 +312,17 @@ const POST_DEAD_ARG_CLEANUP_PASSES: &[Pass] = &[
     Pass::CfgCleanup,
     Pass::Sccp,
     Pass::BranchCanonicalize,
+    Pass::CfgCleanup,
+];
+
+const NATIVE_FUNC_PASSES: &[Pass] = &[
+    Pass::CfgCleanup,
+    Pass::ScalarCanonicalize,
+    Pass::CheckedArithElim,
+    Pass::RangeBranchSimplify,
+    Pass::Sccp,
+    Pass::ScalarCanonicalize,
+    Pass::KnownBitsSimplify,
     Pass::CfgCleanup,
 ];
 
@@ -403,6 +425,18 @@ impl Pipeline {
     /// inliner budget for runtime speed.
     pub fn speed() -> Self {
         Self::optimized_with_inliner_config(speed_inliner_config())
+    }
+
+    /// Native-oriented optimization pipeline.
+    ///
+    /// This keeps cheap scalar/control-flow cleanup for native correctness and
+    /// debugging builds, but skips the EVM-gas-oriented aggregate/object-memory
+    /// optimization rounds that dominate compile time on object-heavy native
+    /// programs.
+    pub fn native() -> Self {
+        let mut p = Self::new();
+        p.add_step(Step::FuncPasses(NATIVE_FUNC_PASSES.to_vec()));
+        p
     }
 
     /// Default optimization pipeline with a speed-oriented ordering.
@@ -842,18 +876,6 @@ fn run_pass(
         }
         Pass::Licm => {
             let _span = trace_span!("sonatina.optim.pipeline.pass.licm").entered();
-            {
-                let _span = trace_span!("sonatina.optim.pipeline.licm.compute_cfg").entered();
-                ctx.cfg.compute(func);
-            }
-            {
-                let _span = trace_span!("sonatina.optim.pipeline.licm.compute_domtree").entered();
-                ctx.domtree.compute(&ctx.cfg);
-            }
-            {
-                let _span = trace_span!("sonatina.optim.pipeline.licm.compute_looptree").entered();
-                ctx.lpt.compute(&ctx.cfg, &ctx.domtree);
-            }
             let mut solver = LicmSolver::new();
             let mut object_memory = ObjectMemoryAnalysis::default();
             let func_local_object_args = func_ref
@@ -901,14 +923,6 @@ fn run_pass(
         }
         Pass::Gvn => {
             let _span = trace_span!("sonatina.optim.pipeline.pass.gvn").entered();
-            {
-                let _span = trace_span!("sonatina.optim.pipeline.gvn.compute_cfg").entered();
-                ctx.cfg.compute(func);
-            }
-            {
-                let _span = trace_span!("sonatina.optim.pipeline.gvn.compute_domtree").entered();
-                ctx.domtree.compute(&ctx.cfg);
-            }
             let mut solver = GvnSolver::new();
             let mut object_memory = ObjectMemoryAnalysis::default();
             let func_local_object_args = func_ref
@@ -996,6 +1010,26 @@ mod tests {
     }
 
     #[test]
+    fn native_pipeline_skips_aggregate_object_passes() {
+        let pipeline = Pipeline::native();
+        assert!(
+            pipeline
+                .steps
+                .iter()
+                .any(|step| matches!(step, Step::FuncPasses(_)))
+        );
+        for step in &pipeline.steps {
+            if let Step::FuncPasses(passes) = step {
+                assert!(!passes.contains(&Pass::AggregateCombine));
+                assert!(!passes.contains(&Pass::ObjectLoadStore));
+                assert!(!passes.contains(&Pass::AggregateScalarize));
+                assert!(!passes.contains(&Pass::Gvn));
+                assert!(!passes.contains(&Pass::Licm));
+            }
+        }
+    }
+
+    #[test]
     fn custom_pipeline_runs() {
         let mut pipeline = Pipeline::new();
         pipeline.add_step(Step::FuncPasses(vec![
@@ -1030,6 +1064,47 @@ mod tests {
     fn licm_pass_triggers_func_behavior_analysis() {
         assert!(Pass::Licm.needs_func_behavior());
         assert!(Pass::Licm.invalidates_func_behavior());
+    }
+
+    #[test]
+    fn scalar_passes_do_not_invalidate_object_facts() {
+        for pass in [
+            Pass::BranchCanonicalize,
+            Pass::LoadStore,
+            Pass::ScalarCanonicalize,
+            Pass::KnownBitsSimplify,
+            Pass::CheckedArithElim,
+            Pass::RangeBranchSimplify,
+            Pass::LoopStrengthReduce,
+            Pass::RebuildUsers,
+        ] {
+            assert!(
+                !pass.invalidates_object_facts(),
+                "{} should not force object fact recomputation",
+                pass.as_str()
+            );
+        }
+    }
+
+    #[test]
+    fn aggregate_and_effect_changing_passes_invalidate_object_facts() {
+        for pass in [
+            Pass::LegalizeMultiResult,
+            Pass::CfgCleanup,
+            Pass::AggregateCombine,
+            Pass::ObjectLoadStore,
+            Pass::AggregateScalarize,
+            Pass::Sccp,
+            Pass::Adce,
+            Pass::Licm,
+            Pass::Gvn,
+        ] {
+            assert!(
+                pass.invalidates_object_facts(),
+                "{} should refresh object facts after changing IR",
+                pass.as_str()
+            );
+        }
     }
 
     #[test]

@@ -21,10 +21,18 @@ pub enum OptLevel {
     O2,
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum OptPipeline {
+    #[default]
+    Default,
+    Native,
+}
+
 /// Generic compilation pipeline: shared optimization + backend-specific codegen.
 pub struct Compile<B> {
     module: Module,
     opt_level: OptLevel,
+    opt_pipeline: OptPipeline,
     backend: B,
     optimized: bool,
 }
@@ -34,6 +42,7 @@ impl<B> Compile<B> {
         Self {
             module,
             opt_level: OptLevel::default(),
+            opt_pipeline: OptPipeline::default(),
             backend,
             optimized: false,
         }
@@ -44,15 +53,23 @@ impl<B> Compile<B> {
         self
     }
 
+    pub fn with_opt_pipeline(mut self, pipeline: OptPipeline) -> Self {
+        self.opt_pipeline = pipeline;
+        self
+    }
+
     /// Run the optimization pipeline (idempotent) and return a reference to
     /// the optimized module for inspection or IR dumping.
     pub fn optimize(&mut self) -> &Module {
         if !self.optimized {
-            match self.opt_level {
-                OptLevel::O0 => {}
-                OptLevel::O1 => Pipeline::speed().run(&mut self.module),
-                OptLevel::Os => Pipeline::size().run(&mut self.module),
-                OptLevel::O2 => Pipeline::speed().run(&mut self.module),
+            match (self.opt_level, self.opt_pipeline) {
+                (OptLevel::O0, _) => {}
+                (OptLevel::O1 | OptLevel::Os | OptLevel::O2, OptPipeline::Native) => {
+                    Pipeline::native().run(&mut self.module)
+                }
+                (OptLevel::O1, OptPipeline::Default) => Pipeline::speed().run(&mut self.module),
+                (OptLevel::Os, OptPipeline::Default) => Pipeline::size().run(&mut self.module),
+                (OptLevel::O2, OptPipeline::Default) => Pipeline::speed().run(&mut self.module),
             }
             self.optimized = true;
         }
@@ -142,6 +159,7 @@ impl EvmCompile {
             inner: Compile {
                 module,
                 opt_level: OptLevel::default(),
+                opt_pipeline: OptPipeline::default(),
                 backend: EvmCompiler {
                     evm_backend: EvmBackend::new(Evm::new(evm_osaka_triple())),
                     compile_options: CompileOptions::default(),

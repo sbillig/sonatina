@@ -6,7 +6,7 @@ pub mod cfg_scc;
 pub mod compile;
 
 pub use backend::Backend;
-pub use compile::{Compile, EvmCompile, EvmCompiler, OptLevel};
+pub use compile::{Compile, EvmCompile, EvmCompiler, OptLevel, OptPipeline};
 pub mod critical_edge;
 pub mod domtree;
 pub mod isa;
