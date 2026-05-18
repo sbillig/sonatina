@@ -53,11 +53,6 @@ pub(super) fn translate_module(
 
     for &func_ref in &funcs {
         let name = module.ctx.func_sig(func_ref, |sig| sig.name().to_string());
-        // Skip intrinsic functions (intercepted at call sites as runtime calls)
-        if name.contains("addmod") || name.contains("mulmod") {
-            continue;
-        }
-
         let translated = module.func_store.try_view(func_ref, |function| {
             if module.ctx.func_linkage(func_ref).is_external() {
                 return Ok(());
@@ -632,13 +627,13 @@ fn translate_function(
                 }
             } else if let Some(call) = <&sonatina_ir::inst::control_flow::Call as sonatina_ir::InstDowncast>::downcast(inst_set, inst_data) {
                 let callee = *call.callee();
-                let callee_name = module.ctx.func_sig(callee, |sig| sig.name().to_string());
-
-                // Intercept known u256 intrinsic functions (name may be mangled)
-                let is_addmod = callee_name == "addmod" || callee_name.contains("addmod");
-                let is_mulmod = callee_name == "mulmod" || callee_name.contains("mulmod");
-                if is_addmod || is_mulmod {
-                    let intrinsic_name = if is_addmod { "__u256_addmod" } else { "__u256_mulmod" };
+                let runtime_intrinsic = module.ctx.func_sig(callee, |sig| {
+                    runtime_u256_intrinsic_for_external_name(
+                        sig.name(),
+                        module.ctx.func_linkage(callee),
+                    )
+                });
+                if let Some(intrinsic_name) = runtime_intrinsic {
                     let args: Result<Vec<_>, _> = call.args()
                         .iter()
                         .map(|v| resolve_value(function, *v, &value_map, &mut builder))
@@ -1258,6 +1253,32 @@ fn uses_static_external_calls(module: &Module, callee: FuncRef) -> bool {
                 OperatingSystem::ZkvmElf
             )
         )
+}
+
+fn runtime_u256_intrinsic_for_external_name(
+    name: &str,
+    linkage: SonatinaLinkage,
+) -> Option<&'static str> {
+    if !linkage.is_external() {
+        return None;
+    }
+
+    match runtime_intrinsic_symbol_basename(name) {
+        "addmod" => Some("__u256_addmod"),
+        "mulmod" => Some("__u256_mulmod"),
+        _ => None,
+    }
+}
+
+fn runtime_intrinsic_symbol_basename(name: &str) -> &str {
+    let component = name.rsplit("__").next().unwrap_or(name);
+    if let Some((base, suffix)) = component.rsplit_once('_')
+        && !suffix.is_empty()
+        && suffix.chars().all(|ch| ch.is_ascii_hexdigit())
+    {
+        return base;
+    }
+    component
 }
 
 fn resolve_scalar_value(

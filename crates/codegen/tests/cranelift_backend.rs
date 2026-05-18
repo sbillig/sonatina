@@ -937,6 +937,91 @@ fn cranelift_emits_native_object_for_main() {
 }
 
 #[test]
+fn cranelift_defines_local_functions_with_intrinsic_like_names() {
+    let isa = native_isa();
+    let is = isa.inst_set();
+    let mb = native_module_builder();
+
+    let add_sig = Signature::new_single(
+        "std__lib__evm__crypto__addmod_64ed",
+        Linkage::Private,
+        &[Type::I32, Type::I32],
+        Type::I32,
+    );
+    let add_fn = mb.declare_function(add_sig).unwrap();
+    let mul_sig = Signature::new_single(
+        "std__lib__evm__crypto__mulmod_64ed",
+        Linkage::Private,
+        &[Type::I32, Type::I32],
+        Type::I32,
+    );
+    let mul_fn = mb.declare_function(mul_sig).unwrap();
+    let main_sig = Signature::new_single("main", Linkage::Public, &[], Type::I32);
+    let main = mb.declare_function(main_sig).unwrap();
+
+    let mut fb = mb.func_builder::<InstInserter>(add_fn);
+    let entry = fb.append_block();
+    fb.switch_to_block(entry);
+    let sum = fb.insert_inst(arith::Add::new(is, fb.args()[0], fb.args()[1]), Type::I32);
+    fb.insert_inst_no_result(control_flow::Return::new_single(is, sum));
+    fb.seal_all();
+    fb.finish();
+
+    let mut fb = mb.func_builder::<InstInserter>(mul_fn);
+    let entry = fb.append_block();
+    fb.switch_to_block(entry);
+    let product = fb.insert_inst(arith::Mul::new(is, fb.args()[0], fb.args()[1]), Type::I32);
+    fb.insert_inst_no_result(control_flow::Return::new_single(is, product));
+    fb.seal_all();
+    fb.finish();
+
+    let mut fb = mb.func_builder::<InstInserter>(main);
+    let entry = fb.append_block();
+    fb.switch_to_block(entry);
+    let twenty = fb.make_imm_value(20i32);
+    let twenty_two = fb.make_imm_value(22i32);
+    let six = fb.make_imm_value(6i32);
+    let seven = fb.make_imm_value(7i32);
+    let sum = fb.insert_inst(
+        control_flow::Call::new(is, add_fn, smallvec::smallvec![twenty, twenty_two]),
+        Type::I32,
+    );
+    let product = fb.insert_inst(
+        control_flow::Call::new(is, mul_fn, smallvec::smallvec![six, seven]),
+        Type::I32,
+    );
+    let result = fb.insert_inst(arith::Add::new(is, sum, product), Type::I32);
+    fb.insert_inst_no_result(control_flow::Return::new_single(is, result));
+    fb.seal_all();
+    fb.finish();
+
+    let module = mb.build();
+    let artifact = CraneliftBackend::new()
+        .compile_module(&module)
+        .expect("JIT compilation failed");
+    let main_fn: fn() -> i32 = unsafe {
+        let ptr = artifact.get_func_ptr::<fn() -> i32>("main").unwrap();
+        std::mem::transmute(ptr)
+    };
+    assert_eq!(main_fn(), 84);
+
+    let artifact = CraneliftBackend::new()
+        .compile_module_to_object(&module)
+        .expect("object compilation failed");
+    assert!(artifact.func_map.contains_key("main"));
+    assert!(
+        artifact
+            .func_map
+            .contains_key("std__lib__evm__crypto__addmod_64ed")
+    );
+    assert!(
+        artifact
+            .func_map
+            .contains_key("std__lib__evm__crypto__mulmod_64ed")
+    );
+}
+
+#[test]
 fn cranelift_emits_riscv32im_object_for_integer_main() {
     let isa = riscv32im_isa();
     let is = isa.inst_set();
