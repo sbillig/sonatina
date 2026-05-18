@@ -13,7 +13,7 @@ use cranelift_module::FuncId;
 use cranelift_object::{ObjectBuilder, ObjectModule};
 
 use sonatina_ir::Module;
-use sonatina_triple::{Architecture, TargetTriple};
+use sonatina_triple::{Architecture, OperatingSystem, TargetTriple, Vendor};
 
 use crate::backend::Backend;
 
@@ -137,7 +137,7 @@ impl CraneliftBackend {
             Architecture::Riscv32im | Architecture::Riscv64im
         );
         let flags = self.flags(is_pic)?;
-        let builder = match triple.architecture {
+        let mut builder = match triple.architecture {
             Architecture::X86_64 | Architecture::Aarch64 => {
                 return self.build_host_object_isa(triple, is_pic);
             }
@@ -151,6 +151,11 @@ impl CraneliftBackend {
                 )));
             }
         };
+        if is_sp1_target(triple) {
+            builder
+                .set("use_ebreak_traps", "true")
+                .map_err(|e| CraneliftError::Compilation(e.to_string()))?;
+        }
         builder
             .finish(flags)
             .map_err(|e| CraneliftError::Compilation(e.to_string()))
@@ -211,6 +216,17 @@ impl CraneliftBackend {
 
         Ok(NativeObjectArtifact { bytes, func_map })
     }
+}
+
+fn is_sp1_target(triple: TargetTriple) -> bool {
+    matches!(
+        (triple.architecture, triple.vendor, triple.operating_system),
+        (
+            Architecture::Riscv32im | Architecture::Riscv64im,
+            Vendor::Succinct,
+            OperatingSystem::ZkvmElf
+        )
+    )
 }
 
 #[cfg(target_os = "macos")]

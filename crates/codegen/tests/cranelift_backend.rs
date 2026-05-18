@@ -1113,6 +1113,37 @@ fn cranelift_emits_sp1_riscv64im_elf_for_integer_main() {
 }
 
 #[test]
+fn cranelift_sp1_trap_uses_ebreak_encoding() {
+    let isa = sp1_riscv64im_isa();
+    let is = isa.inst_set();
+    let mb = sp1_riscv64im_module_builder();
+
+    let sig = Signature::new_single("main", Linkage::Public, &[], Type::I32);
+    let func_ref = mb.declare_function(sig).unwrap();
+
+    let mut fb = mb.func_builder::<InstInserter>(func_ref);
+    let entry = fb.append_block();
+    fb.switch_to_block(entry);
+    fb.insert_inst_no_result(control_flow::Unreachable::new(is));
+    fb.seal_all();
+    fb.finish();
+
+    let module = mb.build();
+    let artifact = CraneliftBackend::new()
+        .compile_module_to_object(&module)
+        .expect("SP1 RV64 object compilation failed");
+
+    let ebreak_opcode = [0x73, 0x00, 0x10, 0x00];
+    assert!(
+        artifact
+            .bytes
+            .windows(ebreak_opcode.len())
+            .any(|window| window == ebreak_opcode),
+        "expected SP1 object to encode explicit traps as ebreak"
+    );
+}
+
+#[test]
 fn cranelift_sp1_runtime_satisfies_primitive_guest_api_imports() {
     if !sp1_toolchain_available() {
         return;
