@@ -9,12 +9,23 @@
 //! [`Step`] represents one unit of work in the pipeline. [`Pipeline`] holds
 //! an ordered sequence of steps and executes them against a module.
 
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::{
+    env,
+    fs::OpenOptions,
+    io::Write,
+    sync::{
+        OnceLock,
+        atomic::{AtomicBool, AtomicUsize, Ordering},
+    },
+    time::{Duration, Instant},
+};
 
 use rayon::prelude::{IntoParallelRefIterator, ParallelIterator};
 use sonatina_ir::{
-    ControlFlowGraph, Function,
+    ControlFlowGraph, Function, Type,
+    inst::{cast, control_flow, data, downcast},
     module::{FuncRef, Module},
+    types::CompoundType,
 };
 use tracing::{debug_span, info_span, trace_span};
 
@@ -602,6 +613,233 @@ pub(crate) fn run_function_pass_round(
     }
 }
 
+#[derive(Debug)]
+enum OptStatsSink {
+    Stderr,
+    File(String),
+}
+
+static OPT_STATS_SINK: OnceLock<Option<OptStatsSink>> = OnceLock::new();
+
+fn opt_stats_sink() -> Option<&'static OptStatsSink> {
+    OPT_STATS_SINK
+        .get_or_init(|| {
+            let value = env::var("SONATINA_OPT_STATS").ok()?;
+            if value.is_empty() || value == "0" {
+                None
+            } else if value == "1" || value == "stderr" {
+                Some(OptStatsSink::Stderr)
+            } else {
+                Some(OptStatsSink::File(value))
+            }
+        })
+        .as_ref()
+}
+
+fn emit_opt_stats(line: String) {
+    match opt_stats_sink() {
+        Some(OptStatsSink::Stderr) => eprintln!("{line}"),
+        Some(OptStatsSink::File(path)) => {
+            if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(path) {
+                let _ = writeln!(file, "{line}");
+            }
+        }
+        None => {}
+    }
+}
+
+fn duration_ms(duration: Duration) -> f64 {
+    duration.as_secs_f64() * 1000.0
+}
+
+fn pass_may_use_object_facts(pass: Pass, module: &Module, funcs: Option<&[FuncRef]>) -> bool {
+    match pass {
+        Pass::ObjectLoadStore => selected_funcs_any(module, funcs, has_object_load_store_work),
+        Pass::AggregateScalarize => selected_funcs_any(module, funcs, has_aggregate_scalarize_work),
+        Pass::Licm | Pass::Gvn => {
+            selected_funcs_any(module, funcs, has_object_memory_analysis_work)
+        }
+        _ => pass.needs_object_facts(),
+    }
+}
+
+fn pass_may_use_local_object_args(pass: Pass, module: &Module, funcs: Option<&[FuncRef]>) -> bool {
+    match pass {
+        Pass::ObjectLoadStore => selected_funcs_any(module, funcs, has_object_load_store_work),
+        Pass::AggregateScalarize => selected_funcs_any(module, funcs, has_aggregate_scalarize_work),
+        Pass::Licm | Pass::Gvn => {
+            selected_funcs_any(module, funcs, has_object_memory_analysis_work)
+        }
+        _ => pass.needs_object_facts(),
+    }
+}
+
+fn selected_funcs_any(
+    module: &Module,
+    funcs: Option<&[FuncRef]>,
+    predicate: fn(&Function) -> bool,
+) -> bool {
+    if let Some(funcs) = funcs {
+        funcs
+            .iter()
+            .copied()
+            .any(|func_ref| module.func_store.view(func_ref, predicate))
+    } else {
+        module
+            .func_store
+            .funcs()
+            .into_iter()
+            .any(|func_ref| module.func_store.view(func_ref, predicate))
+    }
+}
+
+fn has_aggregate_combine_work(func: &Function) -> bool {
+    func.layout.iter_block().any(|block| {
+        func.layout.iter_inst(block).any(|inst| {
+            let inst_data = func.dfg.inst(inst);
+            downcast::<&data::EnumGetTag>(func.inst_set(), inst_data).is_some()
+                || downcast::<&data::EnumAssertVariantRef>(func.inst_set(), inst_data).is_some()
+                || downcast::<&data::ObjLoad>(func.inst_set(), inst_data).is_some()
+                || downcast::<&data::ObjStore>(func.inst_set(), inst_data).is_some()
+                || downcast::<&data::EnumSetTag>(func.inst_set(), inst_data).is_some()
+                || downcast::<&data::EnumWriteVariant>(func.inst_set(), inst_data).is_some()
+                || downcast::<&data::EnumProj>(func.inst_set(), inst_data).is_some()
+                || downcast::<&data::EnumTag>(func.inst_set(), inst_data).is_some()
+                || downcast::<&data::EnumIsVariant>(func.inst_set(), inst_data).is_some()
+                || downcast::<&data::EnumExtract>(func.inst_set(), inst_data).is_some()
+                || downcast::<&data::ExtractValue>(func.inst_set(), inst_data).is_some()
+                || downcast::<&data::InsertValue>(func.inst_set(), inst_data).is_some()
+                || downcast::<&data::EnumMake>(func.inst_set(), inst_data).is_some()
+                || downcast::<&data::ObjAlloc>(func.inst_set(), inst_data).is_some()
+                || downcast::<&cast::Bitcast>(func.inst_set(), inst_data)
+                    .is_some_and(|_| inst_has_aggregate_value(func, inst))
+                || downcast::<&control_flow::Phi>(func.inst_set(), inst_data)
+                    .is_some_and(|_| inst_has_aggregate_value(func, inst))
+        })
+    })
+}
+
+fn has_object_load_store_work(func: &Function) -> bool {
+    func.layout.iter_block().any(|block| {
+        func.layout.iter_inst(block).any(|inst| {
+            let inst_data = func.dfg.inst(inst);
+            downcast::<&data::ObjAlloc>(func.inst_set(), inst_data).is_some()
+                || downcast::<&data::ObjProj>(func.inst_set(), inst_data).is_some()
+                || downcast::<&data::ObjIndex>(func.inst_set(), inst_data).is_some()
+                || downcast::<&data::ObjLoad>(func.inst_set(), inst_data).is_some()
+                || downcast::<&data::ObjStore>(func.inst_set(), inst_data).is_some()
+                || downcast::<&data::EnumGetTag>(func.inst_set(), inst_data).is_some()
+                || downcast::<&data::EnumAssertVariantRef>(func.inst_set(), inst_data).is_some()
+                || downcast::<&data::EnumSetTag>(func.inst_set(), inst_data).is_some()
+                || downcast::<&data::EnumWriteVariant>(func.inst_set(), inst_data).is_some()
+                || downcast::<&data::EnumProj>(func.inst_set(), inst_data).is_some()
+        })
+    })
+}
+
+fn has_aggregate_scalarize_work(func: &Function) -> bool {
+    func.arg_values
+        .iter()
+        .copied()
+        .any(|value| type_is_aggregate_or_object(func, func.dfg.value_ty(value)))
+        || func.layout.iter_block().any(|block| {
+            func.layout.iter_inst(block).any(|inst| {
+                let inst_data = func.dfg.inst(inst);
+                downcast::<&data::Alloca>(func.inst_set(), inst_data).is_some()
+                    || downcast::<&data::ObjAlloc>(func.inst_set(), inst_data).is_some()
+                    || downcast::<&data::ObjProj>(func.inst_set(), inst_data).is_some()
+                    || downcast::<&data::ObjIndex>(func.inst_set(), inst_data).is_some()
+                    || downcast::<&data::ObjLoad>(func.inst_set(), inst_data).is_some()
+                    || downcast::<&data::ObjStore>(func.inst_set(), inst_data).is_some()
+                    || downcast::<&data::EnumProj>(func.inst_set(), inst_data).is_some()
+                    || downcast::<&data::EnumGetTag>(func.inst_set(), inst_data).is_some()
+                    || downcast::<&data::EnumSetTag>(func.inst_set(), inst_data).is_some()
+                    || downcast::<&data::EnumWriteVariant>(func.inst_set(), inst_data).is_some()
+                    || downcast::<&data::InsertValue>(func.inst_set(), inst_data).is_some()
+                    || downcast::<&data::ExtractValue>(func.inst_set(), inst_data).is_some()
+                    || downcast::<&data::EnumMake>(func.inst_set(), inst_data).is_some()
+                    || downcast::<&data::EnumExtract>(func.inst_set(), inst_data).is_some()
+                    || downcast::<&cast::Bitcast>(func.inst_set(), inst_data)
+                        .is_some_and(|_| inst_has_aggregate_value(func, inst))
+                    || downcast::<&control_flow::Phi>(func.inst_set(), inst_data)
+                        .is_some_and(|_| inst_has_aggregate_value(func, inst))
+            })
+        })
+}
+
+fn has_object_memory_analysis_work(func: &Function) -> bool {
+    func.layout.iter_block().any(|block| {
+        func.layout.iter_inst(block).any(|inst| {
+            let inst_data = func.dfg.inst(inst);
+            downcast::<&data::ObjLoad>(func.inst_set(), inst_data).is_some()
+                || downcast::<&data::ObjStore>(func.inst_set(), inst_data).is_some()
+                || downcast::<&data::EnumGetTag>(func.inst_set(), inst_data).is_some()
+                || downcast::<&data::EnumAssertVariantRef>(func.inst_set(), inst_data).is_some()
+                || downcast::<&data::EnumSetTag>(func.inst_set(), inst_data).is_some()
+                || downcast::<&data::EnumWriteVariant>(func.inst_set(), inst_data).is_some()
+                || downcast::<&control_flow::Call>(func.inst_set(), inst_data).is_some_and(|_| {
+                    func.arg_values
+                        .iter()
+                        .copied()
+                        .any(|value| type_is_aggregate_or_object(func, func.dfg.value_ty(value)))
+                        || inst_has_aggregate_value(func, inst)
+                })
+                || downcast::<&control_flow::Return>(func.inst_set(), inst_data).is_some_and(|_| {
+                    func.arg_values
+                        .iter()
+                        .copied()
+                        .any(|value| type_is_aggregate_or_object(func, func.dfg.value_ty(value)))
+                })
+        })
+    })
+}
+
+fn inst_has_aggregate_value(func: &Function, inst: sonatina_ir::InstId) -> bool {
+    let has_aggregate_result = func
+        .dfg
+        .inst_results(inst)
+        .iter()
+        .copied()
+        .any(|value| type_is_aggregate_or_object(func, func.dfg.value_ty(value)));
+    let mut has_aggregate_operand = false;
+    func.dfg.inst(inst).for_each_value(&mut |value| {
+        has_aggregate_operand |= type_is_aggregate_or_object(func, func.dfg.value_ty(value));
+    });
+    has_aggregate_result || has_aggregate_operand
+}
+
+fn type_is_aggregate_or_object(func: &Function, ty: Type) -> bool {
+    match ty {
+        Type::EnumTag(_) => true,
+        Type::Compound(cmpd) => func.ctx().with_ty_store(|store| {
+            !matches!(
+                store.resolve_compound(cmpd),
+                CompoundType::Ptr(_) | CompoundType::ConstRef(_) | CompoundType::Func { .. }
+            )
+        }),
+        _ => false,
+    }
+}
+
+#[derive(Default)]
+struct ModulePassStats {
+    funcs_seen: AtomicUsize,
+    funcs_skipped: AtomicUsize,
+    funcs_changed: AtomicUsize,
+}
+
+impl ModulePassStats {
+    fn record(&self, result: PassResult) {
+        self.funcs_seen.fetch_add(1, Ordering::Relaxed);
+        if result.skipped {
+            self.funcs_skipped.fetch_add(1, Ordering::Relaxed);
+        }
+        if result.changed {
+            self.funcs_changed.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+}
+
 #[derive(Default)]
 struct RoundFacts {
     object_effects: Option<ObjectEffectSummaryMap>,
@@ -618,6 +856,7 @@ impl RoundFacts {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct PassResult {
     changed: bool,
+    skipped: bool,
     invalidates_func_behavior: bool,
     invalidates_object_facts: bool,
 }
@@ -626,6 +865,16 @@ impl PassResult {
     fn new(pass: Pass, changed: bool) -> Self {
         Self {
             changed,
+            skipped: false,
+            invalidates_func_behavior: pass.invalidates_func_behavior(),
+            invalidates_object_facts: pass.invalidates_object_facts(),
+        }
+    }
+
+    fn skipped(pass: Pass) -> Self {
+        Self {
+            changed: false,
+            skipped: true,
             invalidates_func_behavior: pass.invalidates_func_behavior(),
             invalidates_object_facts: pass.invalidates_object_facts(),
         }
@@ -639,25 +888,38 @@ fn run_module_pass(
     round_facts: &mut RoundFacts,
 ) -> PassResult {
     let _span = debug_span!("sonatina.optim.pipeline.pass_round", pass = pass.as_str()).entered();
-    if pass.needs_object_facts() && overrides.object_effects.is_none() {
-        round_facts
-            .object_effects
-            .get_or_insert_with(|| compute_object_effect_summaries(module));
+    let stats_enabled = opt_stats_sink().is_some();
+    let pass_start = stats_enabled.then(Instant::now);
+    let mut object_effects_ms = None;
+    let mut local_object_args_ms = None;
+    let should_compute_object_facts = pass.needs_object_facts()
+        && pass_may_use_object_facts(pass, module, overrides.funcs)
+        && overrides.object_effects.is_none();
+    if should_compute_object_facts && round_facts.object_effects.is_none() {
+        let start = stats_enabled.then(Instant::now);
+        round_facts.object_effects = Some(compute_object_effect_summaries(module));
+        object_effects_ms = start.map(|start| duration_ms(start.elapsed()));
     }
     let object_effects = overrides
         .object_effects
         .or(round_facts.object_effects.as_ref());
-    if pass.needs_object_facts() && overrides.local_object_args.is_none() {
-        round_facts.local_object_args.get_or_insert_with(|| {
+    let should_compute_local_object_args = pass.needs_object_facts()
+        && pass_may_use_local_object_args(pass, module, overrides.funcs)
+        && overrides.local_object_args.is_none();
+    if should_compute_local_object_args && round_facts.local_object_args.is_none() {
+        let start = stats_enabled.then(Instant::now);
+        round_facts.local_object_args = Some(
             object_effects
                 .map(|effects| collect_local_object_arg_info_with_effects(module, effects))
-                .unwrap_or_else(|| collect_local_object_arg_info(module))
-        });
+                .unwrap_or_else(|| collect_local_object_arg_info(module)),
+        );
+        local_object_args_ms = start.map(|start| duration_ms(start.elapsed()));
     }
     let local_object_args = overrides
         .local_object_args
         .or(round_facts.local_object_args.as_ref());
     let changed = AtomicBool::new(false);
+    let stats = ModulePassStats::default();
     if let Some(funcs) = overrides.funcs {
         funcs.par_iter().copied().for_each(|func_ref| {
             module.func_store.modify(func_ref, |func| {
@@ -667,16 +929,16 @@ fn run_module_pass(
                 )
                 .entered();
                 let mut ctx = PassContext::default();
-                if run_pass(
+                let result = run_pass(
                     pass,
                     Some(func_ref),
                     func,
                     &mut ctx,
                     local_object_args,
                     object_effects,
-                )
-                .changed
-                {
+                );
+                stats.record(result);
+                if result.changed {
                     changed.store(true, Ordering::Relaxed);
                 }
             });
@@ -689,21 +951,39 @@ fn run_module_pass(
             )
             .entered();
             let mut ctx = PassContext::default();
-            if run_pass(
+            let result = run_pass(
                 pass,
                 Some(func_ref),
                 func,
                 &mut ctx,
                 local_object_args,
                 object_effects,
-            )
-            .changed
-            {
+            );
+            stats.record(result);
+            if result.changed {
                 changed.store(true, Ordering::Relaxed);
             }
         });
     }
-    PassResult::new(pass, changed.load(Ordering::Relaxed))
+    let result = PassResult::new(pass, changed.load(Ordering::Relaxed));
+    if let Some(start) = pass_start {
+        emit_opt_stats(format!(
+            "sonatina_opt_stats\tpass={}\tms={:.3}\tfuncs={}\tskipped={}\tchanged_funcs={}\tchanged={}\tobject_effects_ms={}\tlocal_object_args_ms={}",
+            pass.as_str(),
+            duration_ms(start.elapsed()),
+            stats.funcs_seen.load(Ordering::Relaxed),
+            stats.funcs_skipped.load(Ordering::Relaxed),
+            stats.funcs_changed.load(Ordering::Relaxed),
+            result.changed,
+            object_effects_ms
+                .map(|ms| format!("{ms:.3}"))
+                .unwrap_or_else(|| "-".to_string()),
+            local_object_args_ms
+                .map(|ms| format!("{ms:.3}"))
+                .unwrap_or_else(|| "-".to_string()),
+        ));
+    }
+    result
 }
 
 /// Reusable analysis allocations for a single pass sequence on one function.
@@ -740,6 +1020,9 @@ fn run_pass(
         }
         Pass::AggregateCombine => {
             let _span = trace_span!("sonatina.optim.pipeline.pass.aggregate_combine").entered();
+            if !has_aggregate_combine_work(func) {
+                return PassResult::skipped(pass);
+            }
             AggregateCombine::default().run(func)
         }
         Pass::BranchCanonicalize => {
@@ -748,6 +1031,9 @@ fn run_pass(
         }
         Pass::ObjectLoadStore => {
             let _span = trace_span!("sonatina.optim.pipeline.pass.object_load_store").entered();
+            if !has_object_load_store_work(func) {
+                return PassResult::skipped(pass);
+            }
             if let (Some(func_ref), Some(local_object_args), Some(object_effects)) =
                 (func_ref, local_object_args, object_effects)
             {
@@ -763,6 +1049,9 @@ fn run_pass(
         }
         Pass::AggregateScalarize => {
             let _span = trace_span!("sonatina.optim.pipeline.pass.aggregate_scalarize").entered();
+            if !has_aggregate_scalarize_work(func) {
+                return PassResult::skipped(pass);
+            }
             if let (Some(func_ref), Some(local_object_args)) = (func_ref, local_object_args) {
                 AggregateScalarize::default().run_for_func(func_ref, func, local_object_args)
             } else {
@@ -877,18 +1166,23 @@ fn run_pass(
         Pass::Licm => {
             let _span = trace_span!("sonatina.optim.pipeline.pass.licm").entered();
             let mut solver = LicmSolver::new();
-            let mut object_memory = ObjectMemoryAnalysis::default();
-            let func_local_object_args = func_ref
-                .and_then(|func_ref| local_object_args.and_then(|args| args.get(&func_ref)));
-            object_memory.compute(func, func_local_object_args, object_effects);
             let changed = {
                 let _span = trace_span!("sonatina.optim.pipeline.licm.solve").entered();
-                solver.run_with_object_memory(
-                    func,
-                    &mut ctx.cfg,
-                    &mut ctx.lpt,
-                    Some(&object_memory),
-                )
+                if has_object_memory_analysis_work(func) {
+                    let mut object_memory = ObjectMemoryAnalysis::default();
+                    let func_local_object_args = func_ref.and_then(|func_ref| {
+                        local_object_args.and_then(|args| args.get(&func_ref))
+                    });
+                    object_memory.compute(func, func_local_object_args, object_effects);
+                    solver.run_with_object_memory(
+                        func,
+                        &mut ctx.cfg,
+                        &mut ctx.lpt,
+                        Some(&object_memory),
+                    )
+                } else {
+                    solver.run(func, &mut ctx.cfg, &mut ctx.lpt)
+                }
             };
             let cleaned = {
                 let _span = trace_span!("sonatina.optim.pipeline.licm.cleanup").entered();
@@ -924,18 +1218,23 @@ fn run_pass(
         Pass::Gvn => {
             let _span = trace_span!("sonatina.optim.pipeline.pass.gvn").entered();
             let mut solver = GvnSolver::new();
-            let mut object_memory = ObjectMemoryAnalysis::default();
-            let func_local_object_args = func_ref
-                .and_then(|func_ref| local_object_args.and_then(|args| args.get(&func_ref)));
-            object_memory.compute(func, func_local_object_args, object_effects);
             {
                 let _span = trace_span!("sonatina.optim.pipeline.gvn.solve").entered();
-                solver.run_with_object_memory(
-                    func,
-                    &mut ctx.cfg,
-                    &mut ctx.domtree,
-                    Some(&object_memory),
-                )
+                if has_object_memory_analysis_work(func) {
+                    let mut object_memory = ObjectMemoryAnalysis::default();
+                    let func_local_object_args = func_ref.and_then(|func_ref| {
+                        local_object_args.and_then(|args| args.get(&func_ref))
+                    });
+                    object_memory.compute(func, func_local_object_args, object_effects);
+                    solver.run_with_object_memory(
+                        func,
+                        &mut ctx.cfg,
+                        &mut ctx.domtree,
+                        Some(&object_memory),
+                    )
+                } else {
+                    solver.run(func, &mut ctx.cfg, &mut ctx.domtree)
+                }
             }
         }
         Pass::RebuildUsers => {
