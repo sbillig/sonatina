@@ -1384,6 +1384,57 @@ fn cranelift_const_ref_array() {
 }
 
 #[test]
+fn cranelift_const_proj_struct() {
+    let isa = native_isa();
+    let is = isa.inst_set();
+    let mb = native_module_builder();
+
+    let pair_ty = mb.declare_struct_type("ConstPair", &[Type::I64, Type::I64], false);
+    let gv = mb.declare_gv(GlobalVariableData::constant(
+        "CONST_PAIR".to_string(),
+        pair_ty,
+        Linkage::Private,
+        GvInitializer::Struct(vec![
+            GvInitializer::Immediate(Immediate::I64(13)),
+            GvInitializer::Immediate(Immediate::I64(29)),
+        ]),
+    ));
+
+    let sig = Signature::new_single("const_proj_struct", Linkage::Public, &[], Type::I64);
+    let func_ref = mb.declare_function(sig).unwrap();
+    let pair_ref_ty = mb.constref_type(pair_ty);
+    let field_ref_ty = mb.constref_type(Type::I64);
+
+    let mut fb = mb.func_builder::<InstInserter>(func_ref);
+    let entry = fb.append_block();
+    fb.switch_to_block(entry);
+
+    let idx = fb.make_imm_value(1i64);
+    let pair_ref = fb.insert_inst(data::ConstRef::new(is, gv.into()), pair_ref_ty);
+    let field_ref = fb.insert_inst(
+        data::ConstProj::new(is, smallvec::smallvec![pair_ref, idx]),
+        field_ref_ty,
+    );
+    let field = fb.insert_inst(data::ConstLoad::new(is, field_ref), Type::I64);
+    fb.insert_inst_no_result(control_flow::Return::new_single(is, field));
+    fb.seal_all();
+    fb.finish();
+
+    let module = mb.build();
+    let backend = CraneliftBackend::new();
+    let artifact = backend.compile_module(&module).expect("compilation failed");
+
+    let f: fn() -> i64 = unsafe {
+        let ptr = artifact
+            .get_func_ptr::<fn() -> i64>("const_proj_struct")
+            .unwrap();
+        std::mem::transmute(ptr)
+    };
+
+    assert_eq!(f(), 29);
+}
+
+#[test]
 fn cranelift_obj_init_const_array() {
     let isa = native_isa();
     let is = isa.inst_set();

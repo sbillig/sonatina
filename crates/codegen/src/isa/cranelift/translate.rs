@@ -10,6 +10,7 @@ use cranelift_module::{FuncId, Linkage, Module as ClifModule};
 use sonatina_ir::{
     BlockId, ControlFlowGraph, Function, Immediate, Linkage as SonatinaLinkage, Module, Signature,
     Type, Value, ValueId,
+    ir_writer::{FuncWriteCtx, InstStatement, IrWrite},
     module::{FuncRef, ModuleCtx},
 };
 
@@ -1089,23 +1090,15 @@ fn translate_function(
                     &mut builder,
                 );
             } else if let Some(obj_proj) = <&sonatina_ir::inst::data::ObjProj as sonatina_ir::InstDowncast>::downcast(inst_set, inst_data) {
-                let vals = obj_proj.values();
-                let base = resolve_value(function, vals[0], &value_map, &mut builder)?;
                 if let Some(result) = function.dfg.inst_result(inst_id) {
-                    let mut offset = 0i64;
-                    let mut current_ty = function.dfg.value_ty(vals[0]);
-                    for idx_value in vals.iter().skip(1) {
-                        let idx = constant_value_index(function, *idx_value, "obj.proj")?;
-                        let (field_offset, elem_ty) =
-                            aggregate_elem_offset(&module.ctx, current_ty, idx)?;
-                        offset += i64::from(field_offset);
-                        current_ty = elem_ty;
-                    }
-                    let addr = if offset == 0 {
-                        base
-                    } else {
-                        builder.ins().iadd_imm(base, offset)
-                    };
+                    let addr = translate_aggregate_projection(
+                        &module.ctx,
+                        function,
+                        obj_proj.values(),
+                        "obj.proj",
+                        &value_map,
+                        &mut builder,
+                    )?;
                     value_map.insert(result, addr);
                 }
             } else if let Some(obj_index) = <&sonatina_ir::inst::data::ObjIndex as sonatina_ir::InstDowncast>::downcast(inst_set, inst_data) {
@@ -1166,6 +1159,18 @@ fn translate_function(
                     }
                     value_map.insert(result, addr);
                 }
+            } else if let Some(const_proj) = <&sonatina_ir::inst::data::ConstProj as sonatina_ir::InstDowncast>::downcast(inst_set, inst_data) {
+                if let Some(result) = function.dfg.inst_result(inst_id) {
+                    let addr = translate_aggregate_projection(
+                        &module.ctx,
+                        function,
+                        const_proj.values(),
+                        "const.proj",
+                        &value_map,
+                        &mut builder,
+                    )?;
+                    value_map.insert(result, addr);
+                }
             } else if let Some(const_index) = <&sonatina_ir::inst::data::ConstIndex as sonatina_ir::InstDowncast>::downcast(inst_set, inst_data) {
                 let base = resolve_value(function, *const_index.object(), &value_map, &mut builder)?;
                 let index_val_id = *const_index.index();
@@ -1207,9 +1212,16 @@ fn translate_function(
             } else if <&sonatina_ir::inst::control_flow::Unreachable as sonatina_ir::InstDowncast>::downcast(inst_set, inst_data).is_some() {
                 builder.ins().trap(cranelift_codegen::ir::TrapCode::user(1).unwrap());
             } else {
+                let mut text = Vec::new();
+                let _ = InstStatement(inst_id).write(
+                    &mut text,
+                    &FuncWriteCtx::new(function, func_ref),
+                );
+                let text = String::from_utf8_lossy(&text);
                 return Err(format!(
-                    "unsupported instruction for CraneliftBackend: {:?}",
-                    inst_data.kind()
+                    "unsupported instruction for CraneliftBackend: {:?}: {}",
+                    inst_data.kind(),
+                    text.trim(),
                 ));
             }
         }
@@ -2573,6 +2585,35 @@ fn emit_u256_intrinsic_call(
         builder.ins().call(func_ref, args);
         Ok(builder.ins().iconst(ptr_ty, 0))
     }
+}
+
+fn translate_aggregate_projection(
+    ctx: &ModuleCtx,
+    function: &Function,
+    values: &[ValueId],
+    inst_name: &str,
+    value_map: &HashMap<ValueId, clif::Value>,
+    builder: &mut FunctionBuilder,
+) -> Result<clif::Value, String> {
+    let Some((&base_value, indices)) = values.split_first() else {
+        return Err(format!("{inst_name} requires a base value"));
+    };
+    let base = resolve_value(function, base_value, value_map, builder)?;
+    let mut offset = 0i64;
+    let mut current_ty = function.dfg.value_ty(base_value);
+
+    for idx_value in indices {
+        let idx = constant_value_index(function, *idx_value, inst_name)?;
+        let (field_offset, elem_ty) = aggregate_elem_offset(ctx, current_ty, idx)?;
+        offset += i64::from(field_offset);
+        current_ty = elem_ty;
+    }
+
+    Ok(if offset == 0 {
+        base
+    } else {
+        builder.ins().iadd_imm(base, offset)
+    })
 }
 
 fn materialize_gv_initializer(
