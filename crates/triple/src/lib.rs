@@ -68,6 +68,7 @@ pub enum Architecture {
     Evm,
     X86_64,
     Aarch64,
+    Riscv32im,
 }
 
 impl Architecture {
@@ -76,6 +77,7 @@ impl Architecture {
             "evm" => Ok(Self::Evm),
             "x86_64" => Ok(Self::X86_64),
             "aarch64" => Ok(Self::Aarch64),
+            "riscv32im" => Ok(Self::Riscv32im),
             _ => Err(InvalidTriple::ArchitectureNotSupported),
         }
     }
@@ -87,6 +89,7 @@ impl Display for Architecture {
             Self::Evm => write!(f, "evm"),
             Self::X86_64 => write!(f, "x86_64"),
             Self::Aarch64 => write!(f, "aarch64"),
+            Self::Riscv32im => write!(f, "riscv32im"),
         }
     }
 }
@@ -120,6 +123,7 @@ impl Display for Vendor {
 pub enum OperatingSystem {
     Evm(EvmVersion),
     Native,
+    None,
 }
 
 impl OperatingSystem {
@@ -146,6 +150,10 @@ impl OperatingSystem {
                 "native" => Ok(Self::Native),
                 _ => Err(InvalidTriple::OsNotSupported),
             },
+            (Architecture::Riscv32im, Vendor::Unknown) => match s {
+                "none" => Ok(Self::None),
+                _ => Err(InvalidTriple::OsNotSupported),
+            },
             _ => Err(InvalidTriple::InvalidCombination),
         }
     }
@@ -156,6 +164,7 @@ impl Display for OperatingSystem {
         match self {
             Self::Evm(evm_version) => write!(f, "{evm_version}"),
             Self::Native => write!(f, "native"),
+            Self::None => write!(f, "none"),
         }
     }
 }
@@ -244,11 +253,18 @@ mod tests {
         assert_eq!(triple.vendor, Vendor::Unknown);
         assert_eq!(triple.operating_system, OperatingSystem::Native);
         assert_eq!("aarch64-unknown-native", triple.to_string());
+
+        let triple = TargetTriple::parse("riscv32im-unknown-none").unwrap();
+        assert_eq!(triple.architecture, Architecture::Riscv32im);
+        assert_eq!(triple.vendor, Vendor::Unknown);
+        assert_eq!(triple.operating_system, OperatingSystem::None);
+        assert_eq!("riscv32im-unknown-none", triple.to_string());
     }
 
     #[test]
     fn reject_invalid_combinations() {
         assert!(TargetTriple::parse("evm-unknown-native").is_err());
         assert!(TargetTriple::parse("x86_64-ethereum-osaka").is_err());
+        assert!(TargetTriple::parse("riscv32im-unknown-native").is_err());
     }
 }

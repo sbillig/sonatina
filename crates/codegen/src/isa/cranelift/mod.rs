@@ -12,7 +12,7 @@ use cranelift_module::FuncId;
 use cranelift_object::{ObjectBuilder, ObjectModule};
 
 use sonatina_ir::Module;
-use sonatina_triple::Architecture;
+use sonatina_triple::{Architecture, TargetTriple};
 
 use crate::backend::Backend;
 
@@ -72,7 +72,7 @@ impl CraneliftBackend {
         self
     }
 
-    fn build_isa(&self, is_pic: bool) -> Result<Arc<dyn clif_isa::TargetIsa>, CraneliftError> {
+    fn flags(&self, is_pic: bool) -> Result<settings::Flags, CraneliftError> {
         let mut flag_builder = settings::builder();
         flag_builder
             .set(
@@ -87,7 +87,14 @@ impl CraneliftBackend {
         flag_builder
             .set("is_pic", if is_pic { "true" } else { "false" })
             .map_err(|e| CraneliftError::Compilation(e.to_string()))?;
-        let flags = settings::Flags::new(flag_builder);
+        Ok(settings::Flags::new(flag_builder))
+    }
+
+    fn build_native_isa(
+        &self,
+        is_pic: bool,
+    ) -> Result<Arc<dyn clif_isa::TargetIsa>, CraneliftError> {
+        let flags = self.flags(is_pic)?;
         let isa = cranelift_native::builder()
             .map_err(|e| CraneliftError::UnsupportedTarget(e.to_string()))?
             .finish(flags)
@@ -95,7 +102,49 @@ impl CraneliftBackend {
         Ok(isa)
     }
 
-    fn ensure_supported_target(&self, module: &Module) -> Result<(), CraneliftError> {
+    fn build_host_object_isa(
+        &self,
+        triple: TargetTriple,
+        is_pic: bool,
+    ) -> Result<Arc<dyn clif_isa::TargetIsa>, CraneliftError> {
+        if let Some(name) = host_object_triple_name(triple.architecture) {
+            let flags = self.flags(is_pic)?;
+            let mut builder = clif_isa::lookup_by_name(name)
+                .map_err(|e| CraneliftError::UnsupportedTarget(e.to_string()))?;
+            cranelift_native::infer_native_flags(&mut builder)
+                .map_err(|e| CraneliftError::UnsupportedTarget(e.to_string()))?;
+            return builder
+                .finish(flags)
+                .map_err(|e| CraneliftError::Compilation(e.to_string()));
+        }
+
+        self.build_native_isa(is_pic)
+    }
+
+    fn build_object_isa(
+        &self,
+        triple: TargetTriple,
+    ) -> Result<Arc<dyn clif_isa::TargetIsa>, CraneliftError> {
+        let is_pic = !matches!(triple.architecture, Architecture::Riscv32im);
+        let flags = self.flags(is_pic)?;
+        let builder = match triple.architecture {
+            Architecture::X86_64 | Architecture::Aarch64 => {
+                return self.build_host_object_isa(triple, is_pic);
+            }
+            Architecture::Riscv32im => clif_isa::lookup_by_name("riscv32im-unknown-none-elf")
+                .map_err(|e| CraneliftError::UnsupportedTarget(e.to_string()))?,
+            Architecture::Evm => {
+                return Err(CraneliftError::UnsupportedTarget(format!(
+                    "CraneliftBackend cannot emit objects for {triple}"
+                )));
+            }
+        };
+        builder
+            .finish(flags)
+            .map_err(|e| CraneliftError::Compilation(e.to_string()))
+    }
+
+    fn ensure_supported_jit_target(&self, module: &Module) -> Result<(), CraneliftError> {
         let triple = module.ctx.triple;
         if matches!(
             triple.architecture,
@@ -109,13 +158,30 @@ impl CraneliftBackend {
         }
     }
 
+    fn ensure_supported_object_target(&self, module: &Module) -> Result<(), CraneliftError> {
+        let triple = module.ctx.triple;
+        if matches!(
+            triple.architecture,
+            Architecture::X86_64 | Architecture::Aarch64 | Architecture::Riscv32im
+        ) {
+            Ok(())
+        } else {
+            Err(CraneliftError::UnsupportedTarget(format!(
+                "CraneliftBackend cannot emit objects for {triple}"
+            )))
+        }
+    }
+
     pub fn compile_module_to_object(
         &self,
         module: &Module,
     ) -> Result<NativeObjectArtifact, Vec<CraneliftError>> {
-        self.ensure_supported_target(module).map_err(|e| vec![e])?;
+        self.ensure_supported_object_target(module)
+            .map_err(|e| vec![e])?;
 
-        let isa = self.build_isa(true).map_err(|e| vec![e])?;
+        let isa = self
+            .build_object_isa(module.ctx.triple)
+            .map_err(|e| vec![e])?;
         let builder =
             ObjectBuilder::new(isa, "sonatina", cranelift_module::default_libcall_names())
                 .map_err(|e| vec![CraneliftError::Compilation(e.to_string())])?;
@@ -132,6 +198,21 @@ impl CraneliftBackend {
     }
 }
 
+#[cfg(target_os = "macos")]
+fn host_object_triple_name(arch: Architecture) -> Option<&'static str> {
+    match arch {
+        Architecture::X86_64 => Some("x86_64-apple-macosx"),
+        Architecture::Aarch64 => Some("aarch64-apple-macosx"),
+        _ => None,
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn host_object_triple_name(arch: Architecture) -> Option<&'static str> {
+    let _ = arch;
+    None
+}
+
 impl Default for CraneliftBackend {
     fn default() -> Self {
         Self::new()
@@ -143,9 +224,10 @@ impl Backend for CraneliftBackend {
     type Error = CraneliftError;
 
     fn compile_module(&self, module: &Module) -> Result<Self::Artifact, Vec<Self::Error>> {
-        self.ensure_supported_target(module).map_err(|e| vec![e])?;
+        self.ensure_supported_jit_target(module)
+            .map_err(|e| vec![e])?;
 
-        let isa = self.build_isa(false).map_err(|e| vec![e])?;
+        let isa = self.build_native_isa(false).map_err(|e| vec![e])?;
         let mut builder = JITBuilder::with_isa(isa, cranelift_module::default_libcall_names());
 
         // Register u256 runtime intrinsics

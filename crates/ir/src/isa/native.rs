@@ -46,7 +46,7 @@ impl Native {
     pub fn new(triple: TargetTriple) -> Self {
         assert!(matches!(
             triple.architecture,
-            Architecture::X86_64 | Architecture::Aarch64
+            Architecture::X86_64 | Architecture::Aarch64 | Architecture::Riscv32im
         ));
         Self { triple }
     }
@@ -60,8 +60,11 @@ impl Isa for Native {
     }
 
     fn type_layout(&self) -> &'static dyn TypeLayout {
-        const TL: NativeTypeLayout = NativeTypeLayout {};
-        &TL
+        match self.triple.architecture {
+            Architecture::X86_64 | Architecture::Aarch64 => &NATIVE64_TYPE_LAYOUT,
+            Architecture::Riscv32im => &NATIVE32_TYPE_LAYOUT,
+            Architecture::Evm => unreachable!("native ISA does not support EVM targets"),
+        }
     }
 
     fn address_spaces(&self) -> &'static dyn AddressSpaceInfo {
@@ -75,7 +78,20 @@ impl Isa for Native {
     }
 }
 
-struct NativeTypeLayout {}
+struct NativeTypeLayout {
+    pointer_repl: Type,
+    pointer_size: usize,
+}
+
+const NATIVE64_TYPE_LAYOUT: NativeTypeLayout = NativeTypeLayout {
+    pointer_repl: Type::I64,
+    pointer_size: 8,
+};
+
+const NATIVE32_TYPE_LAYOUT: NativeTypeLayout = NativeTypeLayout {
+    pointer_repl: Type::I32,
+    pointer_size: 4,
+};
 
 impl TypeLayout for NativeTypeLayout {
     fn size_of(&self, ty: Type, ctx: &ModuleCtx) -> Result<usize, TypeLayoutError> {
@@ -111,7 +127,9 @@ impl TypeLayout for NativeTypeLayout {
                             .unwrap_or(1);
                         (total + struct_align - 1) & !(struct_align - 1)
                     }
-                    CompoundType::Ptr(_) | CompoundType::ObjRef(_) | CompoundType::ConstRef(_) => 8,
+                    CompoundType::Ptr(_) | CompoundType::ObjRef(_) | CompoundType::ConstRef(_) => {
+                        self.pointer_size
+                    }
                     _ => return Err(TypeLayoutError::UnsupportedType(ty)),
                 }
             }
@@ -139,7 +157,9 @@ impl TypeLayout for NativeTypeLayout {
                         .map(|f| self.align_of(*f, ctx).unwrap_or(1))
                         .max()
                         .unwrap_or(1),
-                    CompoundType::Ptr(_) | CompoundType::ObjRef(_) | CompoundType::ConstRef(_) => 8,
+                    CompoundType::Ptr(_) | CompoundType::ObjRef(_) | CompoundType::ConstRef(_) => {
+                        self.pointer_size
+                    }
                     _ => return Err(TypeLayoutError::UnsupportedType(ty)),
                 }
             }
@@ -148,7 +168,7 @@ impl TypeLayout for NativeTypeLayout {
     }
 
     fn pointer_repl(&self) -> Type {
-        Type::I64
+        self.pointer_repl
     }
 
     fn endian(&self) -> Endian {

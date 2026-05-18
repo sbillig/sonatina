@@ -707,7 +707,7 @@ fn module_ctx_from_triple(triple: TargetTriple) -> ModuleCtx {
             let isa = Evm::new(triple);
             ModuleCtx::new(&isa)
         }
-        Architecture::X86_64 | Architecture::Aarch64 => {
+        Architecture::X86_64 | Architecture::Aarch64 | Architecture::Riscv32im => {
             let isa = ir::isa::native::Native::new(triple);
             ModuleCtx::new(&isa)
         }
@@ -807,7 +807,11 @@ func public %entry(v0.enumtag(@E)) -> unit {
 
     #[test]
     fn test_native_target_triples_parse() {
-        for target in ["x86_64-unknown-native", "aarch64-unknown-native"] {
+        for target in [
+            "x86_64-unknown-native",
+            "aarch64-unknown-native",
+            "riscv32im-unknown-none",
+        ] {
             let s = format!(
                 r#"
 target = "{target}"

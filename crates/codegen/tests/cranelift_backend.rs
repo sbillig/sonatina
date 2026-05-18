@@ -33,6 +33,86 @@ fn native_module_builder() -> ModuleBuilder {
     ModuleBuilder::new(ctx)
 }
 
+fn riscv32im_isa() -> Native {
+    Native::new(TargetTriple::new(
+        Architecture::Riscv32im,
+        Vendor::Unknown,
+        OperatingSystem::None,
+    ))
+}
+
+fn riscv32im_module_builder() -> ModuleBuilder {
+    let isa = riscv32im_isa();
+    let ctx = ModuleCtx::new(&isa);
+    ModuleBuilder::new(ctx)
+}
+
+fn assert_riscv32_elf_object(bytes: &[u8]) {
+    assert!(bytes.len() >= 40, "ELF header is truncated");
+    assert_eq!(&bytes[0..4], b"\x7fELF");
+    assert_eq!(bytes[4], 1, "expected ELFCLASS32");
+    assert_eq!(bytes[5], 1, "expected little-endian ELF");
+    assert_eq!(
+        u16::from_le_bytes([bytes[18], bytes[19]]),
+        243,
+        "expected EM_RISCV"
+    );
+}
+
+fn read_le_u32(bytes: &[u8], offset: usize) -> u32 {
+    u32::from_le_bytes([
+        bytes[offset],
+        bytes[offset + 1],
+        bytes[offset + 2],
+        bytes[offset + 3],
+    ])
+}
+
+fn assert_host_object_linker_metadata(bytes: &[u8]) {
+    if !cfg!(target_os = "macos") {
+        return;
+    }
+
+    assert!(bytes.len() >= 32, "Mach-O header is truncated");
+    assert_eq!(
+        read_le_u32(bytes, 0),
+        0xfeedfacf,
+        "expected Mach-O 64-bit object"
+    );
+
+    let ncmds = read_le_u32(bytes, 16);
+    let mut offset: usize = 32;
+    let mut i: u32 = 0;
+    while i < ncmds {
+        assert!(
+            offset + 8 <= bytes.len(),
+            "Mach-O load command is truncated"
+        );
+        let cmd = read_le_u32(bytes, offset);
+        let cmdsize = read_le_u32(bytes, offset + 4) as usize;
+        assert!(cmdsize >= 8, "Mach-O load command has invalid size");
+        assert!(
+            offset + cmdsize <= bytes.len(),
+            "Mach-O load command exceeds file size"
+        );
+
+        if cmd == 0x32 {
+            assert!(offset + 12 <= bytes.len(), "LC_BUILD_VERSION is truncated");
+            assert_ne!(
+                read_le_u32(bytes, offset + 8),
+                0,
+                "LC_BUILD_VERSION must name a concrete Apple platform"
+            );
+            return;
+        }
+
+        offset += cmdsize;
+        i += 1;
+    }
+
+    panic!("Mach-O object is missing LC_BUILD_VERSION");
+}
+
 #[test]
 fn cranelift_add_two_i64s() {
     let isa = native_isa();
@@ -783,6 +863,36 @@ fn cranelift_emits_native_object_for_main() {
 
     assert!(!artifact.bytes.is_empty());
     assert!(artifact.func_map.contains_key("main"));
+    assert_host_object_linker_metadata(&artifact.bytes);
+}
+
+#[test]
+fn cranelift_emits_riscv32im_object_for_integer_main() {
+    let isa = riscv32im_isa();
+    let is = isa.inst_set();
+    let mb = riscv32im_module_builder();
+
+    let sig = Signature::new_single("main", Linkage::Public, &[], Type::I32);
+    let func_ref = mb.declare_function(sig).unwrap();
+
+    let mut fb = mb.func_builder::<InstInserter>(func_ref);
+    let entry = fb.append_block();
+    fb.switch_to_block(entry);
+    let forty = fb.make_imm_value(40i32);
+    let two = fb.make_imm_value(2i32);
+    let status = fb.insert_inst(arith::Add::new(is, forty, two), Type::I32);
+    fb.insert_inst_no_result(control_flow::Return::new_single(is, status));
+    fb.seal_all();
+    fb.finish();
+
+    let module = mb.build();
+    let artifact = CraneliftBackend::new()
+        .compile_module_to_object(&module)
+        .expect("RV32IM object compilation failed");
+
+    assert!(!artifact.bytes.is_empty());
+    assert!(artifact.func_map.contains_key("main"));
+    assert_riscv32_elf_object(&artifact.bytes);
 }
 
 #[test]

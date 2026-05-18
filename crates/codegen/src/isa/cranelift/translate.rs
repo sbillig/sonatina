@@ -1,7 +1,7 @@
 use std::{cmp::Ordering, collections::HashMap};
 
 use cranelift_codegen::ir::{
-    self as clif, InstBuilder, MemFlags, StackSlotData, StackSlotKind, condcodes::IntCC,
+    self as clif, InstBuilder, MemFlagsData, StackSlotData, StackSlotKind, condcodes::IntCC,
     instructions::BlockArg,
 };
 use cranelift_frontend::{FunctionBuilder, FunctionBuilderContext};
@@ -557,7 +557,7 @@ fn translate_function(
                 let to_ty = sonatina_type_to_clif_or_err(*trunc.ty())?;
                 let result_val = if from_ty == Type::I256 {
                     // i256 values are pointers — load the target-sized value from the pointer
-                    builder.ins().load(to_ty, cranelift_codegen::ir::MemFlags::new(), val, 0)
+                    builder.ins().load(to_ty, MemFlagsData::new(), val, 0)
                 } else {
                     builder.ins().ireduce(to_ty, val)
                 };
@@ -951,7 +951,7 @@ fn translate_function(
                         value_map.insert(result, addr);
                     } else {
                         let clif_ty = sonatina_type_to_clif_or_err(result_ty)?;
-                        let loaded = builder.ins().load(clif_ty, cranelift_codegen::ir::MemFlags::new(), addr, 0);
+                        let loaded = builder.ins().load(clif_ty, MemFlagsData::new(), addr, 0);
                         value_map.insert(result, loaded);
                     }
                 }
@@ -972,7 +972,7 @@ fn translate_function(
                         value_map.insert(result, addr);
                     } else {
                         let clif_ty = sonatina_type_to_clif_or_err(result_ty)?;
-                        let loaded = builder.ins().load(clif_ty, cranelift_codegen::ir::MemFlags::new(), base, offset);
+                        let loaded = builder.ins().load(clif_ty, MemFlagsData::new(), base, offset);
                         value_map.insert(result, loaded);
                     }
                 }
@@ -1001,7 +1001,7 @@ fn translate_function(
                     let field_addr = builder.ins().iadd_imm(result_addr, i64::from(offset));
                     copy_bytes(value, field_addr, compute_alloc_size(value_ty, &module.ctx), &mut builder);
                 } else {
-                    builder.ins().store(MemFlags::new(), value, result_addr, offset);
+                    builder.ins().store(MemFlagsData::new(), value, result_addr, offset);
                 }
                 value_map.insert(result, result_addr);
             } else if <&sonatina_ir::inst::data::Alloca as sonatina_ir::InstDowncast>::downcast(inst_set, inst_data).is_some() {
@@ -1021,7 +1021,7 @@ fn translate_function(
                 if store_ty == Type::I256 {
                     copy_i256(val, addr, &mut builder);
                 } else {
-                    builder.ins().store(MemFlags::new(), val, addr, 0);
+                    builder.ins().store(MemFlagsData::new(), val, addr, 0);
                 }
             } else if let Some(mload) = <&sonatina_ir::inst::data::Mload as sonatina_ir::InstDowncast>::downcast(inst_set, inst_data) {
                 let addr = resolve_address_value(module, function, *mload.addr(), &value_map, &mut builder)?;
@@ -1033,7 +1033,7 @@ fn translate_function(
                         value_map.insert(result, result_addr);
                     } else {
                         let clif_ty = sonatina_type_to_clif_or_err(result_ty)?;
-                        let loaded = builder.ins().load(clif_ty, MemFlags::new(), addr, 0);
+                        let loaded = builder.ins().load(clif_ty, MemFlagsData::new(), addr, 0);
                         value_map.insert(result, loaded);
                     }
                 }
@@ -1066,7 +1066,7 @@ fn translate_function(
                 if val_ty == Type::I256 {
                     copy_i256(val, dest, &mut builder);
                 } else {
-                    builder.ins().store(MemFlags::new(), val, dest, 0);
+                    builder.ins().store(MemFlagsData::new(), val, dest, 0);
                 }
             } else if <&sonatina_ir::inst::data::ObjAlloc as sonatina_ir::InstDowncast>::downcast(inst_set, inst_data).is_some() {
                 if let Some(result) = function.dfg.inst_result(inst_id) {
@@ -1124,7 +1124,7 @@ fn translate_function(
                         builder.ins().iconst(clif::types::I64, idx_i64)
                     } else {
                         let raw = resolve_value(function, index_val_id, &value_map, &mut builder)?;
-                        builder.ins().load(clif::types::I64, cranelift_codegen::ir::MemFlags::new(), raw, 0)
+                        builder.ins().load(clif::types::I64, MemFlagsData::new(), raw, 0)
                     }
                 } else {
                     resolve_scalar_value(module, function, index_val_id, &value_map, &mut builder)?
@@ -1179,7 +1179,7 @@ fn translate_function(
                         builder.ins().iconst(clif::types::I64, idx)
                     } else {
                         let raw = resolve_value(function, index_val_id, &value_map, &mut builder)?;
-                        builder.ins().load(clif::types::I64, cranelift_codegen::ir::MemFlags::new(), raw, 0)
+                        builder.ins().load(clif::types::I64, MemFlagsData::new(), raw, 0)
                     }
                 } else {
                     resolve_scalar_value(module, function, index_val_id, &value_map, &mut builder)?
@@ -1200,7 +1200,7 @@ fn translate_function(
                         value_map.insert(result, addr);
                     } else {
                         let clif_ty = sonatina_type_to_clif_or_err(result_ty)?;
-                        let loaded = builder.ins().load(clif_ty, cranelift_codegen::ir::MemFlags::new(), addr, 0);
+                        let loaded = builder.ins().load(clif_ty, MemFlagsData::new(), addr, 0);
                         value_map.insert(result, loaded);
                     }
                 }
@@ -1245,7 +1245,7 @@ fn resolve_scalar_value(
             ty.resolve_compound(&module.ctx)
         && let Some(clif_ty) = sonatina_type_to_clif(elem)
     {
-        return Ok(builder.ins().load(clif_ty, MemFlags::new(), val, 0));
+        return Ok(builder.ins().load(clif_ty, MemFlagsData::new(), val, 0));
     }
     Ok(val)
 }
@@ -1285,9 +1285,12 @@ fn create_stack_slot_for_type(
 }
 
 fn load_i256_limb(addr: clif::Value, limb: usize, builder: &mut FunctionBuilder) -> clif::Value {
-    builder
-        .ins()
-        .load(clif::types::I64, MemFlags::new(), addr, (limb * 8) as i32)
+    builder.ins().load(
+        clif::types::I64,
+        MemFlagsData::new(),
+        addr,
+        (limb * 8) as i32,
+    )
 }
 
 fn store_i256_limb(
@@ -1298,7 +1301,7 @@ fn store_i256_limb(
 ) {
     builder
         .ins()
-        .store(MemFlags::new(), value, addr, (limb * 8) as i32);
+        .store(MemFlagsData::new(), value, addr, (limb * 8) as i32);
 }
 
 fn copy_i256(src: clif::Value, dst: clif::Value, builder: &mut FunctionBuilder) {
@@ -1317,10 +1320,12 @@ fn copy_bytes(src: clif::Value, dst: clif::Value, size: u32, builder: &mut Funct
         (1, clif::types::I8),
     ] {
         while offset + chunk <= size {
-            let value = builder.ins().load(ty, MemFlags::new(), src, offset as i32);
+            let value = builder
+                .ins()
+                .load(ty, MemFlagsData::new(), src, offset as i32);
             builder
                 .ins()
-                .store(MemFlags::new(), value, dst, offset as i32);
+                .store(MemFlagsData::new(), value, dst, offset as i32);
             offset += chunk;
         }
     }
@@ -2377,9 +2382,7 @@ fn translate_bitcast(
     if from_ty == to_ty {
         Ok(value)
     } else if from_ty.bits() == to_ty.bits() {
-        Ok(builder
-            .ins()
-            .bitcast(to_ty, cranelift_codegen::ir::MemFlags::new(), value))
+        Ok(builder.ins().bitcast(to_ty, MemFlagsData::new(), value))
     } else {
         Err(format!(
             "cannot bitcast Cranelift value from {from_ty} to {to_ty}"
@@ -2487,12 +2490,9 @@ fn emit_i256_immediate(imm: &sonatina_ir::I256, builder: &mut FunctionBuilder) -
     for i in 0..4 {
         let limb = u64::from_le_bytes(bytes[i * 8..(i + 1) * 8].try_into().unwrap());
         let val = builder.ins().iconst(clif::types::I64, limb as i64);
-        builder.ins().store(
-            cranelift_codegen::ir::MemFlags::new(),
-            val,
-            addr,
-            (i * 8) as i32,
-        );
+        builder
+            .ins()
+            .store(MemFlagsData::new(), val, addr, (i * 8) as i32);
     }
 
     addr
@@ -2588,27 +2588,19 @@ fn materialize_gv_initializer(
         GvInitializer::Immediate(imm) => match imm {
             Immediate::I8(v) => {
                 let val = builder.ins().iconst(clif::types::I8, *v as i64);
-                builder
-                    .ins()
-                    .store(cranelift_codegen::ir::MemFlags::new(), val, base, offset);
+                builder.ins().store(MemFlagsData::new(), val, base, offset);
             }
             Immediate::I16(v) => {
                 let val = builder.ins().iconst(clif::types::I16, *v as i64);
-                builder
-                    .ins()
-                    .store(cranelift_codegen::ir::MemFlags::new(), val, base, offset);
+                builder.ins().store(MemFlagsData::new(), val, base, offset);
             }
             Immediate::I32(v) => {
                 let val = builder.ins().iconst(clif::types::I32, *v as i64);
-                builder
-                    .ins()
-                    .store(cranelift_codegen::ir::MemFlags::new(), val, base, offset);
+                builder.ins().store(MemFlagsData::new(), val, base, offset);
             }
             Immediate::I64(v) => {
                 let val = builder.ins().iconst(clif::types::I64, *v);
-                builder
-                    .ins()
-                    .store(cranelift_codegen::ir::MemFlags::new(), val, base, offset);
+                builder.ins().store(MemFlagsData::new(), val, base, offset);
             }
             Immediate::I256(v) => {
                 let u = v.to_u256();
@@ -2616,12 +2608,9 @@ fn materialize_gv_initializer(
                 for i in 0..4 {
                     let limb = u64::from_le_bytes(bytes[i * 8..(i + 1) * 8].try_into().unwrap());
                     let val = builder.ins().iconst(clif::types::I64, limb as i64);
-                    builder.ins().store(
-                        cranelift_codegen::ir::MemFlags::new(),
-                        val,
-                        base,
-                        offset + (i * 8) as i32,
-                    );
+                    builder
+                        .ins()
+                        .store(MemFlagsData::new(), val, base, offset + (i * 8) as i32);
                 }
             }
             _ => {}
