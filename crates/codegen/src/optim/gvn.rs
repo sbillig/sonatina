@@ -221,6 +221,12 @@ impl GvnSolver {
         object_memory: Option<&ObjectMemoryAnalysis>,
     ) -> bool {
         self.clear();
+        let value_count = func.dfg.value_ids().count();
+        let inst_count = func.dfg.inst_ids().count();
+        self.insn_table
+            .reserve(value_count.saturating_add(inst_count));
+        self.value_phi_table.reserve(inst_count);
+
         cfg.compute(func);
         domtree.compute(cfg);
 
@@ -2010,10 +2016,16 @@ impl GvnSolver {
 
         // Remove all stale indexes that still point to the emptied class.
         if self.classes[old_class].values.is_empty() {
-            self.insn_table
-                .retain(|_, mapped_class| *mapped_class != old_class);
-            self.value_phi_table
-                .retain(|_, mapped_class| *mapped_class != old_class);
+            let gvn_insn = self.classes[old_class].gvn_insn.clone();
+            if self.insn_table.get(&gvn_insn) == Some(&old_class) {
+                self.insn_table.remove(&gvn_insn);
+            }
+
+            if let Some(value_phi) = self.classes[old_class].value_phi.clone()
+                && self.value_phi_table.get(&value_phi) == Some(&old_class)
+            {
+                self.value_phi_table.remove(&value_phi);
+            }
         }
 
         ClassAssignResult {
@@ -3338,6 +3350,25 @@ block2:
                 .values()
                 .all(|mapped_class| *mapped_class != class1)
         );
+    }
+
+    #[test]
+    fn assign_class_removes_empty_class_indexes() {
+        let mut solver = GvnSolver::new();
+        let value0 = ValueId::from_u32(10);
+        let value1 = ValueId::from_u32(11);
+        let old_gvn_insn = GvnInsn::Value(value0);
+        let old_value_phi = ValuePhi::Value(ValueId::from_u32(12));
+        let old_class = solver.make_class(old_gvn_insn.clone(), Some(old_value_phi.clone()));
+        let new_class = solver.make_class(GvnInsn::Value(value1), None);
+        solver.assign_class(value0, old_class);
+        solver.assign_class(value1, new_class);
+
+        solver.assign_class(value0, new_class);
+
+        assert!(solver.classes[old_class].values.is_empty());
+        assert!(!solver.insn_table.contains_key(&old_gvn_insn));
+        assert!(!solver.value_phi_table.contains_key(&old_value_phi));
     }
 
     #[test]
