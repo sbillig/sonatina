@@ -969,7 +969,7 @@ fn remove_dead_local_enum_writes(
                 cfg.succs_of(block)
                     .copied()
                     .filter(|succ| reachable[*succ])
-                    .map(|succ| in_states[succ].clone()),
+                    .map(|succ| &in_states[succ]),
             );
             if out != out_states[block] {
                 out_states[block] = out.clone();

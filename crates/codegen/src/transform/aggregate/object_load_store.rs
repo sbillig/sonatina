@@ -1,5 +1,6 @@
 use cranelift_entity::SecondaryMap;
 use rustc_hash::FxHashMap;
+use smallvec::SmallVec;
 use sonatina_ir::{
     BlockId, ControlFlowGraph, Function, I256, Immediate, InstId, Type, ValueId,
     func_cursor::{CursorLocation, FuncCursor, InstInserter},
@@ -26,6 +27,26 @@ use super::{
 };
 
 type AvailableMap = FxHashMap<ObjectSlice, ValueId>;
+
+struct ObjectDataflowCfg {
+    cfg: ControlFlowGraph,
+    reachable: SecondaryMap<BlockId, bool>,
+    post_order: Vec<BlockId>,
+}
+
+impl ObjectDataflowCfg {
+    fn compute(func: &Function) -> Self {
+        let mut cfg = ControlFlowGraph::new();
+        cfg.compute(func);
+        let reachable = cfg.reachable_blocks();
+        let post_order = cfg.post_order().collect();
+        Self {
+            cfg,
+            reachable,
+            post_order,
+        }
+    }
+}
 
 struct CallCaptureEndpoint<'a> {
     tracked: Option<TrackedObject>,
@@ -79,10 +100,17 @@ impl ObjectLoadStore {
                 let tracked = facts.tracked();
                 let may = facts.may();
                 let live_out_roots = self.collect_live_out_roots(tracked, func, local_object_args);
+                let dataflow_cfg = ObjectDataflowCfg::compute(func);
 
-                iter_changed |= self.run_forward(func, tracked, may, object_effects);
-                iter_changed |=
-                    self.run_backward(func, tracked, may, &live_out_roots, object_effects);
+                iter_changed |= self.run_forward(func, &dataflow_cfg, tracked, may, object_effects);
+                iter_changed |= self.run_backward(
+                    func,
+                    &dataflow_cfg,
+                    tracked,
+                    may,
+                    &live_out_roots,
+                    object_effects,
+                );
             }
 
             if iter_changed {
@@ -103,19 +131,11 @@ impl ObjectLoadStore {
     fn run_forward(
         &mut self,
         func: &mut Function,
+        dataflow_cfg: &ObjectDataflowCfg,
         tracked: &SecondaryMap<ValueId, Option<TrackedObject>>,
         provenance: MayProvenance<'_>,
         object_effects: Option<&ObjectEffectSummaryMap>,
     ) -> bool {
-        let mut cfg = ControlFlowGraph::new();
-        cfg.compute(func);
-        let reachable = cfg.reachable_blocks();
-        let order: Vec<_> = cfg
-            .post_order()
-            .collect::<Vec<_>>()
-            .into_iter()
-            .rev()
-            .collect();
         let mut in_states = SecondaryMap::<BlockId, AvailableMap>::new();
         let mut out_states = SecondaryMap::<BlockId, AvailableMap>::new();
         let mut dataflow_changed = true;
@@ -123,16 +143,18 @@ impl ObjectLoadStore {
 
         while dataflow_changed {
             dataflow_changed = false;
-            for &block in &order {
-                if !reachable[block] {
+            for &block in dataflow_cfg.post_order.iter().rev() {
+                if !dataflow_cfg.reachable[block] {
                     continue;
                 }
 
                 let in_state = meet_forward(
-                    cfg.preds_of(block)
+                    dataflow_cfg
+                        .cfg
+                        .preds_of(block)
                         .copied()
-                        .filter(|pred| reachable[*pred])
-                        .map(|pred| out_states[pred].clone()),
+                        .filter(|pred| dataflow_cfg.reachable[*pred])
+                        .map(|pred| &out_states[pred]),
                 );
                 if in_state != in_states[block] {
                     in_states[block] = in_state.clone();
@@ -372,15 +394,12 @@ impl ObjectLoadStore {
     fn run_backward(
         &mut self,
         func: &mut Function,
+        dataflow_cfg: &ObjectDataflowCfg,
         tracked: &SecondaryMap<ValueId, Option<TrackedObject>>,
         provenance: MayProvenance<'_>,
         live_out_roots: &FxHashMap<ValueId, usize>,
         object_effects: Option<&ObjectEffectSummaryMap>,
     ) -> bool {
-        let mut cfg = ControlFlowGraph::new();
-        cfg.compute(func);
-        let reachable = cfg.reachable_blocks();
-        let order: Vec<_> = cfg.post_order().collect();
         let mut in_states = SecondaryMap::<BlockId, LiveLeafMap>::new();
         let mut out_states = SecondaryMap::<BlockId, LiveLeafMap>::new();
         let mut changed = false;
@@ -388,16 +407,18 @@ impl ObjectLoadStore {
         let mut dataflow_changed = true;
         while dataflow_changed {
             dataflow_changed = false;
-            for &block in &order {
-                if !reachable[block] {
+            for &block in &dataflow_cfg.post_order {
+                if !dataflow_cfg.reachable[block] {
                     continue;
                 }
 
                 let mut out_state = union_live_leaf_maps(
-                    cfg.succs_of(block)
+                    dataflow_cfg
+                        .cfg
+                        .succs_of(block)
                         .copied()
-                        .filter(|succ| reachable[*succ])
-                        .map(|succ| in_states[succ].clone()),
+                        .filter(|succ| dataflow_cfg.reachable[*succ])
+                        .map(|succ| &in_states[succ]),
                 );
                 if ends_with_return(func, block) {
                     for (&root, &total_leaves) in live_out_roots {
@@ -437,8 +458,8 @@ impl ObjectLoadStore {
             }
         }
 
-        for &block in &order {
-            if !reachable[block] {
+        for &block in &dataflow_cfg.post_order {
+            if !dataflow_cfg.reachable[block] {
                 continue;
             }
 
@@ -548,17 +569,14 @@ fn has_object_dataflow_work(func: &Function) -> bool {
     })
 }
 
-fn meet_forward(states: impl Iterator<Item = AvailableMap>) -> AvailableMap {
-    let states: Vec<_> = states.collect();
-    let Some(mut out) = states.first().cloned() else {
+fn meet_forward<'a>(mut states: impl Iterator<Item = &'a AvailableMap>) -> AvailableMap {
+    let Some(first) = states.next() else {
         return AvailableMap::default();
     };
+    let rest: SmallVec<[&AvailableMap; 4]> = states.collect();
 
-    out.retain(|slice, value| {
-        states[1..]
-            .iter()
-            .all(|state| state.get(slice) == Some(value))
-    });
+    let mut out = first.clone();
+    out.retain(|slice, value| rest.iter().all(|state| state.get(slice) == Some(value)));
     out
 }
 

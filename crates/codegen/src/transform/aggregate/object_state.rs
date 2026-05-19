@@ -72,11 +72,17 @@ pub(crate) fn tracked_root_total_leaves(
         .expect("tracked root should exist")
 }
 
-pub(crate) fn union_live_leaf_maps(states: impl Iterator<Item = LiveLeafMap>) -> LiveLeafMap {
-    let mut out = LiveLeafMap::default();
+pub(crate) fn union_live_leaf_maps<'a>(
+    mut states: impl Iterator<Item = &'a LiveLeafMap>,
+) -> LiveLeafMap {
+    let Some(first) = states.next() else {
+        return LiveLeafMap::default();
+    };
+
+    let mut out = first.clone();
     for state in states {
-        for (root, leaves) in state {
-            out.entry(root).or_default().extend(leaves);
+        for (&root, leaves) in state {
+            out.entry(root).or_default().extend(leaves.iter().copied());
         }
     }
     out
