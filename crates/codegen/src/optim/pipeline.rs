@@ -656,9 +656,8 @@ fn pass_may_use_object_facts(pass: Pass, module: &Module, funcs: Option<&[FuncRe
     match pass {
         Pass::ObjectLoadStore => selected_funcs_any(module, funcs, has_object_load_store_work),
         Pass::AggregateScalarize => selected_funcs_any(module, funcs, has_aggregate_scalarize_work),
-        Pass::Licm | Pass::Gvn => {
-            selected_funcs_any(module, funcs, has_object_memory_analysis_work)
-        }
+        Pass::Licm => selected_funcs_any(module, funcs, has_object_memory_analysis_work),
+        Pass::Gvn => selected_funcs_any(module, funcs, has_object_memory_gvn_work),
         _ => pass.needs_object_facts(),
     }
 }
@@ -667,9 +666,8 @@ fn pass_may_use_local_object_args(pass: Pass, module: &Module, funcs: Option<&[F
     match pass {
         Pass::ObjectLoadStore => selected_funcs_any(module, funcs, has_object_load_store_work),
         Pass::AggregateScalarize => selected_funcs_any(module, funcs, has_aggregate_scalarize_work),
-        Pass::Licm | Pass::Gvn => {
-            selected_funcs_any(module, funcs, has_object_memory_analysis_work)
-        }
+        Pass::Licm => selected_funcs_any(module, funcs, has_object_memory_analysis_work),
+        Pass::Gvn => selected_funcs_any(module, funcs, has_object_memory_gvn_work),
         _ => pass.needs_object_facts(),
     }
 }
@@ -790,6 +788,16 @@ fn has_object_memory_analysis_work(func: &Function) -> bool {
                         .copied()
                         .any(|value| type_is_aggregate_or_object(func, func.dfg.value_ty(value)))
                 })
+        })
+    })
+}
+
+fn has_object_memory_gvn_work(func: &Function) -> bool {
+    func.layout.iter_block().any(|block| {
+        func.layout.iter_inst(block).any(|inst| {
+            let inst_data = func.dfg.inst(inst);
+            downcast::<&data::ObjLoad>(func.inst_set(), inst_data).is_some()
+                || downcast::<&data::EnumGetTag>(func.inst_set(), inst_data).is_some()
         })
     })
 }
@@ -1266,7 +1274,7 @@ fn run_pass(
             let mut solver = GvnSolver::new();
             {
                 let _span = trace_span!("sonatina.optim.pipeline.gvn.solve").entered();
-                if has_object_memory_analysis_work(func) {
+                if has_object_memory_gvn_work(func) {
                     let mut object_memory = ObjectMemoryAnalysis::default();
                     let func_local_object_args = func_ref.and_then(|func_ref| {
                         local_object_args.and_then(|args| args.get(&func_ref))
