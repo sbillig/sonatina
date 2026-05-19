@@ -34,6 +34,9 @@ use super::{
     shape,
 };
 
+type ValueDeps = SmallVec<[ValueId; 4]>;
+type ValueGraph = FxHashMap<ValueId, ValueDeps>;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 struct RootCaptureSource {
     dst_slice: shape::AggregateSlice,
@@ -381,7 +384,10 @@ impl<'a> ProvenanceSnapshot<'a> {
             value_sccs,
             cfg,
             reachable,
-            projection_transfer_cache: ProjectionTransferCache::default(),
+            projection_transfer_cache: ProjectionTransferCache::with_capacity_and_hasher(
+                func.dfg.insts.len(),
+                Default::default(),
+            ),
             object_effects,
         }
     }
@@ -543,24 +549,25 @@ fn collect_possible_projections(
         let mut changed = false;
 
         for &(inst, result) in single_result_insts {
-            let next = if let Some(projection) =
-                exact_projection_of(exact_states, maybe_unknown, result)
-            {
-                vec![projection]
-            } else {
-                derive_possible_projections(
-                    func,
-                    module,
-                    inst,
-                    result,
-                    &possible_projections,
-                    possible_roots,
-                    maybe_unknown,
-                    layout_cache,
-                    projection_transfer_cache,
-                    object_effects,
-                )
-            };
+            if let Some(projection) = exact_projection_of(exact_states, maybe_unknown, result) {
+                if set_single_possible_projection(&mut possible_projections[result], projection) {
+                    changed = true;
+                }
+                continue;
+            }
+
+            let next = derive_possible_projections(
+                func,
+                module,
+                inst,
+                result,
+                &possible_projections,
+                possible_roots,
+                maybe_unknown,
+                layout_cache,
+                projection_transfer_cache,
+                object_effects,
+            );
 
             if next != possible_projections[result] {
                 possible_projections[result] = next;
@@ -574,6 +581,19 @@ fn collect_possible_projections(
     }
 }
 
+fn set_single_possible_projection(
+    projections: &mut Vec<Projection>,
+    projection: Projection,
+) -> bool {
+    if projections.len() == 1 && projections[0] == projection {
+        return false;
+    }
+
+    projections.clear();
+    projections.push(projection);
+    true
+}
+
 fn compute_possible_roots(
     func: &Function,
     transfers: &PossibleRootTransfers,
@@ -581,7 +601,7 @@ fn compute_possible_roots(
     possible_roots: &mut SecondaryMap<ValueId, FxHashSet<ValueId>>,
     maybe_unknown: &mut SecondaryMap<ValueId, bool>,
 ) {
-    let mut pending = VecDeque::new();
+    let mut pending = VecDeque::with_capacity(func.dfg.values.len());
     let mut queued = secondary_value_map(func.dfg.values.len());
 
     for value in func.dfg.value_ids() {
@@ -641,7 +661,7 @@ fn collect_possible_root_transfers(
 }
 
 fn collect_single_result_insts(func: &Function) -> Vec<(InstId, ValueId)> {
-    let mut insts = Vec::new();
+    let mut insts = Vec::with_capacity(func.dfg.insts.len());
     for block in func.layout.iter_block() {
         for inst in func.layout.iter_inst(block) {
             if func.layout.is_inst_inserted(inst)
@@ -862,6 +882,10 @@ fn refine_possible_roots_from_objref_loads(
     possible_roots: &mut SecondaryMap<ValueId, FxHashSet<ValueId>>,
     maybe_unknown: &mut SecondaryMap<ValueId, bool>,
 ) {
+    if !has_capture_refining_obj_load(func) {
+        return;
+    }
+
     loop {
         let mut changed = false;
         let possible_roots_snapshot = possible_roots.clone();
@@ -934,6 +958,22 @@ fn refine_possible_roots_from_objref_loads(
             return;
         }
     }
+}
+
+fn has_capture_refining_obj_load(func: &Function) -> bool {
+    for block in func.layout.iter_block() {
+        for inst in func.layout.iter_inst(block) {
+            if !func.layout.is_inst_inserted(inst) {
+                continue;
+            }
+            if let Some(obj_load) = downcast::<&data::ObjLoad>(func.inst_set(), func.dfg.inst(inst))
+                && reference_element_ty(func.ctx(), func.dfg.value_ty(*obj_load.object())).is_some()
+            {
+                return true;
+            }
+        }
+    }
+    false
 }
 
 fn compute_capture_states_for_blocks(
@@ -1050,7 +1090,7 @@ fn merge_call_capture_roots(
 
 fn record_root_capture_sources(
     root_captures: &mut RootCaptureMap,
-    dsts: Vec<(RootValue, shape::AggregateSlice)>,
+    dsts: impl IntoIterator<Item = (RootValue, shape::AggregateSlice)>,
     src_roots: &FxHashSet<ValueId>,
     src_maybe_unknown: bool,
 ) {
@@ -1151,7 +1191,7 @@ fn capture_destinations_for_value(
     value: ValueId,
     relative_slice: Option<shape::AggregateSlice>,
     capture_state: CaptureStateView<'_>,
-) -> Vec<(RootValue, shape::AggregateSlice)> {
+) -> SmallVec<[(RootValue, shape::AggregateSlice); 4]> {
     observed_root_slices(
         exact_projection_of(
             capture_state.exact_states,
@@ -1464,7 +1504,7 @@ fn derive_phi_projection_candidates(
     root_value: ValueId,
 ) -> Vec<Projection> {
     let result_ty = func.dfg.value_ty(result);
-    let mut candidates = Vec::new();
+    let mut candidates = Vec::with_capacity(phi.args().len());
     for &(arg, _) in phi.args() {
         for &projection in &possible_projections[arg] {
             if projection.root_value != RootValue::new(root_value)
@@ -1521,7 +1561,7 @@ fn projection_value_ty_matches(value_ty: Type, projection_ty: Type, module: &Mod
 }
 
 fn compute_supported_value_sccs(func: &Function) -> FxHashMap<ValueId, usize> {
-    let mut nodes = FxHashSet::default();
+    let mut nodes = FxHashSet::with_capacity_and_hasher(func.dfg.values.len(), Default::default());
 
     for block in func.layout.iter_block() {
         for inst in func.layout.iter_inst(block) {
@@ -1538,8 +1578,8 @@ fn compute_supported_value_sccs(func: &Function) -> FxHashMap<ValueId, usize> {
         }
     }
 
-    let mut edges = FxHashMap::<ValueId, Vec<ValueId>>::default();
-    let mut reverse_edges = FxHashMap::<ValueId, Vec<ValueId>>::default();
+    let mut edges = ValueGraph::with_capacity_and_hasher(nodes.len(), Default::default());
+    let mut reverse_edges = ValueGraph::with_capacity_and_hasher(nodes.len(), Default::default());
     for &node in &nodes {
         edges.entry(node).or_default();
         reverse_edges.entry(node).or_default();
@@ -1567,13 +1607,13 @@ fn compute_supported_value_sccs(func: &Function) -> FxHashMap<ValueId, usize> {
         }
     }
 
-    let mut visited = FxHashSet::default();
+    let mut visited = FxHashSet::with_capacity_and_hasher(nodes.len(), Default::default());
     let mut order = Vec::with_capacity(nodes.len());
     for &node in &nodes {
         dfs_postorder(node, &edges, &mut visited, &mut order);
     }
 
-    let mut components = FxHashMap::default();
+    let mut components = FxHashMap::with_capacity_and_hasher(nodes.len(), Default::default());
     let mut component_id = 0usize;
     while let Some(node) = order.pop() {
         if components.contains_key(&node) {
@@ -1586,39 +1626,50 @@ fn compute_supported_value_sccs(func: &Function) -> FxHashMap<ValueId, usize> {
     components
 }
 
-fn supported_value_deps(func: &Function, inst: InstId) -> Option<Vec<ValueId>> {
+fn supported_value_deps(func: &Function, inst: InstId) -> Option<ValueDeps> {
     if let Some(gep) = downcast::<&data::Gep>(func.inst_set(), func.dfg.inst(inst)) {
-        return gep.values().first().copied().map(|base| vec![base]);
+        return gep.values().first().copied().map(single_value_dep);
     }
 
     if let Some(bitcast) = downcast::<&cast::Bitcast>(func.inst_set(), func.dfg.inst(inst)) {
-        return Some(vec![*bitcast.from()]);
+        return Some(single_value_dep(*bitcast.from()));
     }
 
     if let Some(obj_proj) = downcast::<&data::ObjProj>(func.inst_set(), func.dfg.inst(inst)) {
-        return obj_proj.values().first().copied().map(|base| vec![base]);
+        return obj_proj.values().first().copied().map(single_value_dep);
     }
 
     if let Some(obj_index) = downcast::<&data::ObjIndex>(func.inst_set(), func.dfg.inst(inst)) {
-        return Some(vec![*obj_index.object()]);
+        return Some(single_value_dep(*obj_index.object()));
     }
 
     if let Some(enum_proj) = downcast::<&data::EnumProj>(func.inst_set(), func.dfg.inst(inst)) {
-        return Some(vec![*enum_proj.object()]);
+        return Some(single_value_dep(*enum_proj.object()));
     }
 
     if let Some(enum_assert_ref) =
         downcast::<&data::EnumAssertVariantRef>(func.inst_set(), func.dfg.inst(inst))
     {
-        return Some(vec![*enum_assert_ref.object()]);
+        return Some(single_value_dep(*enum_assert_ref.object()));
     }
 
     if let Some(call) = downcast::<&control_flow::Call>(func.inst_set(), func.dfg.inst(inst)) {
-        return Some(call.args().iter().copied().collect());
+        let mut deps = ValueDeps::with_capacity(call.args().len());
+        deps.extend(call.args().iter().copied());
+        return Some(deps);
     }
 
-    downcast::<&control_flow::Phi>(func.inst_set(), func.dfg.inst(inst))
-        .map(|phi| phi.args().iter().map(|(arg, _)| *arg).collect())
+    downcast::<&control_flow::Phi>(func.inst_set(), func.dfg.inst(inst)).map(|phi| {
+        let mut deps = ValueDeps::with_capacity(phi.args().len());
+        deps.extend(phi.args().iter().map(|(arg, _)| *arg));
+        deps
+    })
+}
+
+fn single_value_dep(value: ValueId) -> ValueDeps {
+    let mut deps = ValueDeps::new();
+    deps.push(value);
+    deps
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1762,7 +1813,7 @@ fn map_projection_candidates_for_result(
         return Vec::new();
     }
     let result_ty = func.dfg.value_ty(result);
-    let mut mapped = Vec::new();
+    let mut mapped = Vec::with_capacity(projections.len().min(possible_roots[result].len()));
     for &projection in projections {
         let Some(mapped_projection) = map(projection) else {
             continue;
@@ -1948,7 +1999,7 @@ fn single_result_value(func: &Function, inst: InstId) -> Option<ValueId> {
 
 fn dfs_postorder(
     node: ValueId,
-    edges: &FxHashMap<ValueId, Vec<ValueId>>,
+    edges: &ValueGraph,
     visited: &mut FxHashSet<ValueId>,
     order: &mut Vec<ValueId>,
 ) {
@@ -1968,7 +2019,7 @@ fn dfs_postorder(
 fn assign_component(
     node: ValueId,
     component_id: usize,
-    reverse_edges: &FxHashMap<ValueId, Vec<ValueId>>,
+    reverse_edges: &ValueGraph,
     components: &mut FxHashMap<ValueId, usize>,
 ) {
     if components.insert(node, component_id).is_some() {
