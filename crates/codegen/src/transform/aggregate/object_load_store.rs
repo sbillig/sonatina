@@ -67,19 +67,23 @@ impl ObjectLoadStore {
 
         loop {
             func.rebuild_users();
-            let mut snapshot = ProvenanceSnapshot::new(func, object_effects);
-            let facts = AggregateObjectFacts::for_local_objects(
-                func,
-                local_object_args,
-                &mut self.layout_cache,
-                &mut snapshot,
-            );
-            let tracked = facts.tracked();
-            let may = facts.may();
-            let live_out_roots = self.collect_live_out_roots(tracked, func, local_object_args);
+            let mut iter_changed = false;
+            if has_object_dataflow_work(func) {
+                let mut snapshot = ProvenanceSnapshot::new(func, object_effects);
+                let facts = AggregateObjectFacts::for_local_objects(
+                    func,
+                    local_object_args,
+                    &mut self.layout_cache,
+                    &mut snapshot,
+                );
+                let tracked = facts.tracked();
+                let may = facts.may();
+                let live_out_roots = self.collect_live_out_roots(tracked, func, local_object_args);
 
-            let mut iter_changed = self.run_forward(func, tracked, may, object_effects);
-            iter_changed |= self.run_backward(func, tracked, may, &live_out_roots, object_effects);
+                iter_changed |= self.run_forward(func, tracked, may, object_effects);
+                iter_changed |=
+                    self.run_backward(func, tracked, may, &live_out_roots, object_effects);
+            }
 
             if iter_changed {
                 func.rebuild_users();
@@ -528,6 +532,20 @@ impl ObjectLoadStore {
 
         live_out_roots
     }
+}
+
+fn has_object_dataflow_work(func: &Function) -> bool {
+    func.layout.iter_block().any(|block| {
+        func.layout.iter_inst(block).any(|inst| {
+            let inst_data = func.dfg.inst(inst);
+            downcast::<&data::ObjLoad>(func.inst_set(), inst_data).is_some()
+                || downcast::<&data::ObjStore>(func.inst_set(), inst_data).is_some()
+                || downcast::<&data::EnumGetTag>(func.inst_set(), inst_data).is_some()
+                || downcast::<&data::EnumAssertVariantRef>(func.inst_set(), inst_data).is_some()
+                || downcast::<&data::EnumSetTag>(func.inst_set(), inst_data).is_some()
+                || downcast::<&data::EnumWriteVariant>(func.inst_set(), inst_data).is_some()
+        })
+    })
 }
 
 fn meet_forward(states: impl Iterator<Item = AvailableMap>) -> AvailableMap {
