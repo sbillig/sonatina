@@ -164,6 +164,37 @@ fn collect_combine_enum_facts(
     let mut snapshot = ProvenanceSnapshot::new(func, None);
     AggregateObjectFacts::for_all_objref_args(func, layout_cache, &mut snapshot)
 }
+fn has_plain_aggregate_combine_work(func: &Function) -> bool {
+    func.layout.iter_block().any(|block| {
+        func.layout.iter_inst(block).any(|inst| {
+            if !func.layout.is_inst_inserted(inst) {
+                return false;
+            }
+            let inst_data = func.dfg.inst(inst);
+            downcast::<&data::EnumTag>(func.inst_set(), inst_data).is_some()
+                || downcast::<&data::EnumIsVariant>(func.inst_set(), inst_data).is_some()
+                || downcast::<&data::EnumExtract>(func.inst_set(), inst_data).is_some()
+                || downcast::<&data::ExtractValue>(func.inst_set(), inst_data).is_some()
+                || downcast::<&data::InsertValue>(func.inst_set(), inst_data).is_some()
+                || downcast::<&control_flow::Phi>(func.inst_set(), inst_data).is_some()
+        })
+    })
+}
+fn has_enum_object_combine_work(func: &Function) -> bool {
+    func.layout.iter_block().any(|block| {
+        func.layout.iter_inst(block).any(|inst| {
+            if !func.layout.is_inst_inserted(inst) {
+                return false;
+            }
+            let inst_data = func.dfg.inst(inst);
+            downcast::<&data::EnumGetTag>(func.inst_set(), inst_data).is_some()
+                || downcast::<&data::EnumAssertVariantRef>(func.inst_set(), inst_data).is_some()
+                || downcast::<&data::EnumSetTag>(func.inst_set(), inst_data).is_some()
+                || downcast::<&data::EnumWriteVariant>(func.inst_set(), inst_data).is_some()
+                || downcast::<&data::EnumProj>(func.inst_set(), inst_data).is_some()
+        })
+    })
+}
 impl AggregateCombine {
     pub fn run(&mut self, func: &mut Function) -> bool {
         self.changed = false;
@@ -171,40 +202,64 @@ impl AggregateCombine {
         func.rebuild_users();
 
         loop {
+            let has_plain_work = has_plain_aggregate_combine_work(func);
+            let has_enum_object_work = has_enum_object_combine_work(func);
+            if !has_plain_work && !has_enum_object_work {
+                break;
+            }
+
             let mut iter_changed = false;
-            let definitely_non_undef = compute_definitely_non_undef_aggregates(func);
-            let enum_facts = collect_combine_enum_facts(func, &mut self.layout_cache);
-            let enum_aliases = EnumAliasContext {
-                tracked: enum_facts.tracked(),
-                may: enum_facts.may(),
-            };
-            let enum_entry_facts = compute_enum_object_entry_facts(func, enum_aliases);
+            let definitely_non_undef =
+                has_plain_work.then(|| compute_definitely_non_undef_aggregates(func));
+            let enum_context = has_enum_object_work.then(|| {
+                let enum_facts = collect_combine_enum_facts(func, &mut self.layout_cache);
+                let enum_aliases = EnumAliasContext {
+                    tracked: enum_facts.tracked(),
+                    may: enum_facts.may(),
+                };
+                let enum_entry_facts = compute_enum_object_entry_facts(func, enum_aliases);
+                (enum_facts, enum_entry_facts)
+            });
             let blocks: Vec<_> = func.layout.iter_block().collect();
             for block in blocks {
-                let mut enum_facts = enum_entry_facts[block].clone();
+                let mut enum_facts = enum_context
+                    .as_ref()
+                    .map(|(_, enum_entry_facts)| enum_entry_facts[block].clone());
                 let mut pending_enum_writes = PendingEnumWrites::default();
                 let insts: Vec<_> = func.layout.iter_inst(block).collect();
                 for inst in insts {
                     if !func.layout.is_inst_inserted(inst) {
                         continue;
                     }
-                    iter_changed |= self.try_rewrite_enum_object_inst(
-                        func,
-                        inst,
-                        enum_aliases,
-                        &mut enum_facts,
-                        &mut pending_enum_writes,
-                    );
+                    if let Some((enum_facts_source, _)) = enum_context.as_ref()
+                        && let Some(enum_facts) = enum_facts.as_mut()
+                    {
+                        let enum_aliases = EnumAliasContext {
+                            tracked: enum_facts_source.tracked(),
+                            may: enum_facts_source.may(),
+                        };
+                        iter_changed |= self.try_rewrite_enum_object_inst(
+                            func,
+                            inst,
+                            enum_aliases,
+                            enum_facts,
+                            &mut pending_enum_writes,
+                        );
+                    }
                     if !func.layout.is_inst_inserted(inst) {
                         continue;
                     }
-                    iter_changed |= self.try_rewrite_inst(func, inst, &definitely_non_undef);
+                    if let Some(definitely_non_undef) = &definitely_non_undef {
+                        iter_changed |= self.try_rewrite_inst(func, inst, definitely_non_undef);
+                    }
                 }
             }
             if iter_changed {
                 func.rebuild_users();
             }
-            iter_changed |= remove_dead_local_enum_writes(func, &mut self.layout_cache);
+            if has_enum_object_work {
+                iter_changed |= remove_dead_local_enum_writes(func, &mut self.layout_cache);
+            }
             if !iter_changed {
                 break;
             }
