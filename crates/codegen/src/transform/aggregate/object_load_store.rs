@@ -1,3 +1,5 @@
+use std::time::{Duration, Instant};
+
 use cranelift_entity::SecondaryMap;
 use rustc_hash::FxHashMap;
 use smallvec::SmallVec;
@@ -25,8 +27,87 @@ use super::{
     reconstruct::AggregateValueReconstructor,
     shape,
 };
+use crate::optim::pipeline::{duration_ms, emit_opt_stats, opt_stats_enabled};
 
 type AvailableMap = FxHashMap<ObjectSlice, ValueId>;
+
+#[derive(Default)]
+struct ObjectLoadStoreStats {
+    enabled: bool,
+    func_ref: Option<FuncRef>,
+    iterations: usize,
+    dataflow_iterations: usize,
+    changed_iterations: usize,
+    forward_solver_iterations: usize,
+    backward_solver_iterations: usize,
+    forward_changed: usize,
+    backward_changed: usize,
+    object_cleanup_changed: usize,
+    pure_cleanup_changed: usize,
+    rebuild_users_ms: Duration,
+    facts_ms: Duration,
+    cfg_ms: Duration,
+    forward_ms: Duration,
+    backward_ms: Duration,
+    object_cleanup_ms: Duration,
+    pure_cleanup_ms: Duration,
+}
+
+impl ObjectLoadStoreStats {
+    fn new(func_ref: Option<FuncRef>) -> Self {
+        Self {
+            enabled: opt_stats_enabled(),
+            func_ref,
+            ..Self::default()
+        }
+    }
+
+    fn start(&self) -> Option<Instant> {
+        self.enabled.then(Instant::now)
+    }
+
+    fn finish(self, func: &Function, changed: bool) {
+        if !self.enabled {
+            return;
+        }
+
+        let blocks = func.layout.iter_block().count();
+        let insts = func
+            .layout
+            .iter_block()
+            .map(|block| func.layout.iter_inst(block).count())
+            .sum::<usize>();
+        let values = func.dfg.value_ids().count();
+        emit_opt_stats(format!(
+            "sonatina_object_load_store_stats\tfunc_ref={}\tchanged={changed}\tblocks={blocks}\tinsts={insts}\tvalues={values}\titerations={}\tdataflow_iterations={}\tchanged_iterations={}\tforward_solver_iterations={}\tbackward_solver_iterations={}\tforward_changed={}\tbackward_changed={}\tobject_cleanup_changed={}\tpure_cleanup_changed={}\trebuild_users_ms={:.3}\tfacts_ms={:.3}\tcfg_ms={:.3}\tforward_ms={:.3}\tbackward_ms={:.3}\tobject_cleanup_ms={:.3}\tpure_cleanup_ms={:.3}",
+            self.func_ref
+                .map(|func_ref| format!("{func_ref:?}"))
+                .unwrap_or_else(|| "-".to_string()),
+            self.iterations,
+            self.dataflow_iterations,
+            self.changed_iterations,
+            self.forward_solver_iterations,
+            self.backward_solver_iterations,
+            self.forward_changed,
+            self.backward_changed,
+            self.object_cleanup_changed,
+            self.pure_cleanup_changed,
+            duration_ms(self.rebuild_users_ms),
+            duration_ms(self.facts_ms),
+            duration_ms(self.cfg_ms),
+            duration_ms(self.forward_ms),
+            duration_ms(self.backward_ms),
+            duration_ms(self.object_cleanup_ms),
+            duration_ms(self.pure_cleanup_ms),
+        ));
+    }
+}
+
+#[derive(Default)]
+struct ObjectDataflowResult {
+    changed: bool,
+    solver_iterations: usize,
+}
 
 struct ObjectDataflowCfg {
     cfg: ControlFlowGraph,
@@ -63,7 +144,7 @@ pub struct ObjectLoadStore {
 
 impl ObjectLoadStore {
     pub fn run(&mut self, func: &mut Function) -> bool {
-        self.run_with_module_facts(func, None, None)
+        self.run_with_module_facts(None, func, None, None)
     }
 
     // `local_object_args` must be computed before entering `func_store.modify(...)`.
@@ -74,22 +155,37 @@ impl ObjectLoadStore {
         local_object_args: &LocalObjectArgMap,
         object_effects: &ObjectEffectSummaryMap,
     ) -> bool {
-        self.run_with_module_facts(func, local_object_args.get(&func_ref), Some(object_effects))
+        self.run_with_module_facts(
+            Some(func_ref),
+            func,
+            local_object_args.get(&func_ref),
+            Some(object_effects),
+        )
     }
 
     fn run_with_module_facts(
         &mut self,
+        func_ref: Option<FuncRef>,
         func: &mut Function,
         local_object_args: Option<&FxHashMap<usize, LocalObjectArgInfo>>,
         object_effects: Option<&ObjectEffectSummaryMap>,
     ) -> bool {
         self.changed = false;
         self.layout_cache.clear();
+        let mut stats = ObjectLoadStoreStats::new(func_ref);
 
         loop {
+            stats.iterations += 1;
+            let rebuild_users_start = stats.start();
             func.rebuild_users();
+            if let Some(start) = rebuild_users_start {
+                stats.rebuild_users_ms += start.elapsed();
+            }
+
             let mut iter_changed = false;
             if has_object_dataflow_work(func) {
+                stats.dataflow_iterations += 1;
+                let facts_start = stats.start();
                 let mut snapshot = ProvenanceSnapshot::new(func, object_effects);
                 let facts = AggregateObjectFacts::for_local_objects(
                     func,
@@ -97,13 +193,31 @@ impl ObjectLoadStore {
                     &mut self.layout_cache,
                     &mut snapshot,
                 );
+                if let Some(start) = facts_start {
+                    stats.facts_ms += start.elapsed();
+                }
+
                 let tracked = facts.tracked();
                 let may = facts.may();
                 let live_out_roots = self.collect_live_out_roots(tracked, func, local_object_args);
-                let dataflow_cfg = ObjectDataflowCfg::compute(func);
 
-                iter_changed |= self.run_forward(func, &dataflow_cfg, tracked, may, object_effects);
-                iter_changed |= self.run_backward(
+                let cfg_start = stats.start();
+                let dataflow_cfg = ObjectDataflowCfg::compute(func);
+                if let Some(start) = cfg_start {
+                    stats.cfg_ms += start.elapsed();
+                }
+
+                let forward_start = stats.start();
+                let forward = self.run_forward(func, &dataflow_cfg, tracked, may, object_effects);
+                if let Some(start) = forward_start {
+                    stats.forward_ms += start.elapsed();
+                }
+                stats.forward_solver_iterations += forward.solver_iterations;
+                stats.forward_changed += usize::from(forward.changed);
+                iter_changed |= forward.changed;
+
+                let backward_start = stats.start();
+                let backward = self.run_backward(
                     func,
                     &dataflow_cfg,
                     tracked,
@@ -111,20 +225,52 @@ impl ObjectLoadStore {
                     &live_out_roots,
                     object_effects,
                 );
+                if let Some(start) = backward_start {
+                    stats.backward_ms += start.elapsed();
+                }
+                stats.backward_solver_iterations += backward.solver_iterations;
+                stats.backward_changed += usize::from(backward.changed);
+                iter_changed |= backward.changed;
             }
 
             if iter_changed {
+                let rebuild_users_start = stats.start();
                 func.rebuild_users();
+                if let Some(start) = rebuild_users_start {
+                    stats.rebuild_users_ms += start.elapsed();
+                }
             }
-            iter_changed |= self.cleanup_dead_object_artifacts(func);
+
+            let object_cleanup_start = stats.start();
+            let object_cleanup_changed = self.cleanup_dead_object_artifacts(func);
+            if let Some(start) = object_cleanup_start {
+                stats.object_cleanup_ms += start.elapsed();
+            }
+            stats.object_cleanup_changed += usize::from(object_cleanup_changed);
+            iter_changed |= object_cleanup_changed;
+
             if iter_changed {
+                let rebuild_users_start = stats.start();
                 func.rebuild_users();
+                if let Some(start) = rebuild_users_start {
+                    stats.rebuild_users_ms += start.elapsed();
+                }
             }
-            iter_changed |= self.dead_pure_cleanup.run_with_current_users(func);
+
+            let pure_cleanup_start = stats.start();
+            let pure_cleanup_changed = self.dead_pure_cleanup.run_with_current_users(func);
+            if let Some(start) = pure_cleanup_start {
+                stats.pure_cleanup_ms += start.elapsed();
+            }
+            stats.pure_cleanup_changed += usize::from(pure_cleanup_changed);
+            iter_changed |= pure_cleanup_changed;
+
             self.changed |= iter_changed;
             if !iter_changed {
+                stats.finish(func, self.changed);
                 return self.changed;
             }
+            stats.changed_iterations += 1;
         }
     }
 
@@ -135,13 +281,15 @@ impl ObjectLoadStore {
         tracked: &SecondaryMap<ValueId, Option<TrackedObject>>,
         provenance: MayProvenance<'_>,
         object_effects: Option<&ObjectEffectSummaryMap>,
-    ) -> bool {
+    ) -> ObjectDataflowResult {
         let mut in_states = SecondaryMap::<BlockId, AvailableMap>::new();
         let mut out_states = SecondaryMap::<BlockId, AvailableMap>::new();
         let mut dataflow_changed = true;
         let mut changed = false;
+        let mut solver_iterations = 0;
 
         while dataflow_changed {
+            solver_iterations += 1;
             dataflow_changed = false;
             for &block in dataflow_cfg.post_order.iter().rev() {
                 if !dataflow_cfg.reachable[block] {
@@ -183,7 +331,10 @@ impl ObjectLoadStore {
             }
         }
 
-        changed
+        ObjectDataflowResult {
+            changed,
+            solver_iterations,
+        }
     }
 
     fn replacement_for_load(
@@ -399,13 +550,15 @@ impl ObjectLoadStore {
         provenance: MayProvenance<'_>,
         live_out_roots: &FxHashMap<ValueId, usize>,
         object_effects: Option<&ObjectEffectSummaryMap>,
-    ) -> bool {
+    ) -> ObjectDataflowResult {
         let mut in_states = SecondaryMap::<BlockId, LiveLeafMap>::new();
         let mut out_states = SecondaryMap::<BlockId, LiveLeafMap>::new();
         let mut changed = false;
 
         let mut dataflow_changed = true;
+        let mut solver_iterations = 0;
         while dataflow_changed {
+            solver_iterations += 1;
             dataflow_changed = false;
             for &block in &dataflow_cfg.post_order {
                 if !dataflow_cfg.reachable[block] {
@@ -483,7 +636,10 @@ impl ObjectLoadStore {
             }
         }
 
-        changed
+        ObjectDataflowResult {
+            changed,
+            solver_iterations,
+        }
     }
 
     fn cleanup_dead_object_artifacts(&mut self, func: &mut Function) -> bool {

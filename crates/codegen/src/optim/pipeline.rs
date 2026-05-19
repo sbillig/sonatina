@@ -636,7 +636,11 @@ fn opt_stats_sink() -> Option<&'static OptStatsSink> {
         .as_ref()
 }
 
-fn emit_opt_stats(line: String) {
+pub(crate) fn opt_stats_enabled() -> bool {
+    opt_stats_sink().is_some()
+}
+
+pub(crate) fn emit_opt_stats(line: String) {
     match opt_stats_sink() {
         Some(OptStatsSink::Stderr) => eprintln!("{line}"),
         Some(OptStatsSink::File(path)) => {
@@ -648,7 +652,7 @@ fn emit_opt_stats(line: String) {
     }
 }
 
-fn duration_ms(duration: Duration) -> f64 {
+pub(crate) fn duration_ms(duration: Duration) -> f64 {
     duration.as_secs_f64() * 1000.0
 }
 
