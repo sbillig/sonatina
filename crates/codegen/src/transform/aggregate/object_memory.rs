@@ -174,7 +174,7 @@ impl ObjectMemoryAnalysis {
     ) {
         let tracked = facts.tracked();
         let may = facts.may();
-        let relevant_slices = collect_relevant_slices(func, tracked);
+        let relevant_slices = collect_relevant_slices(func, tracked, self.promote_loaded_values);
         if relevant_slices.is_empty() {
             return;
         }
@@ -334,12 +334,15 @@ impl ObjectMemoryAnalysis {
 fn collect_relevant_slices(
     func: &Function,
     tracked: &SecondaryMap<ValueId, Option<TrackedObject>>,
+    include_root_slices: bool,
 ) -> FxHashMap<ValueId, Vec<ObjectSlice>> {
     let mut relevant = FxHashMap::<ValueId, FxHashSet<ObjectSlice>>::default();
 
-    for value in func.dfg.value_ids() {
-        if let Some(slice) = whole_root_slice_for_value(tracked, value) {
-            relevant.entry(slice.root).or_default().insert(slice);
+    if include_root_slices {
+        for value in func.dfg.value_ids() {
+            if let Some(slice) = whole_root_slice_for_value(tracked, value) {
+                relevant.entry(slice.root).or_default().insert(slice);
+            }
         }
     }
 
