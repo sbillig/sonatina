@@ -607,7 +607,7 @@ pub(crate) fn run_function_pass_round(
         if result.changed && result.invalidates_func_behavior {
             *func_behavior_dirty = true;
         }
-        if result.changed && result.invalidates_object_facts {
+        if result.object_facts_dirty {
             round_facts.clear();
         }
     }
@@ -794,6 +794,12 @@ fn has_object_memory_analysis_work(func: &Function) -> bool {
     })
 }
 
+fn function_may_affect_object_facts(func: &Function) -> bool {
+    has_aggregate_scalarize_work(func)
+        || has_object_load_store_work(func)
+        || has_object_memory_analysis_work(func)
+}
+
 fn inst_has_aggregate_value(func: &Function, inst: sonatina_ir::InstId) -> bool {
     let has_aggregate_result = func
         .dfg
@@ -826,6 +832,7 @@ struct ModulePassStats {
     funcs_seen: AtomicUsize,
     funcs_skipped: AtomicUsize,
     funcs_changed: AtomicUsize,
+    funcs_object_dirty: AtomicUsize,
 }
 
 impl ModulePassStats {
@@ -836,6 +843,9 @@ impl ModulePassStats {
         }
         if result.changed {
             self.funcs_changed.fetch_add(1, Ordering::Relaxed);
+        }
+        if result.object_facts_dirty {
+            self.funcs_object_dirty.fetch_add(1, Ordering::Relaxed);
         }
     }
 }
@@ -859,6 +869,7 @@ struct PassResult {
     skipped: bool,
     invalidates_func_behavior: bool,
     invalidates_object_facts: bool,
+    object_facts_dirty: bool,
 }
 
 impl PassResult {
@@ -868,6 +879,7 @@ impl PassResult {
             skipped: false,
             invalidates_func_behavior: pass.invalidates_func_behavior(),
             invalidates_object_facts: pass.invalidates_object_facts(),
+            object_facts_dirty: changed && pass.invalidates_object_facts(),
         }
     }
 
@@ -877,6 +889,17 @@ impl PassResult {
             skipped: true,
             invalidates_func_behavior: pass.invalidates_func_behavior(),
             invalidates_object_facts: pass.invalidates_object_facts(),
+            object_facts_dirty: false,
+        }
+    }
+
+    fn module(pass: Pass, changed: bool, object_facts_dirty: bool) -> Self {
+        Self {
+            changed,
+            skipped: false,
+            invalidates_func_behavior: pass.invalidates_func_behavior(),
+            invalidates_object_facts: pass.invalidates_object_facts(),
+            object_facts_dirty,
         }
     }
 }
@@ -919,6 +942,7 @@ fn run_module_pass(
         .local_object_args
         .or(round_facts.local_object_args.as_ref());
     let changed = AtomicBool::new(false);
+    let object_facts_dirty = AtomicBool::new(false);
     let stats = ModulePassStats::default();
     if let Some(funcs) = overrides.funcs {
         funcs.par_iter().copied().for_each(|func_ref| {
@@ -929,7 +953,9 @@ fn run_module_pass(
                 )
                 .entered();
                 let mut ctx = PassContext::default();
-                let result = run_pass(
+                let object_relevant_before =
+                    pass.invalidates_object_facts() && function_may_affect_object_facts(func);
+                let mut result = run_pass(
                     pass,
                     Some(func_ref),
                     func,
@@ -937,9 +963,15 @@ fn run_module_pass(
                     local_object_args,
                     object_effects,
                 );
+                result.object_facts_dirty = result.changed
+                    && pass.invalidates_object_facts()
+                    && (object_relevant_before || function_may_affect_object_facts(func));
                 stats.record(result);
                 if result.changed {
                     changed.store(true, Ordering::Relaxed);
+                }
+                if result.object_facts_dirty {
+                    object_facts_dirty.store(true, Ordering::Relaxed);
                 }
             });
         });
@@ -951,7 +983,9 @@ fn run_module_pass(
             )
             .entered();
             let mut ctx = PassContext::default();
-            let result = run_pass(
+            let object_relevant_before =
+                pass.invalidates_object_facts() && function_may_affect_object_facts(func);
+            let mut result = run_pass(
                 pass,
                 Some(func_ref),
                 func,
@@ -959,22 +993,34 @@ fn run_module_pass(
                 local_object_args,
                 object_effects,
             );
+            result.object_facts_dirty = result.changed
+                && pass.invalidates_object_facts()
+                && (object_relevant_before || function_may_affect_object_facts(func));
             stats.record(result);
             if result.changed {
                 changed.store(true, Ordering::Relaxed);
             }
+            if result.object_facts_dirty {
+                object_facts_dirty.store(true, Ordering::Relaxed);
+            }
         });
     }
-    let result = PassResult::new(pass, changed.load(Ordering::Relaxed));
+    let result = PassResult::module(
+        pass,
+        changed.load(Ordering::Relaxed),
+        object_facts_dirty.load(Ordering::Relaxed),
+    );
     if let Some(start) = pass_start {
         emit_opt_stats(format!(
-            "sonatina_opt_stats\tpass={}\tms={:.3}\tfuncs={}\tskipped={}\tchanged_funcs={}\tchanged={}\tobject_effects_ms={}\tlocal_object_args_ms={}",
+            "sonatina_opt_stats\tpass={}\tms={:.3}\tfuncs={}\tskipped={}\tchanged_funcs={}\tobject_dirty_funcs={}\tchanged={}\tobject_facts_dirty={}\tobject_effects_ms={}\tlocal_object_args_ms={}",
             pass.as_str(),
             duration_ms(start.elapsed()),
             stats.funcs_seen.load(Ordering::Relaxed),
             stats.funcs_skipped.load(Ordering::Relaxed),
             stats.funcs_changed.load(Ordering::Relaxed),
+            stats.funcs_object_dirty.load(Ordering::Relaxed),
             result.changed,
+            result.object_facts_dirty,
             object_effects_ms
                 .map(|ms| format!("{ms:.3}"))
                 .unwrap_or_else(|| "-".to_string()),
@@ -1404,6 +1450,70 @@ mod tests {
                 pass.as_str()
             );
         }
+    }
+
+    #[test]
+    fn scalar_only_changes_do_not_dirty_object_facts() {
+        let source = r#"
+target = "evm-ethereum-london"
+
+func private %entry() -> i32 {
+    block0:
+        br 1.i1 block1 block2;
+
+    block1:
+        return 1.i32;
+
+    block2:
+        return 2.i32;
+}
+"#;
+
+        let module = parse_module(source).expect("parse should succeed").module;
+        let mut round_facts = RoundFacts::default();
+        let result = run_module_pass(
+            Pass::Sccp,
+            &module,
+            FuncPassOverrides::default(),
+            &mut round_facts,
+        );
+
+        assert!(result.changed);
+        assert!(result.invalidates_object_facts);
+        assert!(!result.object_facts_dirty);
+    }
+
+    #[test]
+    fn object_relevant_changes_dirty_object_facts() {
+        let source = r#"
+target = "evm-ethereum-london"
+
+func private %entry() -> i256 {
+    block0:
+        v0.objref<i256> = obj.alloc i256;
+        br 1.i1 block1 block2;
+
+    block1:
+        obj.store v0 1.i256;
+        return 1.i256;
+
+    block2:
+        return 2.i256;
+}
+"#;
+
+        let module = parse_module(source).expect("parse should succeed").module;
+        let mut round_facts = RoundFacts::default();
+        let result = run_module_pass(
+            Pass::Sccp,
+            &module,
+            FuncPassOverrides::default(),
+            &mut round_facts,
+        );
+
+        assert!(result.changed);
+        assert!(result.invalidates_object_facts);
+        assert!(result.object_facts_dirty);
     }
 
     #[test]
