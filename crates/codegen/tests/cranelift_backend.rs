@@ -14,6 +14,7 @@ use sonatina_ir::{
     inst::{arith, cast, cmp, control_flow, data, logic},
     isa::{Isa, native::Native},
     module::ModuleCtx,
+    types::{EnumReprHint, EnumVariantRef, VariantData},
 };
 use sonatina_triple::{Architecture, OperatingSystem, TargetTriple, Vendor};
 
@@ -1000,6 +1001,90 @@ fn cranelift_through_generic_compile_pipeline() {
 
     assert_eq!(f(42), 42);
     assert_eq!(f(-1), -1);
+}
+
+#[test]
+fn cranelift_lowers_enums_and_branch_tables_before_translation() {
+    let isa = native_isa();
+    let is = isa.inst_set();
+    let mb = native_module_builder();
+    let option_ty = mb.declare_enum_type(
+        "OptionI64",
+        &[
+            VariantData {
+                name: "None".to_string(),
+                explicit_discriminant: Some(0),
+                fields: vec![],
+            },
+            VariantData {
+                name: "Some".to_string(),
+                explicit_discriminant: Some(1),
+                fields: vec![],
+            },
+        ],
+        EnumReprHint::Default,
+    );
+    let Type::Compound(option_enum_ty) = option_ty else {
+        panic!("enum type must be compound");
+    };
+    let option_ref_ty = mb.objref_type(option_ty);
+    let none_variant = EnumVariantRef::new(option_enum_ty, 0);
+
+    let sig = Signature::new_single("enum_branch", Linkage::Public, &[], Type::I64);
+    let func_ref = mb.declare_function(sig).unwrap();
+
+    let mut fb = mb.func_builder::<InstInserter>(func_ref);
+    let entry = fb.append_block();
+    let some_block = fb.append_block();
+    let none_block = fb.append_block();
+    let default_block = fb.append_block();
+    fb.switch_to_block(entry);
+    let option = fb.insert_inst(data::ObjAlloc::new(is, option_ty), option_ref_ty);
+    fb.insert_inst_no_result(data::EnumSetTag::new(is, option, none_variant));
+    let tag = fb.insert_inst(
+        data::EnumGetTag::new(is, option),
+        Type::EnumTag(option_enum_ty),
+    );
+    let none_case = fb.make_imm_value(Immediate::EnumTag {
+        enum_ty: option_enum_ty,
+        value: I256::zero(),
+    });
+    let some_case = fb.make_imm_value(Immediate::EnumTag {
+        enum_ty: option_enum_ty,
+        value: I256::from(1),
+    });
+    fb.insert_inst_no_result(control_flow::BrTable::new(
+        is,
+        tag,
+        Some(default_block),
+        vec![(some_case, some_block), (none_case, none_block)],
+    ));
+
+    fb.switch_to_block(some_block);
+    let some_value = fb.make_imm_value(11i64);
+    fb.insert_inst_no_result(control_flow::Return::new_single(is, some_value));
+    fb.switch_to_block(none_block);
+    let none_value = fb.make_imm_value(22i64);
+    fb.insert_inst_no_result(control_flow::Return::new_single(is, none_value));
+    fb.switch_to_block(default_block);
+    let default_value = fb.make_imm_value(33i64);
+    fb.insert_inst_no_result(control_flow::Return::new_single(is, default_value));
+    fb.seal_all();
+    fb.finish();
+
+    let module = mb.build();
+    let artifact = CraneliftBackend::new()
+        .compile_module(&module)
+        .expect("JIT compilation failed");
+    CraneliftBackend::new()
+        .compile_module_to_object(&module)
+        .expect("object compilation failed");
+
+    let f: fn() -> i64 = unsafe {
+        let ptr = artifact.get_func_ptr::<fn() -> i64>("enum_branch").unwrap();
+        std::mem::transmute(ptr)
+    };
+    assert_eq!(f(), 22);
 }
 
 #[test]

@@ -15,7 +15,7 @@ use cranelift_object::{ObjectBuilder, ObjectModule};
 use sonatina_ir::Module;
 use sonatina_triple::{Architecture, OperatingSystem, TargetTriple, Vendor};
 
-use crate::backend::Backend;
+use crate::{backend::Backend, transform::aggregate::EnumLowerToProduct};
 
 pub use sp1::Sp1ElfArtifact;
 
@@ -198,6 +198,8 @@ impl CraneliftBackend {
     ) -> Result<NativeObjectArtifact, Vec<CraneliftError>> {
         self.ensure_supported_object_target(module)
             .map_err(|e| vec![e])?;
+        let mut module = module.clone_for_funcs(&module.funcs());
+        legalize_module(&mut module);
 
         let isa = self
             .build_object_isa(module.ctx.triple)
@@ -207,7 +209,7 @@ impl CraneliftBackend {
                 .map_err(|e| vec![CraneliftError::Compilation(e.to_string())])?;
         let mut object = ObjectModule::new(builder);
 
-        let func_map = translate::translate_module(module, &mut object)
+        let func_map = translate::translate_module(&module, &mut object)
             .map_err(|e| vec![CraneliftError::Translation(e)])?;
         let product = object.finish();
         let bytes = product
@@ -216,6 +218,10 @@ impl CraneliftBackend {
 
         Ok(NativeObjectArtifact { bytes, func_map })
     }
+}
+
+fn legalize_module(module: &mut Module) {
+    EnumLowerToProduct.run(module);
 }
 
 fn is_sp1_target(triple: TargetTriple) -> bool {
@@ -257,6 +263,8 @@ impl Backend for CraneliftBackend {
     fn compile_module(&self, module: &Module) -> Result<Self::Artifact, Vec<Self::Error>> {
         self.ensure_supported_jit_target(module)
             .map_err(|e| vec![e])?;
+        let mut module = module.clone_for_funcs(&module.funcs());
+        legalize_module(&mut module);
 
         let isa = self.build_native_isa(false).map_err(|e| vec![e])?;
         let mut builder = JITBuilder::with_isa(isa, cranelift_module::default_libcall_names());
@@ -273,7 +281,7 @@ impl Backend for CraneliftBackend {
 
         let mut jit = JITModule::new(builder);
 
-        let func_map = translate::translate_module(module, &mut jit)
+        let func_map = translate::translate_module(&module, &mut jit)
             .map_err(|e| vec![CraneliftError::Translation(e)])?;
 
         jit.finalize_definitions()

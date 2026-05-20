@@ -616,6 +616,43 @@ fn translate_function(
                 let nz_args = collect_phi_args_for_block(function, *br.nz_dest(), block, inst_set, &value_map, &mut builder)?;
                 let z_args = collect_phi_args_for_block(function, *br.z_dest(), block, inst_set, &value_map, &mut builder)?;
                 builder.ins().brif(cond, nz_block, &nz_args, z_block, &z_args);
+            } else if let Some(br_table) = <&sonatina_ir::inst::control_flow::BrTable as sonatina_ir::InstDowncast>::downcast(inst_set, inst_data) {
+                let scrutinee = resolve_scalar_value(
+                    module,
+                    function,
+                    *br_table.scrutinee(),
+                    &value_map,
+                    &mut builder,
+                )?;
+                for (idx, &(case, dest)) in br_table.table().iter().enumerate() {
+                    let case = resolve_scalar_value(module, function, case, &value_map, &mut builder)?;
+                    let cond = builder.ins().icmp(IntCC::Equal, scrutinee, case);
+                    let dest_block = block_map[&dest];
+                    let dest_args =
+                        collect_phi_args_for_block(function, dest, block, inst_set, &value_map, &mut builder)?;
+                    let next_block = builder.create_block();
+                    builder.ins().brif(cond, dest_block, &dest_args, next_block, &[]);
+                    builder.switch_to_block(next_block);
+
+                    if idx + 1 == br_table.table().len() {
+                        if let Some(default) = br_table.default() {
+                            let default_block = block_map[default];
+                            let default_args = collect_phi_args_for_block(
+                                function,
+                                *default,
+                                block,
+                                inst_set,
+                                &value_map,
+                                &mut builder,
+                            )?;
+                            builder.ins().jump(default_block, &default_args);
+                        } else {
+                            builder
+                                .ins()
+                                .trap(cranelift_codegen::ir::TrapCode::user(3).unwrap());
+                        }
+                    }
+                }
             } else if let Some(ret) = <&sonatina_ir::inst::control_flow::Return as sonatina_ir::InstDowncast>::downcast(inst_set, inst_data) {
                 if let Some(sret) = sret_ptr {
                     for &val_id in ret.args().as_slice() {
