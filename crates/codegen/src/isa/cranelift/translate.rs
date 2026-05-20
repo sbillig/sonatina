@@ -12,6 +12,7 @@ use sonatina_ir::{
     Type, Value, ValueId,
     ir_writer::{FuncWriteCtx, InstStatement, IrWrite},
     module::{FuncRef, ModuleCtx},
+    types::CompoundType,
 };
 use sonatina_triple::{Architecture, OperatingSystem, Vendor};
 
@@ -31,9 +32,9 @@ pub(super) fn translate_module(
 
     for &func_ref in &funcs {
         let (name, sig) = module.ctx.func_sig(func_ref, |sig| -> Result<_, String> {
-            validate_cranelift_signature(sig)?;
+            validate_cranelift_signature(&module.ctx, sig)?;
             let name = sig.name().to_string();
-            let clif_sig = sonatina_sig_to_clif(sig, clif_module);
+            let clif_sig = sonatina_sig_to_clif(&module.ctx, sig, clif_module);
             Ok((name, clif_sig))
         })?;
 
@@ -77,16 +78,25 @@ pub(super) fn translate_module(
     Ok(func_map)
 }
 
-fn uses_indirect_return_abi(ty: Type) -> bool {
-    ty == Type::I256 || matches!(ty, Type::Compound(_))
+fn uses_indirect_return_abi(ctx: &ModuleCtx, ty: Type) -> bool {
+    ty == Type::I256
+        || matches!(
+            ty.resolve_compound(ctx),
+            Some(CompoundType::Array { .. } | CompoundType::Struct(_) | CompoundType::Enum(_))
+        )
 }
 
-fn returns_indirect(sig: &Signature) -> bool {
-    sig.ret_tys().len() == 1 && uses_indirect_return_abi(sig.ret_tys()[0])
+fn returns_indirect(ctx: &ModuleCtx, sig: &Signature) -> bool {
+    sig.ret_tys().len() == 1 && uses_indirect_return_abi(ctx, sig.ret_tys()[0])
 }
 
-fn validate_cranelift_signature(sig: &Signature) -> Result<(), String> {
-    if sig.ret_tys().len() > 1 && sig.ret_tys().iter().any(|ty| uses_indirect_return_abi(*ty)) {
+fn validate_cranelift_signature(ctx: &ModuleCtx, sig: &Signature) -> Result<(), String> {
+    if sig.ret_tys().len() > 1
+        && sig
+            .ret_tys()
+            .iter()
+            .any(|ty| uses_indirect_return_abi(ctx, *ty))
+    {
         return Err(format!(
             "Cranelift backend does not support multi-return signatures containing indirect return types: {}",
             sig.name()
@@ -95,12 +105,16 @@ fn validate_cranelift_signature(sig: &Signature) -> Result<(), String> {
     Ok(())
 }
 
-fn sonatina_sig_to_clif(sig: &Signature, clif_module: &impl ClifModule) -> clif::Signature {
+fn sonatina_sig_to_clif(
+    ctx: &ModuleCtx,
+    sig: &Signature,
+    clif_module: &impl ClifModule,
+) -> clif::Signature {
     let mut clif_sig = clif_module.make_signature();
 
     // Values represented as pointers to owned storage return through a
     // caller-allocated buffer so the result outlives the callee frame.
-    if returns_indirect(sig) {
+    if returns_indirect(ctx, sig) {
         clif_sig.params.push(clif::AbiParam::new(clif::types::I64));
     }
 
@@ -110,7 +124,7 @@ fn sonatina_sig_to_clif(sig: &Signature, clif_module: &impl ClifModule) -> clif:
         }
     }
 
-    if returns_indirect(sig) {
+    if returns_indirect(ctx, sig) {
         // Indirect return via hidden sret pointer: no Cranelift return values.
     } else {
         for &ret_ty in sig.ret_tys() {
@@ -153,8 +167,8 @@ fn translate_function(
 ) -> Result<(), String> {
     let mut ctx = clif_module.make_context();
     let sig = module.ctx.func_sig(func_ref, |sig| -> Result<_, String> {
-        validate_cranelift_signature(sig)?;
-        Ok(sonatina_sig_to_clif(sig, clif_module))
+        validate_cranelift_signature(&module.ctx, sig)?;
+        Ok(sonatina_sig_to_clif(&module.ctx, sig, clif_module))
     })?;
     ctx.func.signature = sig;
 
@@ -173,7 +187,9 @@ fn translate_function(
         block_map.insert(block, clif_block);
     }
 
-    let has_sret = module.ctx.func_sig(func_ref, returns_indirect);
+    let has_sret = module
+        .ctx
+        .func_sig(func_ref, |sig| returns_indirect(&module.ctx, sig));
 
     let entry = function.layout.entry_block().ok_or("no entry block")?;
     let clif_entry = block_map[&entry];
@@ -649,7 +665,7 @@ fn translate_function(
                     }
                     let ir_results = function.dfg.inst_results(inst_id);
                     let callee_returns_indirect = ir_results.len() == 1
-                        && uses_indirect_return_abi(function.dfg.value_ty(ir_results[0]));
+                        && uses_indirect_return_abi(&module.ctx, function.dfg.value_ty(ir_results[0]));
 
                     let mut call_args: Vec<clif::Value> = Vec::new();
                     let sret_slot = if callee_returns_indirect {

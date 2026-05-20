@@ -447,6 +447,60 @@ fn cranelift_native_casts_round_trip_pointer_values() {
 }
 
 #[test]
+fn cranelift_native_directly_returns_pointer_like_compounds() {
+    let isa = native_isa();
+    let is = isa.inst_set();
+    let mb = native_module_builder();
+    let objref_ty = mb.objref_type(Type::I64);
+
+    let make_sig = Signature::new_single("make_ref", Linkage::Private, &[], objref_ty);
+    let make_ref = mb.declare_function(make_sig).unwrap();
+    let caller_sig = Signature::new_single("load_returned_ref", Linkage::Public, &[], Type::I64);
+    let caller = mb.declare_function(caller_sig).unwrap();
+
+    {
+        let mut fb = mb.func_builder::<InstInserter>(make_ref);
+        let entry = fb.append_block();
+        fb.switch_to_block(entry);
+
+        let slot = fb.insert_inst(data::ObjAlloc::new(is, Type::I64), objref_ty);
+        let value = fb.make_imm_value(123i64);
+        fb.insert_inst_no_result(data::ObjStore::new(is, slot, value));
+        fb.insert_inst_no_result(control_flow::Return::new_single(is, slot));
+        fb.seal_all();
+        fb.finish();
+    }
+
+    {
+        let mut fb = mb.func_builder::<InstInserter>(caller);
+        let entry = fb.append_block();
+        fb.switch_to_block(entry);
+
+        let slot = fb.insert_inst(
+            control_flow::Call::new(is, make_ref, smallvec::smallvec![]),
+            objref_ty,
+        );
+        let loaded = fb.insert_inst(data::ObjLoad::new(is, slot), Type::I64);
+        fb.insert_inst_no_result(control_flow::Return::new_single(is, loaded));
+        fb.seal_all();
+        fb.finish();
+    }
+
+    let module = mb.build();
+    let backend = CraneliftBackend::new();
+    let artifact = backend.compile_module(&module).expect("compilation failed");
+
+    let f: fn() -> i64 = unsafe {
+        let ptr = artifact
+            .get_func_ptr::<fn() -> i64>("load_returned_ref")
+            .unwrap();
+        std::mem::transmute(ptr)
+    };
+
+    assert_eq!(f(), 123);
+}
+
+#[test]
 fn cranelift_native_i256_address_casts_and_memory_round_trip() {
     let isa = native_isa();
     let is = isa.inst_set();
