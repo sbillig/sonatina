@@ -21,7 +21,7 @@ evm:
 
 --------------- DEBUG ---------------
 
-// func private %call_target(v83.i256, v1.i256, v2.i256) -> i256
+// func private %call_target(v105.i256, v1.i256, v2.i256) -> i256
 call_target:
   block0:
     JUMPDEST
@@ -29,13 +29,13 @@ call_target:
     PUSH32 0xcfae321700000000000000000000000000000000000000000000000000000000 (93936536753403694139279681939632466665208136910392087765254240489517648707584)  // mstore v26 -21855552483912501284291303069055441188061847755248476274203343518395480932352.i256 i256;
     DUP2
     MSTORE
-    PUSH1 0x4 (4)  // v86.i256 = add v26 4.i256;
+    PUSH1 0x4 (4)  // v108.i256 = add v26 4.i256;
     DUP2
     ADD
-    DUP2  // v87.i1 = lt v86 v26;
+    DUP2  // v109.i1 = lt v108 v26;
     SWAP1
     LT
-    ISZERO  // br v87 block7 block9;
+    ISZERO  // br v109 block7 block9;
     PUSH1 block9
     JUMPI
   block7:
@@ -45,7 +45,7 @@ call_target:
     REVERT
   block9:
     JUMPDEST
-    PUSH0  // v15.i256 = evm_call v1 v83 v2 v26 4.i256 0.i256 0.i256;
+    PUSH0  // v15.i256 = evm_call v1 v105 v2 v26 4.i256 0.i256 0.i256;
     SWAP4
     PUSH1 0x4 (4)
     SWAP3
@@ -59,21 +59,21 @@ call_target:
     DUP3
     RETURNDATACOPY
     SWAP2  // v34.i1 = is_zero v15;
-    PUSH1 block11  // br v34 block1 block11;
+    PUSH1 block12  // br v34 block1 block12;
     JUMPI
   block1:
     SWAP1  // evm_revert v18 v16;
     REVERT
-  block11:
+  block12:
     JUMPDEST
-    PUSH1 0x20 (32)  // v51.i1 = lt v16 32.i256;
+    PUSH1 0x20 (32)  // v57.i1 = lt v16 32.i256;
     SWAP1
     LT
-    PUSH1 block7  // br v51 block12 block13;
+    PUSH1 block7  // br v57 block13 block23;
     JUMPI
-  block13:
-    MLOAD  // v75.i256 = mload v18 i256;
-    SWAP1  // return v75;
+  block23:
+    MLOAD  // v81.i256 = mload v18 i256;
+    SWAP1  // return v81;
     JUMP
 
 // func public %entry()

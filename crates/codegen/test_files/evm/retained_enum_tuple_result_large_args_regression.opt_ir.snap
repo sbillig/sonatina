@@ -66,6 +66,17 @@ func private %check(v0.@Big, v1.[i256; 5], v2.[i256; 5]) -> @Ret {
 
 func private %run() {
     block0:
+        v17.objref<[i256; 5]> = obj.alloc [i256; 5];
+        v18.objref<i256> = obj.index v17 0.i256;
+        obj.store v18 0.i256;
+        v19.objref<i256> = obj.index v17 1.i256;
+        obj.store v19 0.i256;
+        v20.objref<i256> = obj.index v17 2.i256;
+        obj.store v20 0.i256;
+        v21.objref<i256> = obj.index v17 3.i256;
+        obj.store v21 0.i256;
+        v22.objref<i256> = obj.index v17 4.i256;
+        obj.store v22 0.i256;
         v24.objref<@Big> = obj.alloc @Big;
         v25.objref<i1> = obj.proj v24 0.i256;
         obj.store v25 1.i1;

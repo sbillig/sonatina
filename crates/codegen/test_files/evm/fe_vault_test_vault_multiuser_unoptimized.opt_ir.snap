@@ -301,6 +301,8 @@ func private %__Vault_runtime() {
         obj.store v27 0.i256;
         v28.objref<i256> = obj.proj v26 1.i256;
         obj.store v28 4.i256;
+        v30.objref<i256> = obj.proj v25 1.i256;
+        obj.store v30 4.i256;
         br_table v2 block1 (1.i32 block2) (2.i32 block3) (3.i32 block4) (4.i32 block5) (5.i32 block6) (6.i32 block7);
 
     block1:
@@ -360,33 +362,35 @@ func private %__VaultUser_init() {
 func private %__VaultUser_runtime() {
     block0:
         v0.i32 = call %runtime_selector__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f__e4e3f8d20b3805a2;
-        v34.objref<@__fe_obj_SolDecoder_3> = obj.alloc @__fe_obj_SolDecoder_3;
-        v35.objref<@__fe_obj_Cursor_2> = obj.proj v34 0.i256;
-        v36.objref<i256> = obj.proj v35 0.i256;
-        obj.store v36 0.i256;
-        v37.objref<i256> = obj.proj v35 1.i256;
-        obj.store v37 4.i256;
+        v44.objref<@__fe_obj_SolDecoder_3> = obj.alloc @__fe_obj_SolDecoder_3;
+        v45.objref<@__fe_obj_Cursor_2> = obj.proj v44 0.i256;
+        v46.objref<i256> = obj.proj v45 0.i256;
+        obj.store v46 0.i256;
+        v47.objref<i256> = obj.proj v45 1.i256;
+        obj.store v47 4.i256;
+        v49.objref<i256> = obj.proj v44 1.i256;
+        obj.store v49 4.i256;
         br_table v0 block1 (16.i32 block2) (17.i32 block3) (18.i32 block4);
 
     block1:
         evm_revert 0.i256 0.i256;
 
     block2:
-        v13.i256 = call %soldecoder_i__ha12a03fcb5ba844b_abidecoder_h638151350e80a086_read_word__CallData_hf71d505b6ff5dc81__e6d5f05c3478f563 v34;
-        v14.i256 = call %soldecoder_i__ha12a03fcb5ba844b_abidecoder_h638151350e80a086_read_word__CallData_hf71d505b6ff5dc81__e6d5f05c3478f563 v34;
+        v13.i256 = call %soldecoder_i__ha12a03fcb5ba844b_abidecoder_h638151350e80a086_read_word__CallData_hf71d505b6ff5dc81__e6d5f05c3478f563 v44;
+        v14.i256 = call %soldecoder_i__ha12a03fcb5ba844b_abidecoder_h638151350e80a086_read_word__CallData_hf71d505b6ff5dc81__e6d5f05c3478f563 v44;
         v23.i256 = call %evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor_arg0_root_stor__Deposit_h19f638fdcaab3cd__dbfe67dc81c33b5b v13 100000.i256 0.i256 v14;
         call %return_value__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f_u256__c4b26908c66ef75f v23;
         unreachable;
 
     block3:
-        v24.i256 = call %soldecoder_i__ha12a03fcb5ba844b_abidecoder_h638151350e80a086_read_word__CallData_hf71d505b6ff5dc81__e6d5f05c3478f563 v34;
-        v25.i256 = call %soldecoder_i__ha12a03fcb5ba844b_abidecoder_h638151350e80a086_read_word__CallData_hf71d505b6ff5dc81__e6d5f05c3478f563 v34;
+        v24.i256 = call %soldecoder_i__ha12a03fcb5ba844b_abidecoder_h638151350e80a086_read_word__CallData_hf71d505b6ff5dc81__e6d5f05c3478f563 v44;
+        v25.i256 = call %soldecoder_i__ha12a03fcb5ba844b_abidecoder_h638151350e80a086_read_word__CallData_hf71d505b6ff5dc81__e6d5f05c3478f563 v44;
         v33.i256 = call %evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor_arg0_root_stor__Withdraw_h97c67fe0f317b1b0__d9e92202bb8b3b1d v24 100000.i256 0.i256 v25;
         call %return_value__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f_u256__c4b26908c66ef75f v33;
         unreachable;
 
     block4:
-        v12.i256 = call %soldecoder_i__ha12a03fcb5ba844b_abidecoder_h638151350e80a086_read_word__CallData_hf71d505b6ff5dc81__e6d5f05c3478f563 v34;
+        v12.i256 = call %soldecoder_i__ha12a03fcb5ba844b_abidecoder_h638151350e80a086_read_word__CallData_hf71d505b6ff5dc81__e6d5f05c3478f563 v44;
         v13.i256 = call %evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor_arg0_root_stor__GetMyShares_h4b85c900112aeed6__1df2a8280dde4872 v12 100000.i256 0.i256;
         call %return_value__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f_u256__c4b26908c66ef75f v13;
         unreachable;
@@ -492,6 +496,8 @@ func private %evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor_arg0_root_s
         evm_revert 0.i256 0.i256;
 
     block7:
+        v27.objref<i256> = obj.proj v20 1.i256;
+        obj.store v27 v25;
         v28.objref<@__fe_obj_tuple_4> = call %solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_finish v20;
         v8.objref<i256> = obj.proj v28 0.i256;
         v9.i256 = obj.load v8;
@@ -525,6 +531,8 @@ func private %evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor_arg0_root_s
         evm_revert 0.i256 0.i256;
 
     block7:
+        v27.objref<i256> = obj.proj v20 1.i256;
+        obj.store v27 v25;
         v28.objref<@__fe_obj_tuple_4> = call %solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_finish v20;
         v8.objref<i256> = obj.proj v28 0.i256;
         v9.i256 = obj.load v8;
@@ -635,6 +643,8 @@ func private %evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor_arg0_root_s
         evm_revert 0.i256 0.i256;
 
     block7:
+        v27.objref<i256> = obj.proj v20 1.i256;
+        obj.store v27 v25;
         v28.objref<@__fe_obj_tuple_4> = call %solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_finish v20;
         v8.objref<i256> = obj.proj v28 0.i256;
         v9.i256 = obj.load v8;
@@ -800,6 +810,7 @@ func private %decode_returndata__u256__3271ca15373d4483(v0.i256, v1.i256) -> i25
 
     block8:
         v28.i256 = mload v26 i256;
+        obj.store v18 v20;
         return v28;
 
     block9:
@@ -878,17 +889,17 @@ func private %solencoder_h1b9228b90dad6928_new() -> objref<@__fe_obj_SolEncoder_
 
 func private %soldecoder_i__ha12a03fcb5ba844b_new__MemoryBytes_h1e381015a9b0111b__59e0d528d54cca1b(v0.objref<@__fe_obj_MemoryBytes_6>) -> objref<@__fe_obj_SolDecoder_8> {
     block0:
-        v46.objref<i256> = obj.proj v0 1.i256;
-        v47.i256 = obj.load v46;
-        v44.objref<i256> = obj.proj v0 0.i256;
-        v45.i256 = obj.load v44;
+        v55.objref<i256> = obj.proj v0 1.i256;
+        v56.i256 = obj.load v55;
+        v53.objref<i256> = obj.proj v0 0.i256;
+        v54.i256 = obj.load v53;
         v2.objref<@__fe_obj_SolDecoder_8> = obj.alloc @__fe_obj_SolDecoder_8;
         v7.objref<@__fe_obj_Cursor_7> = obj.proj v2 0.i256;
         v8.objref<@__fe_obj_MemoryBytes_6> = obj.proj v7 0.i256;
         v9.objref<i256> = obj.proj v8 0.i256;
-        obj.store v9 v45;
+        obj.store v9 v54;
         v16.objref<i256> = obj.proj v8 1.i256;
-        obj.store v16 v47;
+        obj.store v16 v56;
         v20.objref<i256> = obj.proj v7 1.i256;
         obj.store v20 0.i256;
         v21.objref<i256> = obj.proj v2 1.i256;

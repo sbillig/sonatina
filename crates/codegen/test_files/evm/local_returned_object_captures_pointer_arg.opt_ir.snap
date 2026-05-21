@@ -9,6 +9,9 @@ type @Take = {i256, objref<[i256; 8]>};
 
 func public %entry() {
     block0:
+        v7.objref<[i256; 8]> = obj.alloc [i256; 8];
+        v8.objref<i256> = obj.index v7 0.i256;
+        obj.store v8 4.i256;
         mstore 0.i32 4.i256 i256;
         evm_return 0.i8 32.i8;
 }

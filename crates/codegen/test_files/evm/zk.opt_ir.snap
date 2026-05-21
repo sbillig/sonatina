@@ -166,7 +166,8 @@ func private %smt_root_from_calldata(v0.i256, v1.i256, v2.i256, v3.i256) -> i256
 
     block2:
         call %smt_store_zero_table;
-        jump block9;
+        v51.i1 = ne 32.i256 0.i256;
+        br v51 block9 block11;
 
     block3:
         v79.i256 = phi (v0 block0) (v80 block7);
@@ -210,11 +211,7 @@ func private %smt_root_from_calldata(v0.i256, v1.i256, v2.i256, v3.i256) -> i256
         v90.i256 = phi (v0 block2) (v91 block16);
         v88.i256 = phi (64.i256 block2) (v50 block16);
         v86.i256 = phi (v2 block2) (v47 block16);
-        v39.i256 = phi (0.i256 block2) (v70 block16);
-        v40.i1 = lt v39 32.i256;
-        br v40 block10 block11;
-
-    block10:
+        v39.i256 = phi (32.i256 block2) (v50 block16);
         v133.i256 = and 1.i256 v86;
         v45.i1 = eq v133 1.i256;
         v47.i256 = shr 1.i256 v86;
@@ -223,7 +220,8 @@ func private %smt_root_from_calldata(v0.i256, v1.i256, v2.i256, v3.i256) -> i256
         br v45 block12 block14;
 
     block11:
-        return v90;
+        v49.i256 = phi (v0 block2) (v91 block16);
+        return v49;
 
     block12:
         v55.i256 = evm_calldata_load v92;
@@ -231,8 +229,8 @@ func private %smt_root_from_calldata(v0.i256, v1.i256, v2.i256, v3.i256) -> i256
         jump block14;
 
     block14:
-        v119.i256 = phi (v56 block12) (v92 block10);
-        v58.i256 = phi (v55 block12) (v49 block10);
+        v119.i256 = phi (v56 block12) (v92 block9);
+        v58.i256 = phi (v55 block12) (v49 block9);
         v134.i256 = and 1.i256 v95;
         v61.i1 = eq v134 1.i256;
         v63.i256 = shr 1.i256 v95;
@@ -246,8 +244,9 @@ func private %smt_root_from_calldata(v0.i256, v1.i256, v2.i256, v3.i256) -> i256
 
     block16:
         v91.i256 = phi (v129 block15) (v131 block17);
-        v70.i256 = add 1.i256 v39;
-        jump block9;
+        v50.i256 = sub v39 1.i256;
+        v52.i1 = ne v50 0.i256;
+        br v52 block9 block11;
 
     block17:
         mstore 0.i256 v90 i256;
@@ -263,7 +262,8 @@ func private %smt_update_root_from_calldata(v0.i256, v1.i256, v2.i256, v3.i256, 
 
     block2:
         call %smt_store_zero_table;
-        jump block11;
+        v66.i1 = ne 32.i256 0.i256;
+        br v66 block11 block13;
 
     block3:
         v107.i256 = phi (v2 block0) (v108 block7);
@@ -321,11 +321,7 @@ func private %smt_update_root_from_calldata(v0.i256, v1.i256, v2.i256, v3.i256, 
         v117.i256 = phi (v1 block2) (v118 block18);
         v115.i256 = phi (64.i256 block2) (v62 block18);
         v113.i256 = phi (v4 block2) (v59 block18);
-        v51.i256 = phi (0.i256 block2) (v89 block18);
-        v52.i1 = lt v51 32.i256;
-        br v52 block12 block13;
-
-    block12:
+        v51.i256 = phi (32.i256 block2) (v65 block18);
         v180.i256 = and 1.i256 v113;
         v57.i1 = eq v180 1.i256;
         v59.i256 = shr 1.i256 v113;
@@ -334,7 +330,9 @@ func private %smt_update_root_from_calldata(v0.i256, v1.i256, v2.i256, v3.i256, 
         br v57 block14 block16;
 
     block13:
-        v181.i1 = eq v0 v117;
+        v64.i256 = phi (v1 block2) (v118 block18);
+        v63.i256 = phi (v2 block2) (v138 block18);
+        v181.i1 = eq v0 v64;
         br v181 block21 block20;
 
     block14:
@@ -343,8 +341,8 @@ func private %smt_update_root_from_calldata(v0.i256, v1.i256, v2.i256, v3.i256, 
         jump block16;
 
     block16:
-        v157.i256 = phi (v73 block14) (v121 block12);
-        v75.i256 = phi (v72 block14) (v61 block12);
+        v157.i256 = phi (v73 block14) (v121 block11);
+        v75.i256 = phi (v72 block14) (v61 block11);
         v182.i256 = and 1.i256 v124;
         v78.i1 = eq v182 1.i256;
         v80.i256 = shr 1.i256 v124;
@@ -361,8 +359,9 @@ func private %smt_update_root_from_calldata(v0.i256, v1.i256, v2.i256, v3.i256, 
     block18:
         v138.i256 = phi (v173 block17) (v177 block19);
         v118.i256 = phi (v171 block17) (v175 block19);
-        v89.i256 = add 1.i256 v51;
-        jump block11;
+        v65.i256 = sub v51 1.i256;
+        v67.i1 = ne v65 0.i256;
+        br v67 block11 block13;
 
     block19:
         mstore 0.i256 v117 i256;
@@ -376,7 +375,7 @@ func private %smt_update_root_from_calldata(v0.i256, v1.i256, v2.i256, v3.i256, 
         evm_revert 0.i256 0.i256;
 
     block21:
-        return v137;
+        return v63;
 }
 
 func private %init__StorPtr_Evm___207f35a85ac4062e() {

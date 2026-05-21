@@ -30,21 +30,21 @@ func private %call_target(v0.@Addr, v1.i256, v2.i256) -> i256 {
         v18.i256 = ptr_to_int v17 i256;
         evm_return_data_copy v18 0.i256 v16;
         v34.i1 = is_zero v15;
-        br v34 block1 block11;
+        br v34 block1 block12;
 
     block1:
         evm_revert v18 v16;
 
-    block11:
-        v51.i1 = lt v16 32.i256;
-        br v51 block12 block13;
-
     block12:
-        evm_revert 0.i256 0.i256;
+        v57.i1 = lt v16 32.i256;
+        br v57 block13 block23;
 
     block13:
-        v75.i256 = mload v18 i256;
-        return v75;
+        evm_revert 0.i256 0.i256;
+
+    block23:
+        v81.i256 = mload v18 i256;
+        return v81;
 }
 
 func public %entry() {

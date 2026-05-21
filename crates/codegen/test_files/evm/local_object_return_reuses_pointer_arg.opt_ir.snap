@@ -10,6 +10,8 @@ type @wrapper = {objref<i256>};
 func public %entry() {
     block0:
         v0.i256 = evm_calldata_load 0.i32;
+        v5.objref<i256> = obj.alloc i256;
+        obj.store v5 v0;
         mstore 0.i32 v0 i256;
         evm_return 0.i8 32.i8;
 }

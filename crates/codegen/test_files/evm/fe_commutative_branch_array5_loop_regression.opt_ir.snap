@@ -7,23 +7,24 @@ target = "evm-ethereum-osaka"
 
 func private %verify_checked(v0.i256, v1.i256, v2.[i8; 5], v3.[i256; 5]) -> i1 {
     block0:
-        v7.*i256 = alloca i256;
+        v5.objref<[i8; 5]> = obj.alloc [i8; 5];
+        v6.objref<[i256; 5]> = obj.alloc [i256; 5];
         v8.objref<[i8; 5]> = obj.alloc [i8; 5];
         v9.objref<[i256; 5]> = obj.alloc [i256; 5];
         v11.objref<[i256; 5]> = obj.alloc [i256; 5];
-        mstore v7 0.i256 i256;
-        v43.i256 = ptr_to_int v7 i256;
+        obj.store v5 v2;
+        obj.store v6 v3;
         jump block1;
 
     block1:
+        v47.i256 = phi (0.i256 block0) (v49 block6);
         v48.i256 = phi (v1 block0) (v52 block6);
-        v16.i256 = mload v7 i256;
-        v17.i1 = lt v16 1.i256;
+        v17.i1 = lt v47 1.i256;
         br v17 block2 block3;
 
     block2:
         obj.store v8 v2;
-        v20.objref<i8> = obj.index v8 v16;
+        v20.objref<i8> = obj.index v8 v47;
         v21.i8 = obj.load v20;
         v45.i1 = is_zero v21;
         br v45 block4 block5;
@@ -34,22 +35,21 @@ func private %verify_checked(v0.i256, v1.i256, v2.[i8; 5], v3.[i256; 5]) -> i1 {
 
     block4:
         obj.store v9 v3;
-        v29.objref<i256> = obj.index v9 v16;
+        v29.objref<i256> = obj.index v9 v47;
         v30.i256 = obj.load v29;
         (v32.i256, v33.i1) = uaddo v48 v30;
         br v33 block7 block6;
 
     block5:
         obj.store v11 v3;
-        v37.objref<i256> = obj.index v11 v16;
+        v37.objref<i256> = obj.index v11 v47;
         v38.i256 = obj.load v37;
         (v40.i256, v41.i1) = uaddo v38 v48;
         br v41 block7 block6;
 
     block6:
         v52.i256 = phi (v32 block4) (v40 block5);
-        v47.i256 = add v16 1.i256;
-        mstore v43 v47 i256;
+        v49.i256 = add v47 1.i256;
         jump block1;
 
     block7:

@@ -49,16 +49,6 @@ impl AggregateFacts {
         }
     }
 
-    pub(crate) fn for_local_objects(
-        func: &Function,
-        local_object_args: Option<&FxHashMap<usize, LocalObjectArgInfo>>,
-        layout_cache: &mut shape::AggregateLayoutCache,
-        snapshot: &mut ProvenanceSnapshot<'_>,
-    ) -> Self {
-        let root_slices = collect_root_slices(func, local_object_args, layout_cache);
-        Self::from_root_slices(func, func.ctx(), root_slices, layout_cache, snapshot)
-    }
-
     pub(crate) fn for_all_objref_args(
         func: &Function,
         layout_cache: &mut shape::AggregateLayoutCache,
@@ -112,14 +102,17 @@ impl AggregateObjectFacts {
         Self { facts, tracked }
     }
 
-    pub(crate) fn for_local_objects(
+    pub(crate) fn for_local_objects_with_effects(
         func: &Function,
         local_object_args: Option<&FxHashMap<usize, LocalObjectArgInfo>>,
+        object_effects: Option<&ObjectEffectSummaryMap>,
         layout_cache: &mut shape::AggregateLayoutCache,
         snapshot: &mut ProvenanceSnapshot<'_>,
     ) -> Self {
+        let mut root_slices = collect_root_slices(func, local_object_args, layout_cache);
+        insert_produced_object_root_slices(func, &mut root_slices, layout_cache, object_effects);
         let facts =
-            AggregateFacts::for_local_objects(func, local_object_args, layout_cache, snapshot);
+            AggregateFacts::from_root_slices(func, func.ctx(), root_slices, layout_cache, snapshot);
         Self::from_facts(func, facts, layout_cache)
     }
 

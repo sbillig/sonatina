@@ -202,7 +202,6 @@ func private %verify_like(v0.[i256; 5], v1.[i8; 5], v2.i256) -> @__fe_layout_1 {
     block0:
         v3.objref<[i256; 5]> = obj.alloc [i256; 5];
         v4.objref<[i8; 5]> = obj.alloc [i8; 5];
-        v5.*i256 = alloca i256;
         v9.objref<i256> = obj.index v3 0.i256;
         v10.i256 = extract_value v0 0.i256;
         obj.store v9 v10;
@@ -233,18 +232,16 @@ func private %verify_like(v0.[i256; 5], v1.[i8; 5], v2.i256) -> @__fe_layout_1 {
         v31.objref<i8> = obj.index v4 4.i256;
         v32.i8 = extract_value v1 4.i256;
         obj.store v31 v32;
-        mstore v5 0.i256 i256;
-        v101.i256 = ptr_to_int v5 i256;
         jump block1;
 
     block1:
+        v72.i256 = phi (0.i256 block0) (v124 block13);
         v107.i256 = phi (3.i256 block0) (v121 block13);
-        v33.i256 = mload v5 i256;
-        v35.i1 = lt v33 v2;
+        v35.i1 = lt v72 v2;
         br v35 block2 block3;
 
     block2:
-        v37.objref<i256> = obj.index v3 v33;
+        v37.objref<i256> = obj.index v3 v72;
         v38.i256 = obj.load v37;
         v40.i1 = lt v38 -1.i256;
         br v40 block6 block4;
@@ -269,7 +266,7 @@ func private %verify_like(v0.[i256; 5], v1.[i8; 5], v2.i256) -> @__fe_layout_1 {
         return v62;
 
     block6:
-        v64.objref<i8> = obj.index v4 v33;
+        v64.objref<i8> = obj.index v4 v72;
         v65.i8 = obj.load v64;
         v122.i1 = is_zero v65;
         br v122 block9 block10;
@@ -305,8 +302,7 @@ func private %verify_like(v0.[i256; 5], v1.[i8; 5], v2.i256) -> @__fe_layout_1 {
 
     block13:
         v121.i256 = phi (v91 block11) (v98 block12);
-        v124.i256 = add v33 1.i256;
-        mstore v101 v124 i256;
+        v124.i256 = add v72 1.i256;
         jump block1;
 
     block29:

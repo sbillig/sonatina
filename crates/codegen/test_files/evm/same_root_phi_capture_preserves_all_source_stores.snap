@@ -34,14 +34,14 @@ entry:
     DUP2
     MSTORE
     SWAP2  // v21.i1 = is_zero v0;
-    PUSH1 block7  // br v21 block6 block7;
+    PUSH1 block8  // br v21 block7 block8;
     JUMPI
-  block6:
+  block7:
     SWAP1  // jump block5;
     POP
     PUSH1 block5
     JUMP
-  block7:
+  block8:
     JUMPDEST
     POP  // jump block5;
   block5:

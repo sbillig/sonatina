@@ -102,15 +102,6 @@ pub(crate) fn mark_live_slice(live: &mut LiveLeafMap, slice: ObjectSlice) {
     }
 }
 
-pub(crate) fn mark_live_tracked_object(live: &mut LiveLeafMap, tracked: TrackedObject) {
-    match tracked {
-        TrackedObject::Exact(slice) => mark_live_slice(live, slice),
-        TrackedObject::RootUnknown { root, total_leaves } => {
-            mark_root_live(live, root, total_leaves)
-        }
-    }
-}
-
 pub(crate) fn clear_live_slice(live: &mut LiveLeafMap, slice: ObjectSlice) {
     let Some(entry) = live.get_mut(&slice.root) else {
         return;

@@ -25,15 +25,12 @@ func private %run() -> i256 {
         v16.*[i256; 1] = int_to_ptr v15 *[i256; 1];
         v17.*i256 = bitcast v16 *i256;
         v18.i256 = ptr_to_int v17 i256;
-        jump block1;
+        v34.i1 = ne 1.i256 0.i256;
+        br v34 block1 block3;
 
     block1:
-        v29.objref<[i256; 1]> = phi (v0 block0) (v14 block2);
-        v11.i256 = phi (0.i256 block0) (v30 block2);
-        v28.i1 = lt v11 1.i256;
-        br v28 block2 block3;
-
-    block2:
+        v29.objref<[i256; 1]> = phi (v0 block0) (v14 block1);
+        v11.i256 = phi (1.i256 block0) (v33 block1);
         v14.objref<[i256; 1]> = obj.alloc [i256; 1];
         v19.*i256 = alloca i256;
         v20.i256 = ptr_to_int v19 i256;
@@ -41,11 +38,13 @@ func private %run() -> i256 {
         v21.i256 = mload v20 i256;
         v22.objref<i256> = obj.index v14 0.i256;
         obj.store v22 v21;
-        v30.i256 = add v11 1.i256;
-        jump block1;
+        v33.i256 = sub v11 1.i256;
+        v35.i1 = ne v33 0.i256;
+        br v35 block1 block3;
 
     block3:
-        v27.objref<i256> = obj.index v29 0.i256;
+        v32.objref<[i256; 1]> = phi (v0 block0) (v14 block1);
+        v27.objref<i256> = obj.index v32 0.i256;
         v28.i256 = obj.load v27;
         return v28;
 }
