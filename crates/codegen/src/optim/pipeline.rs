@@ -53,6 +53,7 @@ use super::{
     loop_strength_reduce::LoopStrengthReduce,
     multi_result_legalize::legalize_multi_result,
     range_branch_simplify::{RangeBranchSimplify, has_conditional_branch},
+    scalar_alloca_promote::ScalarAllocaPromote,
     scalar_canonicalize::ScalarCanonicalize,
     sccp::SccpSolver,
 };
@@ -77,6 +78,8 @@ pub enum Pass {
     AggregateScalarize,
     /// Per-space load/store forwarding and dead-store elimination.
     LoadStore,
+    /// Promote exact scalar alloca memory slots into SSA values.
+    ScalarAllocaPromote,
     /// Cheap local scalar canonicalization (zero-compares, neg-arith, pow2 mul, cast chains).
     ScalarCanonicalize,
     /// Simplify expressions with precise known-bit reasoning.
@@ -145,6 +148,11 @@ impl Pass {
             Pass::LoadStore => PassInfo {
                 name: "load_store",
                 needs_func_behavior: true,
+                invalidates_func_behavior: true,
+            },
+            Pass::ScalarAllocaPromote => PassInfo {
+                name: "scalar_alloca_promote",
+                needs_func_behavior: false,
                 invalidates_func_behavior: true,
             },
             Pass::ScalarCanonicalize => PassInfo {
@@ -288,6 +296,7 @@ const PRIMARY_FUNC_PASSES: &[Pass] = &[
     Pass::ObjectLoadStore,
     Pass::AggregateScalarize,
     Pass::LoadStore,
+    Pass::ScalarAllocaPromote,
     Pass::CheckedArithElim,
     Pass::RangeBranchSimplify,
     Pass::Sccp,
@@ -310,6 +319,7 @@ const SECONDARY_FUNC_PASSES: &[Pass] = &[
     Pass::ObjectLoadStore,
     Pass::AggregateScalarize,
     Pass::LoadStore,
+    Pass::ScalarAllocaPromote,
     Pass::CheckedArithElim,
     Pass::RangeBranchSimplify,
     Pass::Sccp,
@@ -328,6 +338,7 @@ const POST_DEAD_ARG_CLEANUP_PASSES: &[Pass] = &[
 
 const NATIVE_FUNC_PASSES: &[Pass] = &[
     Pass::CfgCleanup,
+    Pass::ScalarAllocaPromote,
     Pass::ScalarCanonicalize,
     Pass::CheckedArithElim,
     Pass::RangeBranchSimplify,
@@ -461,6 +472,7 @@ impl Pipeline {
     ///    - `ObjectLoadStore`
     ///    - `AggregateScalarize`
     ///    - `LoadStore`
+    ///    - `ScalarAllocaPromote`
     ///    - `CheckedArithElim`
     ///    - `RangeBranchSimplify`
     ///    - `Sccp` — constant propagation + dead code elimination (composite)
@@ -482,6 +494,7 @@ impl Pipeline {
     ///    - `ObjectLoadStore`
     ///    - `AggregateScalarize`
     ///    - `LoadStore`
+    ///    - `ScalarAllocaPromote`
     ///    - `CheckedArithElim`
     ///    - `RangeBranchSimplify`
     ///    - `Sccp`
@@ -767,6 +780,23 @@ fn has_aggregate_scalarize_work(func: &Function) -> bool {
                         .is_some_and(|_| inst_has_aggregate_value(func, inst))
             })
         })
+}
+
+fn has_scalar_alloca_promote_work(func: &Function) -> bool {
+    let mut has_alloca = false;
+    let mut has_memory_op = false;
+    for block in func.layout.iter_block() {
+        for inst in func.layout.iter_inst(block) {
+            let inst_data = func.dfg.inst(inst);
+            has_alloca |= downcast::<&data::Alloca>(func.inst_set(), inst_data).is_some();
+            has_memory_op |= downcast::<&data::Mload>(func.inst_set(), inst_data).is_some()
+                || downcast::<&data::Mstore>(func.inst_set(), inst_data).is_some();
+            if has_alloca && has_memory_op {
+                return true;
+            }
+        }
+    }
+    false
 }
 
 fn has_object_memory_analysis_work(func: &Function) -> bool {
@@ -1128,6 +1158,13 @@ fn run_pass(
                 solver.run(func, &mut ctx.cfg)
             }
         }
+        Pass::ScalarAllocaPromote => {
+            let _span = trace_span!("sonatina.optim.pipeline.pass.scalar_alloca_promote").entered();
+            if !has_scalar_alloca_promote_work(func) {
+                return PassResult::skipped(pass);
+            }
+            ScalarAllocaPromote::new().run(func)
+        }
         Pass::ScalarCanonicalize => {
             let _span = trace_span!("sonatina.optim.pipeline.pass.scalar_canonicalize").entered();
             ScalarCanonicalize::new().run(func)
@@ -1428,6 +1465,7 @@ mod tests {
         for pass in [
             Pass::BranchCanonicalize,
             Pass::LoadStore,
+            Pass::ScalarAllocaPromote,
             Pass::ScalarCanonicalize,
             Pass::KnownBitsSimplify,
             Pass::CheckedArithElim,

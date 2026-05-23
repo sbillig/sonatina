@@ -2,7 +2,7 @@
 //! Construction of Static Single Assignment Form`](https://link.springer.com/chapter/10.1007/978-3-642-37051-9_6).
 
 use cranelift_entity::{PrimaryMap, SecondaryMap, SparseSet, packed_option::PackedOption};
-use rustc_hash::FxHashMap;
+use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::{
     BlockId, Function, InstId, Type, ValueId,
@@ -71,6 +71,23 @@ impl SsaBuilder {
 
     pub fn append_pred(&mut self, block: BlockId, pred: BlockId) {
         self.blocks[block].append_pred(pred);
+    }
+
+    pub fn append_all_block_preds(&mut self, func: &Function) {
+        for block in func.layout.iter_block() {
+            let Some(term) = func.layout.last_inst_of(block) else {
+                continue;
+            };
+            let Some(branch) = func.dfg.branch_info(term) else {
+                continue;
+            };
+            let mut seen = FxHashSet::default();
+            for dest in branch.dests() {
+                if seen.insert(dest) {
+                    self.append_pred(dest, block);
+                }
+            }
+        }
     }
 
     pub fn seal_block(&mut self, func: &mut Function, block: BlockId) {

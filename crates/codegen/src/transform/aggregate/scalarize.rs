@@ -114,7 +114,7 @@ impl AggregateScalarize {
         self.canonicalize_promotable_roots(func, &mut promoted_roots);
 
         let mut ssa = SsaBuilder::new();
-        self.append_block_preds(func, &mut ssa);
+        ssa.append_all_block_preds(func);
         self.setup_promoted_leaf_vars(func, &module, &mut ssa, &mut promoted_roots);
 
         let mut scalarized_agg: SecondaryMap<ValueId, Option<LeafValues>> = SecondaryMap::default();
@@ -250,23 +250,6 @@ impl AggregateScalarize {
                 "AggregateScalarize requires CfgCleanup to remove unreachable blocks first (found unreachable block {})",
                 block.as_u32()
             );
-        }
-    }
-
-    fn append_block_preds(&self, func: &Function, ssa: &mut SsaBuilder) {
-        for block in func.layout.iter_block() {
-            let Some(term) = func.layout.last_inst_of(block) else {
-                continue;
-            };
-            let Some(branch) = func.dfg.branch_info(term) else {
-                continue;
-            };
-            let mut seen = FxHashSet::default();
-            for dest in branch.dests() {
-                if seen.insert(dest) {
-                    ssa.append_pred(dest, block);
-                }
-            }
         }
     }
 

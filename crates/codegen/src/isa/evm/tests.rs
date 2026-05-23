@@ -1824,7 +1824,7 @@ object @Contract {
 #[test]
 fn prepare_section_runs_raw_memory_cleanup_after_memory_legalize() {
     let mut parsed = parse_module(include_str!(
-        "../../../test_files/evm/fresh_equivalent_out_param_scalarizes.sntn"
+        "../../../test_files/evm/aggregate_legalize_dynamic_array_index.sntn"
     ))
     .unwrap();
     Pipeline::speed().run(&mut parsed.module);

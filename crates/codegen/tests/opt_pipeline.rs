@@ -6,7 +6,8 @@ use sonatina_codegen::{
     loop_analysis::LoopTree,
     optim::{
         Pass, Step, gvn::GvnSolver, licm::LicmSolver, pipeline::Pipeline,
-        scalar_canonicalize::ScalarCanonicalize, sccp::SccpSolver,
+        scalar_alloca_promote::ScalarAllocaPromote, scalar_canonicalize::ScalarCanonicalize,
+        sccp::SccpSolver,
     },
 };
 use sonatina_ir::{
@@ -27,6 +28,160 @@ fn test_opt_pipeline(fixture: Fixture<&str>) {
 
     let mut writer = ModuleWriter::with_debug_provider(&parsed.module, &parsed.debug);
     snap_test!(writer.dump_string(), fixture.path());
+}
+
+#[test]
+fn scalar_alloca_promote_promotes_loop_carried_slot() {
+    let (module, func_ref) = parse_test_module(
+        r#"
+target = "evm-ethereum-osaka"
+
+func public %entry(v0.i32) -> i32 {
+    block0:
+        v1.*i32 = alloca i32;
+        mstore v1 1.i32 i32;
+        jump block1;
+
+    block1:
+        v2.i32 = phi (0.i32 block0) (v5 block2);
+        v3.i1 = lt v2 v0;
+        br v3 block2 block3;
+
+    block2:
+        v4.i32 = mload v1 i32;
+        v5.i32 = add v2 1.i32;
+        v6.i32 = add v4 v5;
+        mstore v1 v6 i32;
+        jump block1;
+
+    block3:
+        v7.i32 = mload v1 i32;
+        return v7;
+}
+"#,
+    );
+    assert!(run_scalar_alloca_promote(&module, func_ref));
+    for needle in ["alloca", "mload", "mstore"] {
+        assert_func_not_contains(&module, func_ref, needle);
+    }
+    assert_func_contains(&module, func_ref, " = phi ");
+    assert_fast_verified(&module);
+}
+
+#[test]
+fn scalar_alloca_promote_synthesizes_diamond_phi() {
+    let (module, func_ref) = parse_test_module(
+        r#"
+target = "evm-ethereum-osaka"
+
+func public %entry(v0.i1) -> i32 {
+    block0:
+        v1.*i32 = alloca i32;
+        br v0 block1 block2;
+
+    block1:
+        mstore v1 1.i32 i32;
+        jump block3;
+
+    block2:
+        mstore v1 2.i32 i32;
+        jump block3;
+
+    block3:
+        v2.i32 = mload v1 i32;
+        return v2;
+}
+"#,
+    );
+    assert!(run_scalar_alloca_promote(&module, func_ref));
+    for needle in ["alloca", "mload", "mstore"] {
+        assert_func_not_contains(&module, func_ref, needle);
+    }
+    assert_func_contains(&module, func_ref, " = phi ");
+    assert_fast_verified(&module);
+}
+
+#[test]
+fn scalar_alloca_promote_uses_undef_for_uninitialized_load() {
+    let (module, func_ref) = parse_test_module(
+        r#"
+target = "evm-ethereum-osaka"
+
+func public %entry() -> i32 {
+    block0:
+        v0.*i32 = alloca i32;
+        v1.i32 = mload v0 i32;
+        return v1;
+}
+"#,
+    );
+    assert!(run_scalar_alloca_promote(&module, func_ref));
+    assert_func_not_contains(&module, func_ref, "alloca");
+    assert_func_not_contains(&module, func_ref, "mload");
+    assert_func_contains(&module, func_ref, "undef");
+    assert_fast_verified(&module);
+}
+
+#[test]
+fn scalar_alloca_promote_rejects_offset_access() {
+    let (module, func_ref) = parse_test_module(
+        r#"
+target = "evm-ethereum-osaka"
+
+func public %entry() -> i32 {
+    block0:
+        v0.*i32 = alloca i32;
+        v1.*i32 = gep v0 1.i32;
+        mstore v1 1.i32 i32;
+        v2.i32 = mload v1 i32;
+        return v2;
+}
+"#,
+    );
+    assert!(!run_scalar_alloca_promote(&module, func_ref));
+    assert_func_contains(&module, func_ref, "alloca");
+    assert_func_contains(&module, func_ref, "mload");
+    assert_func_contains(&module, func_ref, "mstore");
+}
+
+#[test]
+fn scalar_alloca_promote_rejects_escaped_address() {
+    let (module, func_ref) = parse_test_module(
+        r#"
+target = "evm-ethereum-osaka"
+
+func public %entry() -> *i32 {
+    block0:
+        v0.*i32 = alloca i32;
+        return v0;
+}
+"#,
+    );
+    assert!(!run_scalar_alloca_promote(&module, func_ref));
+    assert_func_contains(&module, func_ref, "alloca");
+}
+
+#[test]
+fn scalar_alloca_promote_rejects_mixed_access_type() {
+    let (module, func_ref) = parse_test_module(
+        r#"
+target = "evm-ethereum-osaka"
+
+func public %entry() -> i64 {
+    block0:
+        v0.*i64 = alloca i64;
+        v1.*i32 = bitcast v0 *i32;
+        mstore v0 1.i64 i64;
+        v2.i32 = mload v1 i32;
+        v3.i64 = sext v2 i64;
+        return v3;
+}
+"#,
+    );
+    assert!(!run_scalar_alloca_promote(&module, func_ref));
+    assert_func_contains(&module, func_ref, "alloca");
+    assert_func_contains(&module, func_ref, "mload");
+    assert_func_contains(&module, func_ref, "mstore");
 }
 
 #[test]
@@ -1585,6 +1740,12 @@ fn find_func_by_name(module: &Module, name: &str) -> FuncRef {
         .into_iter()
         .find(|&func_ref| module.ctx.func_sig(func_ref, |sig| sig.name() == name))
         .unwrap_or_else(|| panic!("function `{name}` should exist"))
+}
+
+fn run_scalar_alloca_promote(module: &Module, func_ref: FuncRef) -> bool {
+    module
+        .func_store
+        .modify(func_ref, |func| ScalarAllocaPromote::new().run(func))
 }
 
 fn assert_func_not_contains(module: &Module, func_ref: FuncRef, needle: &str) {
