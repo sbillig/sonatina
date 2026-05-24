@@ -16,7 +16,7 @@ keywords = ["compiler", "evm", "wasm", "smart-contract"]
 
 [dependencies]
 cranelift-entity = "0.126"
-cranelift-codegen = { path = "/Users/sean/src/wasmtime/cranelift/codegen", optional = true, features = ["riscv32", "riscv64"] }
+cranelift-codegen = { path = "/Users/sean/src/wasmtime/cranelift/codegen", optional = true, features = ["riscv64"] }
 cranelift-frontend = { path = "/Users/sean/src/wasmtime/cranelift/frontend", optional = true }
 cranelift-module = { path = "/Users/sean/src/wasmtime/cranelift/module", optional = true }
 cranelift-jit = { path = "/Users/sean/src/wasmtime/cranelift/jit", optional = true }

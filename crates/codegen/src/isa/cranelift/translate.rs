@@ -1,15 +1,19 @@
 use std::{cmp::Ordering, collections::HashMap};
 
 use cranelift_codegen::ir::{
-    self as clif, InstBuilder, MemFlagsData, StackSlotData, StackSlotKind, condcodes::IntCC,
-    instructions::BlockArg,
+    self as clif, InstBuilder, MemFlagsData, StackSlotData, StackSlotKind, TrapCode,
+    condcodes::IntCC, instructions::BlockArg,
 };
 use cranelift_frontend::{FunctionBuilder, FunctionBuilderContext};
 use cranelift_module::{FuncId, Linkage, Module as ClifModule};
 
 use sonatina_ir::{
-    BlockId, ControlFlowGraph, Function, Immediate, Linkage as SonatinaLinkage, Module, Signature,
-    Type, Value, ValueId,
+    BlockId, ControlFlowGraph, Function, Immediate, InstDowncast, InstId,
+    Linkage as SonatinaLinkage, Module, Signature, Type, Value, ValueId,
+    inst::{
+        cmp::{Gt, Lt, Ne},
+        control_flow::Br,
+    },
     ir_writer::{FuncWriteCtx, InstStatement, IrWrite},
     module::{FuncRef, ModuleCtx},
     types::CompoundType,
@@ -157,6 +161,26 @@ fn sonatina_type_to_clif_or_err(ty: Type) -> Result<clif::Type, String> {
     sonatina_type_to_clif(ty).ok_or_else(|| format!("unsupported type for cranelift: {ty:?}"))
 }
 
+fn emit_trap(builder: &mut FunctionBuilder, module: &Module, code: TrapCode) {
+    if super::is_sp1_target(module.ctx.triple) {
+        builder.ins().debugtrap();
+        let ret_tys: Vec<_> = builder
+            .func
+            .signature
+            .returns
+            .iter()
+            .map(|param| param.value_type)
+            .collect();
+        let ret_vals: Vec<_> = ret_tys
+            .into_iter()
+            .map(|ty| builder.ins().iconst(ty, 0))
+            .collect();
+        builder.ins().return_(&ret_vals);
+    } else {
+        builder.ins().trap(code);
+    }
+}
+
 fn translate_function(
     module: &Module,
     function: &Function,
@@ -251,6 +275,10 @@ fn translate_function(
             )
             .is_some()
             {
+                continue;
+            }
+
+            if should_defer_truthy_branch_compare(function, inst_id) {
                 continue;
             }
 
@@ -610,7 +638,11 @@ fn translate_function(
                 let phi_args = collect_phi_args_for_block(function, *jump.dest(), block, inst_set, &value_map, &mut builder)?;
                 builder.ins().jump(dest, &phi_args);
             } else if let Some(br) = <&sonatina_ir::inst::control_flow::Br as sonatina_ir::InstDowncast>::downcast(inst_set, inst_data) {
-                let cond = resolve_value(function, *br.cond(), &value_map, &mut builder)?;
+                let cond = if let Some(truthy) = branch_truthy_compare_operand(function, *br.cond()) {
+                    resolve_scalar_value(module, function, truthy, &value_map, &mut builder)?
+                } else {
+                    resolve_value(function, *br.cond(), &value_map, &mut builder)?
+                };
                 let nz_block = block_map[br.nz_dest()];
                 let z_block = block_map[br.z_dest()];
                 let nz_args = collect_phi_args_for_block(function, *br.nz_dest(), block, inst_set, &value_map, &mut builder)?;
@@ -647,9 +679,7 @@ fn translate_function(
                             )?;
                             builder.ins().jump(default_block, &default_args);
                         } else {
-                            builder
-                                .ins()
-                                .trap(cranelift_codegen::ir::TrapCode::user(3).unwrap());
+                            emit_trap(&mut builder, module, TrapCode::user(3).unwrap());
                         }
                     }
                 }
@@ -1183,7 +1213,7 @@ fn translate_function(
                     value_map.insert(result, result_val);
                 }
             } else if <&sonatina_ir::inst::evm::EvmRevert as sonatina_ir::InstDowncast>::downcast(inst_set, inst_data).is_some() {
-                builder.ins().trap(cranelift_codegen::ir::TrapCode::user(2).unwrap());
+                emit_trap(&mut builder, module, TrapCode::user(2).unwrap());
             } else if <&sonatina_ir::inst::evm::EvmStop as sonatina_ir::InstDowncast>::downcast(inst_set, inst_data).is_some() {
                 builder.ins().return_(&[]);
             } else if let Some(const_ref) = <&sonatina_ir::inst::data::ConstRef as sonatina_ir::InstDowncast>::downcast(inst_set, inst_data) {
@@ -1255,7 +1285,7 @@ fn translate_function(
                     }
                 }
             } else if <&sonatina_ir::inst::control_flow::Unreachable as sonatina_ir::InstDowncast>::downcast(inst_set, inst_data).is_some() {
-                builder.ins().trap(cranelift_codegen::ir::TrapCode::user(1).unwrap());
+                emit_trap(&mut builder, module, TrapCode::user(1).unwrap());
             } else {
                 let mut text = Vec::new();
                 let _ = InstStatement(inst_id).write(
@@ -1286,6 +1316,66 @@ fn translate_function(
     }
 
     Ok(())
+}
+
+fn should_defer_truthy_branch_compare(function: &Function, inst_id: InstId) -> bool {
+    let [result] = function.dfg.inst_results(inst_id) else {
+        return false;
+    };
+    branch_truthy_compare_operand(function, *result).is_some()
+}
+
+fn branch_truthy_compare_operand(function: &Function, cond: ValueId) -> Option<ValueId> {
+    let branch = sole_branch_user(function, cond)?;
+    let br = <&Br as InstDowncast>::downcast(function.inst_set(), function.dfg.inst(branch))?;
+    if *br.cond() != cond {
+        return None;
+    }
+
+    let cmp_inst = function.dfg.value_inst(cond)?;
+    let inst = function.dfg.inst(cmp_inst);
+    if let Some(ne) = <&Ne as InstDowncast>::downcast(function.inst_set(), inst) {
+        return zero_compare_truthy_operand(function, *ne.lhs(), *ne.rhs())
+            .or_else(|| zero_compare_truthy_operand(function, *ne.rhs(), *ne.lhs()));
+    }
+    if let Some(lt) = <&Lt as InstDowncast>::downcast(function.inst_set(), inst) {
+        return zero_compare_truthy_operand(function, *lt.rhs(), *lt.lhs());
+    }
+    if let Some(gt) = <&Gt as InstDowncast>::downcast(function.inst_set(), inst) {
+        return zero_compare_truthy_operand(function, *gt.lhs(), *gt.rhs());
+    }
+    None
+}
+
+fn sole_branch_user(function: &Function, value: ValueId) -> Option<InstId> {
+    let mut users = function
+        .dfg
+        .users(value)
+        .copied()
+        .filter(|user| function.layout.is_inst_inserted(*user));
+    let user = users.next()?;
+    if users.next().is_none() {
+        Some(user)
+    } else {
+        None
+    }
+}
+
+fn zero_compare_truthy_operand(
+    function: &Function,
+    value: ValueId,
+    zero: ValueId,
+) -> Option<ValueId> {
+    let ty = function.dfg.value_ty(value);
+    let scalar_ty = matches!(ty, Type::I8 | Type::I16 | Type::I32 | Type::I64);
+    if scalar_ty
+        && function.dfg.value_ty(zero) == ty
+        && function.dfg.value_imm(zero).is_some_and(Immediate::is_zero)
+    {
+        Some(value)
+    } else {
+        None
+    }
 }
 
 fn uses_static_external_calls(module: &Module, callee: FuncRef) -> bool {
@@ -2881,4 +2971,94 @@ fn collect_phi_args_for_block(
         }
     }
     Ok(args)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use sonatina_parser::parse_module;
+
+    fn parse_test_function(src: &str) -> (Module, FuncRef) {
+        let parsed = parse_module(src).unwrap_or_else(|errs| panic!("parse failed: {errs:?}"));
+        let func_ref = parsed
+            .module
+            .funcs()
+            .into_iter()
+            .next()
+            .expect("test module must contain a function");
+        (parsed.module, func_ref)
+    }
+
+    fn first_branch_cond(function: &Function) -> ValueId {
+        for block in function.layout.iter_block() {
+            let Some(term) = function.layout.last_inst_of(block) else {
+                continue;
+            };
+            if let Some(br) =
+                <&Br as InstDowncast>::downcast(function.inst_set(), function.dfg.inst(term))
+            {
+                return *br.cond();
+            }
+        }
+        panic!("test function must contain a branch");
+    }
+
+    #[test]
+    fn truthy_branch_compare_operand_matches_unsigned_lt_zero() {
+        let (module, func_ref) = parse_test_function(
+            r#"
+target = "riscv64im-succinct-zkvm-elf"
+
+func public %entry(v0.i64) -> i64 {
+    block0:
+        v1.i64 = sub v0 1.i64;
+        v2.i1 = lt 0.i64 v1;
+        br v2 block1 block2;
+
+    block1:
+        return v1;
+
+    block2:
+        return 0.i64;
+}
+"#,
+        );
+
+        module.func_store.view(func_ref, |function| {
+            let cond = first_branch_cond(function);
+            let cmp_inst = function.dfg.value_inst(cond).unwrap();
+            let truthy = branch_truthy_compare_operand(function, cond).unwrap();
+            assert_eq!(function.dfg.value_ty(truthy), Type::I64);
+            assert!(should_defer_truthy_branch_compare(function, cmp_inst));
+        });
+    }
+
+    #[test]
+    fn truthy_branch_compare_operand_rejects_multi_use_compare() {
+        let (module, func_ref) = parse_test_function(
+            r#"
+target = "riscv64im-succinct-zkvm-elf"
+
+func public %entry(v0.i64) -> i64 {
+    block0:
+        v1.i1 = lt 0.i64 v0;
+        v2.i64 = zext v1 i64;
+        br v1 block1 block2;
+
+    block1:
+        return v2;
+
+    block2:
+        return 0.i64;
+}
+"#,
+        );
+
+        module.func_store.view(func_ref, |function| {
+            let cond = first_branch_cond(function);
+            let cmp_inst = function.dfg.value_inst(cond).unwrap();
+            assert!(branch_truthy_compare_operand(function, cond).is_none());
+            assert!(!should_defer_truthy_branch_compare(function, cmp_inst));
+        });
+    }
 }

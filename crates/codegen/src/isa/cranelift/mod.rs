@@ -15,7 +15,7 @@ use cranelift_object::{ObjectBuilder, ObjectModule};
 use sonatina_ir::Module;
 use sonatina_triple::{Architecture, OperatingSystem, TargetTriple, Vendor};
 
-use crate::{backend::Backend, transform::aggregate::EnumLowerToProduct};
+use crate::{backend::Backend, compile::OptLevel, transform::aggregate::EnumLowerToProduct};
 
 pub use sp1::Sp1ElfArtifact;
 
@@ -77,6 +77,10 @@ impl CraneliftBackend {
     pub fn with_opt_level(mut self, level: settings::OptLevel) -> Self {
         self.opt_level = level;
         self
+    }
+
+    pub fn with_sonatina_opt_level(self, level: OptLevel) -> Self {
+        self.with_opt_level(cranelift_opt_level(level))
     }
 
     fn flags(&self, is_pic: bool) -> Result<settings::Flags, CraneliftError> {
@@ -220,6 +224,14 @@ impl CraneliftBackend {
     }
 }
 
+fn cranelift_opt_level(level: OptLevel) -> settings::OptLevel {
+    match level {
+        OptLevel::O0 => settings::OptLevel::None,
+        OptLevel::O1 | OptLevel::O2 => settings::OptLevel::Speed,
+        OptLevel::Os => settings::OptLevel::SpeedAndSize,
+    }
+}
+
 fn legalize_module(module: &mut Module) {
     EnumLowerToProduct.run(module);
 }
@@ -288,5 +300,21 @@ impl Backend for CraneliftBackend {
             .map_err(|e| vec![CraneliftError::Compilation(e.to_string())])?;
 
         Ok(CraneliftArtifact { jit, func_map })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sonatina_opt_levels_map_to_cranelift_opt_levels() {
+        assert_eq!(cranelift_opt_level(OptLevel::O0), settings::OptLevel::None);
+        assert_eq!(cranelift_opt_level(OptLevel::O1), settings::OptLevel::Speed);
+        assert_eq!(
+            cranelift_opt_level(OptLevel::Os),
+            settings::OptLevel::SpeedAndSize
+        );
+        assert_eq!(cranelift_opt_level(OptLevel::O2), settings::OptLevel::Speed);
     }
 }

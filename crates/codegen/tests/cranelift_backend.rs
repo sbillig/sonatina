@@ -1,6 +1,6 @@
 #![allow(clippy::crosspointer_transmute)]
 
-use std::process::Command;
+use std::{ops::Range, process::Command};
 
 use sonatina_codegen::{
     Backend, Compile, OptLevel,
@@ -89,6 +89,15 @@ fn assert_riscv32_elf_object(bytes: &[u8]) {
     assert_eq!(read_le_u16(bytes, 18), 243, "expected EM_RISCV");
 }
 
+fn assert_riscv64_elf_object(bytes: &[u8]) {
+    assert!(bytes.len() >= 64, "ELF header is truncated");
+    assert_eq!(&bytes[0..4], b"\x7fELF");
+    assert_eq!(bytes[4], 2, "expected ELFCLASS64");
+    assert_eq!(bytes[5], 1, "expected little-endian ELF");
+    assert_eq!(read_le_u16(bytes, 16), 1, "expected ET_REL");
+    assert_eq!(read_le_u16(bytes, 18), 243, "expected EM_RISCV");
+}
+
 fn assert_sp1_elf_executable(bytes: &[u8], elf_class: u8) {
     assert!(bytes.len() >= 64, "ELF header is truncated");
     assert_eq!(&bytes[0..4], b"\x7fELF");
@@ -106,6 +115,69 @@ fn assert_sp1_elf_executable(bytes: &[u8], elf_class: u8) {
         entry >= 0x7800_0000,
         "SP1 entry point should be linked above STACK_TOP"
     );
+    assert_no_zero_words_in_executable_segments(bytes, elf_class);
+}
+
+fn executable_load_segment_ranges(bytes: &[u8], elf_class: u8) -> Vec<Range<usize>> {
+    let phoff = if elf_class == 1 {
+        read_le_u32(bytes, 28) as usize
+    } else {
+        read_le_u64(bytes, 32) as usize
+    };
+    let phentsize = read_le_u16(bytes, if elf_class == 1 { 42 } else { 54 }) as usize;
+    let phnum = read_le_u16(bytes, if elf_class == 1 { 44 } else { 56 }) as usize;
+    let mut ranges = Vec::new();
+
+    for idx in 0..phnum {
+        let base = phoff + idx * phentsize;
+        let segment_type = read_le_u32(bytes, base);
+        let (flags, offset, filesz) = if elf_class == 1 {
+            (
+                read_le_u32(bytes, base + 24),
+                read_le_u32(bytes, base + 4) as usize,
+                read_le_u32(bytes, base + 16) as usize,
+            )
+        } else {
+            (
+                read_le_u32(bytes, base + 4),
+                read_le_u64(bytes, base + 8) as usize,
+                read_le_u64(bytes, base + 32) as usize,
+            )
+        };
+
+        if segment_type == 1 && flags & 1 != 0 {
+            ranges.push(offset..offset + filesz);
+        }
+    }
+
+    ranges
+}
+
+fn assert_no_zero_words_in_executable_segments(bytes: &[u8], elf_class: u8) {
+    let udf_trap = [0u8; 4];
+    for range in executable_load_segment_ranges(bytes, elf_class) {
+        for (idx, word) in bytes[range.clone()].chunks_exact(4).enumerate() {
+            assert_ne!(
+                word,
+                udf_trap.as_slice(),
+                "SP1 cannot decode zero-word instructions at file offset {:#x}",
+                range.start + idx * 4
+            );
+        }
+    }
+}
+
+fn assert_executable_segments_contain_ebreak(bytes: &[u8], elf_class: u8) {
+    let ebreak_opcode = [0x73, 0x00, 0x10, 0x00];
+    let has_ebreak = executable_load_segment_ranges(bytes, elf_class)
+        .into_iter()
+        .any(|range| {
+            bytes[range]
+                .windows(ebreak_opcode.len())
+                .any(|window| window == ebreak_opcode)
+        });
+
+    assert!(has_ebreak, "expected SP1 ELF to encode traps as ebreak");
 }
 
 fn read_le_u16(bytes: &[u8], offset: usize) -> u16 {
@@ -1294,7 +1366,52 @@ fn cranelift_emits_sp1_riscv64im_elf_for_integer_main() {
 }
 
 #[test]
+fn cranelift_sp1_riscv64im_compiles_truthy_zero_branch_at_speed() {
+    let isa = sp1_riscv64im_isa();
+    let is = isa.inst_set();
+    let mb = sp1_riscv64im_module_builder();
+
+    let sig = Signature::new_single("main", Linkage::Public, &[Type::I64], Type::I64);
+    let func_ref = mb.declare_function(sig).unwrap();
+
+    let mut fb = mb.func_builder::<InstInserter>(func_ref);
+    let entry = fb.append_block();
+    let loop_block = fb.append_block();
+    let exit = fb.append_block();
+
+    fb.switch_to_block(entry);
+    let old_remaining = fb.args()[0];
+    let one = fb.make_imm_value(1i64);
+    let remaining = fb.insert_inst(arith::Sub::new(is, old_remaining, one), Type::I64);
+    let zero = fb.make_imm_value(0i64);
+    let cond = fb.insert_inst(cmp::Lt::new(is, zero, remaining), Type::I1);
+    fb.insert_inst_no_result(control_flow::Br::new(is, cond, loop_block, exit));
+
+    fb.switch_to_block(loop_block);
+    fb.insert_inst_no_result(control_flow::Return::new_single(is, remaining));
+
+    fb.switch_to_block(exit);
+    fb.insert_inst_no_result(control_flow::Return::new_single(is, zero));
+
+    fb.seal_all();
+    fb.finish();
+
+    let module = mb.build();
+    let artifact = CraneliftBackend::new()
+        .with_opt_level(cranelift_codegen::settings::OptLevel::Speed)
+        .compile_module_to_object(&module)
+        .expect("SP1 RV64 object compilation failed");
+
+    assert!(artifact.func_map.contains_key("main"));
+    assert_riscv64_elf_object(&artifact.bytes);
+}
+
+#[test]
 fn cranelift_sp1_trap_uses_ebreak_encoding() {
+    if !sp1_toolchain_available() {
+        return;
+    }
+
     let isa = sp1_riscv64im_isa();
     let is = isa.inst_set();
     let mb = sp1_riscv64im_module_builder();
@@ -1311,17 +1428,11 @@ fn cranelift_sp1_trap_uses_ebreak_encoding() {
 
     let module = mb.build();
     let artifact = CraneliftBackend::new()
-        .compile_module_to_object(&module)
-        .expect("SP1 RV64 object compilation failed");
+        .compile_module_to_sp1_elf(&module)
+        .expect("SP1 ELF compilation failed");
 
-    let ebreak_opcode = [0x73, 0x00, 0x10, 0x00];
-    assert!(
-        artifact
-            .bytes
-            .windows(ebreak_opcode.len())
-            .any(|window| window == ebreak_opcode),
-        "expected SP1 object to encode explicit traps as ebreak"
-    );
+    assert_sp1_elf_executable(&artifact.bytes, 2);
+    assert_executable_segments_contain_ebreak(&artifact.bytes, 2);
 }
 
 #[test]
