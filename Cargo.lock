@@ -658,6 +658,7 @@ dependencies = [
 [[package]]
 name = "cranelift-assembler-x64"
 version = "0.133.0"
+source = "git+https://github.com/fe-lang/wasmtime?rev=5bbb125#5bbb125ace8406c5804a405d1c755ed8db0b01cf"
 dependencies = [
  "cranelift-assembler-x64-meta",
 ]
@@ -665,6 +666,7 @@ dependencies = [
 [[package]]
 name = "cranelift-assembler-x64-meta"
 version = "0.133.0"
+source = "git+https://github.com/fe-lang/wasmtime?rev=5bbb125#5bbb125ace8406c5804a405d1c755ed8db0b01cf"
 dependencies = [
  "cranelift-srcgen",
 ]
@@ -672,6 +674,7 @@ dependencies = [
 [[package]]
 name = "cranelift-bforest"
 version = "0.133.0"
+source = "git+https://github.com/fe-lang/wasmtime?rev=5bbb125#5bbb125ace8406c5804a405d1c755ed8db0b01cf"
 dependencies = [
  "cranelift-entity 0.133.0",
  "wasmtime-internal-core",
@@ -686,6 +689,7 @@ checksum = "006fe8776f6d81acb83571f52e7737a54c6dec1ba75e2b7b5a68af15451f88ee"
 [[package]]
 name = "cranelift-bitset"
 version = "0.133.0"
+source = "git+https://github.com/fe-lang/wasmtime?rev=5bbb125#5bbb125ace8406c5804a405d1c755ed8db0b01cf"
 dependencies = [
  "wasmtime-internal-core",
 ]
@@ -693,6 +697,7 @@ dependencies = [
 [[package]]
 name = "cranelift-codegen"
 version = "0.133.0"
+source = "git+https://github.com/fe-lang/wasmtime?rev=5bbb125#5bbb125ace8406c5804a405d1c755ed8db0b01cf"
 dependencies = [
  "bumpalo",
  "cranelift-assembler-x64",
@@ -718,6 +723,7 @@ dependencies = [
 [[package]]
 name = "cranelift-codegen-meta"
 version = "0.133.0"
+source = "git+https://github.com/fe-lang/wasmtime?rev=5bbb125#5bbb125ace8406c5804a405d1c755ed8db0b01cf"
 dependencies = [
  "cranelift-assembler-x64-meta",
  "cranelift-codegen-shared",
@@ -728,10 +734,12 @@ dependencies = [
 [[package]]
 name = "cranelift-codegen-shared"
 version = "0.133.0"
+source = "git+https://github.com/fe-lang/wasmtime?rev=5bbb125#5bbb125ace8406c5804a405d1c755ed8db0b01cf"
 
 [[package]]
 name = "cranelift-control"
 version = "0.133.0"
+source = "git+https://github.com/fe-lang/wasmtime?rev=5bbb125#5bbb125ace8406c5804a405d1c755ed8db0b01cf"
 dependencies = [
  "arbitrary",
 ]
@@ -748,6 +756,7 @@ dependencies = [
 [[package]]
 name = "cranelift-entity"
 version = "0.133.0"
+source = "git+https://github.com/fe-lang/wasmtime?rev=5bbb125#5bbb125ace8406c5804a405d1c755ed8db0b01cf"
 dependencies = [
  "cranelift-bitset 0.133.0",
  "wasmtime-internal-core",
@@ -756,6 +765,7 @@ dependencies = [
 [[package]]
 name = "cranelift-frontend"
 version = "0.133.0"
+source = "git+https://github.com/fe-lang/wasmtime?rev=5bbb125#5bbb125ace8406c5804a405d1c755ed8db0b01cf"
 dependencies = [
  "cranelift-codegen",
  "hashbrown 0.17.1",
@@ -767,10 +777,12 @@ dependencies = [
 [[package]]
 name = "cranelift-isle"
 version = "0.133.0"
+source = "git+https://github.com/fe-lang/wasmtime?rev=5bbb125#5bbb125ace8406c5804a405d1c755ed8db0b01cf"
 
 [[package]]
 name = "cranelift-jit"
 version = "0.133.0"
+source = "git+https://github.com/fe-lang/wasmtime?rev=5bbb125#5bbb125ace8406c5804a405d1c755ed8db0b01cf"
 dependencies = [
  "anyhow",
  "cranelift-codegen",
@@ -790,6 +802,7 @@ dependencies = [
 [[package]]
 name = "cranelift-module"
 version = "0.133.0"
+source = "git+https://github.com/fe-lang/wasmtime?rev=5bbb125#5bbb125ace8406c5804a405d1c755ed8db0b01cf"
 dependencies = [
  "anyhow",
  "cranelift-codegen",
@@ -799,6 +812,7 @@ dependencies = [
 [[package]]
 name = "cranelift-native"
 version = "0.133.0"
+source = "git+https://github.com/fe-lang/wasmtime?rev=5bbb125#5bbb125ace8406c5804a405d1c755ed8db0b01cf"
 dependencies = [
  "cranelift-codegen",
  "libc",
@@ -808,6 +822,7 @@ dependencies = [
 [[package]]
 name = "cranelift-object"
 version = "0.133.0"
+source = "git+https://github.com/fe-lang/wasmtime?rev=5bbb125#5bbb125ace8406c5804a405d1c755ed8db0b01cf"
 dependencies = [
  "anyhow",
  "cranelift-codegen",
@@ -822,6 +837,7 @@ dependencies = [
 [[package]]
 name = "cranelift-srcgen"
 version = "0.133.0"
+source = "git+https://github.com/fe-lang/wasmtime?rev=5bbb125#5bbb125ace8406c5804a405d1c755ed8db0b01cf"
 
 [[package]]
 name = "crc32fast"
@@ -2614,6 +2630,7 @@ checksum = "55937e1799185b12863d447f42597ed69d9928686b8d88a1df17376a097d8369"
 [[package]]
 name = "target-lexicon"
 version = "0.13.3"
+source = "git+https://github.com/fe-lang/wasmtime?rev=5bbb125#5bbb125ace8406c5804a405d1c755ed8db0b01cf"
 
 [[package]]
 name = "tempfile"
@@ -2911,6 +2928,7 @@ dependencies = [
 [[package]]
 name = "wasmtime-internal-core"
 version = "46.0.0"
+source = "git+https://github.com/fe-lang/wasmtime?rev=5bbb125#5bbb125ace8406c5804a405d1c755ed8db0b01cf"
 dependencies = [
  "hashbrown 0.17.1",
  "libm",
@@ -2919,6 +2937,7 @@ dependencies = [
 [[package]]
 name = "wasmtime-internal-jit-icache-coherence"
 version = "46.0.0"
+source = "git+https://github.com/fe-lang/wasmtime?rev=5bbb125#5bbb125ace8406c5804a405d1c755ed8db0b01cf"
 dependencies = [
  "cfg-if",
  "libc",

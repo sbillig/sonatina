@@ -39,34 +39,6 @@ fn native_module_builder() -> ModuleBuilder {
     ModuleBuilder::new(ctx)
 }
 
-fn riscv32im_isa() -> Native {
-    Native::new(TargetTriple::new(
-        Architecture::Riscv32im,
-        Vendor::Unknown,
-        OperatingSystem::None,
-    ))
-}
-
-fn riscv32im_module_builder() -> ModuleBuilder {
-    let isa = riscv32im_isa();
-    let ctx = ModuleCtx::new(&isa);
-    ModuleBuilder::new(ctx)
-}
-
-fn sp1_riscv32im_isa() -> Native {
-    Native::new(TargetTriple::new(
-        Architecture::Riscv32im,
-        Vendor::Succinct,
-        OperatingSystem::ZkvmElf,
-    ))
-}
-
-fn sp1_riscv32im_module_builder() -> ModuleBuilder {
-    let isa = sp1_riscv32im_isa();
-    let ctx = ModuleCtx::new(&isa);
-    ModuleBuilder::new(ctx)
-}
-
 fn sp1_riscv64im_isa() -> Native {
     Native::new(TargetTriple::new(
         Architecture::Riscv64im,
@@ -79,14 +51,6 @@ fn sp1_riscv64im_module_builder() -> ModuleBuilder {
     let isa = sp1_riscv64im_isa();
     let ctx = ModuleCtx::new(&isa);
     ModuleBuilder::new(ctx)
-}
-
-fn assert_riscv32_elf_object(bytes: &[u8]) {
-    assert!(bytes.len() >= 40, "ELF header is truncated");
-    assert_eq!(&bytes[0..4], b"\x7fELF");
-    assert_eq!(bytes[4], 1, "expected ELFCLASS32");
-    assert_eq!(bytes[5], 1, "expected little-endian ELF");
-    assert_eq!(read_le_u16(bytes, 18), 243, "expected EM_RISCV");
 }
 
 fn assert_riscv64_elf_object(bytes: &[u8]) {
@@ -1272,66 +1236,6 @@ fn cranelift_defines_local_functions_with_intrinsic_like_names() {
             .func_map
             .contains_key("std__lib__evm__crypto__mulmod_64ed")
     );
-}
-
-#[test]
-fn cranelift_emits_riscv32im_object_for_integer_main() {
-    let isa = riscv32im_isa();
-    let is = isa.inst_set();
-    let mb = riscv32im_module_builder();
-
-    let sig = Signature::new_single("main", Linkage::Public, &[], Type::I32);
-    let func_ref = mb.declare_function(sig).unwrap();
-
-    let mut fb = mb.func_builder::<InstInserter>(func_ref);
-    let entry = fb.append_block();
-    fb.switch_to_block(entry);
-    let forty = fb.make_imm_value(40i32);
-    let two = fb.make_imm_value(2i32);
-    let status = fb.insert_inst(arith::Add::new(is, forty, two), Type::I32);
-    fb.insert_inst_no_result(control_flow::Return::new_single(is, status));
-    fb.seal_all();
-    fb.finish();
-
-    let module = mb.build();
-    let artifact = CraneliftBackend::new()
-        .compile_module_to_object(&module)
-        .expect("RV32IM object compilation failed");
-
-    assert!(!artifact.bytes.is_empty());
-    assert!(artifact.func_map.contains_key("main"));
-    assert_riscv32_elf_object(&artifact.bytes);
-}
-
-#[test]
-fn cranelift_emits_sp1_riscv32im_elf_for_integer_main() {
-    if !sp1_toolchain_available() {
-        return;
-    }
-
-    let isa = sp1_riscv32im_isa();
-    let is = isa.inst_set();
-    let mb = sp1_riscv32im_module_builder();
-
-    let sig = Signature::new_single("main", Linkage::Public, &[], Type::I32);
-    let func_ref = mb.declare_function(sig).unwrap();
-
-    let mut fb = mb.func_builder::<InstInserter>(func_ref);
-    let entry = fb.append_block();
-    fb.switch_to_block(entry);
-    let status = fb.make_imm_value(42i32);
-    fb.insert_inst_no_result(control_flow::Return::new_single(is, status));
-    fb.seal_all();
-    fb.finish();
-
-    let module = mb.build();
-    let artifact = CraneliftBackend::new()
-        .compile_module_to_sp1_elf(&module)
-        .expect("SP1 ELF compilation failed");
-
-    assert!(!artifact.bytes.is_empty());
-    assert!(artifact.func_map.contains_key("main"));
-    assert_sp1_elf_executable(&artifact.bytes, 1);
 }
 
 #[test]

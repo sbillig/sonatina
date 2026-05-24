@@ -16,4 +16,4 @@ members = [
 edition = "2024"
 
 [patch.crates-io]
-target-lexicon = { path = "/Users/sean/src/wasmtime/vendor/target-lexicon" }
+target-lexicon = { git = "https://github.com/fe-lang/wasmtime", rev = "5bbb125" }

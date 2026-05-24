@@ -16,12 +16,12 @@ keywords = ["compiler", "evm", "wasm", "smart-contract"]
 
 [dependencies]
 cranelift-entity = "0.126"
-cranelift-codegen = { path = "/Users/sean/src/wasmtime/cranelift/codegen", optional = true, features = ["riscv64"] }
-cranelift-frontend = { path = "/Users/sean/src/wasmtime/cranelift/frontend", optional = true }
-cranelift-module = { path = "/Users/sean/src/wasmtime/cranelift/module", optional = true }
-cranelift-jit = { path = "/Users/sean/src/wasmtime/cranelift/jit", optional = true }
-cranelift-native = { path = "/Users/sean/src/wasmtime/cranelift/native", optional = true }
-cranelift-object = { path = "/Users/sean/src/wasmtime/cranelift/object", optional = true }
+cranelift-codegen = { git = "https://github.com/fe-lang/wasmtime", rev = "5bbb125", optional = true, features = ["riscv64"] }
+cranelift-frontend = { git = "https://github.com/fe-lang/wasmtime", rev = "5bbb125", optional = true }
+cranelift-module = { git = "https://github.com/fe-lang/wasmtime", rev = "5bbb125", optional = true }
+cranelift-jit = { git = "https://github.com/fe-lang/wasmtime", rev = "5bbb125", optional = true }
+cranelift-native = { git = "https://github.com/fe-lang/wasmtime", rev = "5bbb125", optional = true }
+cranelift-object = { git = "https://github.com/fe-lang/wasmtime", rev = "5bbb125", optional = true }
 smallvec = "1.15.1"
 rustc-hash = "2.0.0"
 sonatina-ir = { path = "../ir", version = "0.0.3-alpha" }
