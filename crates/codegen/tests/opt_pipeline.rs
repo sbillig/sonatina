@@ -2,10 +2,12 @@ mod common;
 
 use dir_test::{Fixture, dir_test};
 use sonatina_codegen::{
+    cfg_edit::CleanupMode,
     domtree::DomTree,
     loop_analysis::LoopTree,
     optim::{
-        Pass, Step, gvn::GvnSolver, licm::LicmSolver, pipeline::Pipeline,
+        Pass, Step, cfg_cleanup::CfgCleanup, counted_loop_canonicalize::CountedLoopCanonicalize,
+        gvn::GvnSolver, licm::LicmSolver, pipeline::Pipeline,
         scalar_alloca_promote::ScalarAllocaPromote, scalar_canonicalize::ScalarCanonicalize,
         sccp::SccpSolver,
     },
@@ -182,6 +184,198 @@ func public %entry() -> i64 {
     assert_func_contains(&module, func_ref, "alloca");
     assert_func_contains(&module, func_ref, "mload");
     assert_func_contains(&module, func_ref, "mstore");
+}
+
+#[test]
+fn counted_loop_canonicalize_rotates_induction_only_loop() {
+    let (module, func_ref) = parse_test_module(
+        r#"
+target = "evm-ethereum-osaka"
+
+func public %entry(v0.i32) -> i32 {
+    block0:
+        jump block1;
+
+    block1:
+        v1.i32 = phi (1.i32 block0) (v5 block2);
+        v2.i32 = phi (0.i32 block0) (v1 block2);
+        v3.i32 = phi (0.i32 block0) (v6 block2);
+        v4.i1 = lt v3 v0;
+        br v4 block2 block3;
+
+    block2:
+        v5.i32 = add v2 v1;
+        v6.i32 = add v3 1.i32;
+        jump block1;
+
+    block3:
+        return v2;
+}
+"#,
+    );
+    assert!(run_counted_loop_canonicalize_and_cleanup(&module, func_ref));
+    assert_func_not_contains(&module, func_ref, "lt ");
+    assert_func_contains(&module, func_ref, "sub ");
+    assert_func_contains(&module, func_ref, "ne ");
+    assert_fast_verified(&module);
+}
+
+#[test]
+fn counted_loop_canonicalize_uses_native_countdown_on_riscv64() {
+    let (module, func_ref) = parse_test_module(
+        r#"
+target = "riscv64im-succinct-zkvm-elf"
+
+func public %entry(v0.i32) -> i32 {
+    block0:
+        jump block1;
+
+    block1:
+        v1.i32 = phi (1.i32 block0) (v5 block2);
+        v2.i32 = phi (0.i32 block0) (v1 block2);
+        v3.i32 = phi (0.i32 block0) (v6 block2);
+        v4.i1 = lt v3 v0;
+        br v4 block2 block3;
+
+    block2:
+        v5.i32 = add v2 v1;
+        v6.i32 = add v3 1.i32;
+        jump block1;
+
+    block3:
+        return v2;
+}
+"#,
+    );
+    assert!(run_counted_loop_canonicalize_and_cleanup(&module, func_ref));
+    assert_func_contains(&module, func_ref, "zext v0 i64");
+    assert_func_contains(&module, func_ref, ".i64 = phi");
+    assert_func_contains(&module, func_ref, "sub ");
+    assert_func_contains(&module, func_ref, "lt 0.i64");
+    assert_func_not_contains(&module, func_ref, "lt v3 v0");
+    assert_fast_verified(&module);
+}
+
+#[test]
+fn counted_loop_canonicalize_rejects_iv_used_in_body() {
+    let (module, func_ref) = parse_test_module(
+        r#"
+target = "evm-ethereum-osaka"
+
+func public %entry(v0.i32) -> i32 {
+    block0:
+        jump block1;
+
+    block1:
+        v1.i32 = phi (0.i32 block0) (v4 block2);
+        v2.i1 = lt v1 v0;
+        br v2 block2 block3;
+
+    block2:
+        v3.i32 = add v1 10.i32;
+        v4.i32 = add v1 1.i32;
+        jump block1;
+
+    block3:
+        return v0;
+}
+"#,
+    );
+    assert!(!run_counted_loop_canonicalize(&module, func_ref));
+    assert_func_contains(&module, func_ref, "lt ");
+    assert_func_contains(&module, func_ref, "add v1 1.i32");
+}
+
+#[test]
+fn counted_loop_canonicalize_rejects_nonzero_init() {
+    let (module, func_ref) = parse_test_module(
+        r#"
+target = "evm-ethereum-osaka"
+
+func public %entry(v0.i32) -> i32 {
+    block0:
+        jump block1;
+
+    block1:
+        v1.i32 = phi (1.i32 block0) (v3 block2);
+        v2.i1 = lt v1 v0;
+        br v2 block2 block3;
+
+    block2:
+        v3.i32 = add v1 1.i32;
+        jump block1;
+
+    block3:
+        return v0;
+}
+"#,
+    );
+    assert!(!run_counted_loop_canonicalize(&module, func_ref));
+    assert_func_contains(&module, func_ref, "lt ");
+}
+
+#[test]
+fn counted_loop_canonicalize_rejects_side_exit_loop() {
+    let (module, func_ref) = parse_test_module(
+        r#"
+target = "evm-ethereum-osaka"
+
+func public %entry(v0.i32, v1.i1) -> i32 {
+    block0:
+        jump block1;
+
+    block1:
+        v2.i32 = phi (0.i32 block0) (v4 block3);
+        v3.i1 = lt v2 v0;
+        br v3 block2 block4;
+
+    block2:
+        br v1 block4 block3;
+
+    block3:
+        v4.i32 = add v2 1.i32;
+        jump block1;
+
+    block4:
+        return v2;
+}
+"#,
+    );
+    assert!(!run_counted_loop_canonicalize(&module, func_ref));
+    assert_func_contains(&module, func_ref, "lt ");
+    assert_fast_verified(&module);
+}
+
+#[test]
+fn counted_loop_canonicalize_preserves_cross_phi_exit_inputs() {
+    let (module, func_ref) = parse_test_module(
+        r#"
+target = "evm-ethereum-osaka"
+
+func public %entry(v0.i32) -> i32 {
+    block0:
+        jump block1;
+
+    block1:
+        v1.i32 = phi (1.i32 block0) (v2 block2);
+        v2.i32 = phi (2.i32 block0) (v6 block2);
+        v3.i32 = phi (0.i32 block0) (v7 block2);
+        v4.i1 = lt v3 v0;
+        br v4 block2 block3;
+
+    block2:
+        v6.i32 = add v2 1.i32;
+        v7.i32 = add v3 1.i32;
+        jump block1;
+
+    block3:
+        v8.i32 = add v1 v2;
+        return v8;
+}
+"#,
+    );
+    assert!(run_counted_loop_canonicalize_and_cleanup(&module, func_ref));
+    assert_fast_verified(&module);
 }
 
 #[test]
@@ -1746,6 +1940,26 @@ fn run_scalar_alloca_promote(module: &Module, func_ref: FuncRef) -> bool {
     module
         .func_store
         .modify(func_ref, |func| ScalarAllocaPromote::new().run(func))
+}
+
+fn run_counted_loop_canonicalize(module: &Module, func_ref: FuncRef) -> bool {
+    module.func_store.modify(func_ref, |func| {
+        let mut cfg = ControlFlowGraph::default();
+        let mut domtree = DomTree::default();
+        let mut lpt = LoopTree::default();
+        CountedLoopCanonicalize::new().run(func, &mut cfg, &mut domtree, &mut lpt)
+    })
+}
+
+fn run_counted_loop_canonicalize_and_cleanup(module: &Module, func_ref: FuncRef) -> bool {
+    module.func_store.modify(func_ref, |func| {
+        let mut cfg = ControlFlowGraph::default();
+        let mut domtree = DomTree::default();
+        let mut lpt = LoopTree::default();
+        let changed = CountedLoopCanonicalize::new().run(func, &mut cfg, &mut domtree, &mut lpt);
+        let cleaned = CfgCleanup::new(CleanupMode::Strict).run(func);
+        changed || cleaned
+    })
 }
 
 fn assert_func_not_contains(module: &Module, func_ref: FuncRef, needle: &str) {

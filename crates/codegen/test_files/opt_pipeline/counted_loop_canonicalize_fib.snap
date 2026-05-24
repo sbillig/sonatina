@@ -1,0 +1,24 @@
+---
+source: crates/codegen/tests/opt_pipeline.rs
+input_file: test_files/opt_pipeline/counted_loop_canonicalize_fib.sntn
+---
+target = "evm-ethereum-osaka"
+
+func public %entry(v0.i32) -> i32 {
+    block0:
+        v13.i1 = ne v0 0.i32;
+        br v13 block1 block3;
+
+    block1:
+        v1.i32 = phi (1.i32 block0) (v5 block1);
+        v2.i32 = phi (0.i32 block0) (v1 block1);
+        v3.i32 = phi (v0 block0) (v12 block1);
+        v5.i32 = add v2 v1;
+        v12.i32 = sub v3 1.i32;
+        v14.i1 = ne v12 0.i32;
+        br v14 block1 block3;
+
+    block3:
+        v11.i32 = phi (0.i32 block0) (v1 block1);
+        return v11;
+}

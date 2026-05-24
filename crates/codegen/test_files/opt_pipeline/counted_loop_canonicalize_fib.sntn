@@ -1,0 +1,21 @@
+target = "evm-ethereum-osaka"
+
+func public %entry(v0.i32) -> i32 {
+    block0:
+        jump block1;
+
+    block1:
+        v1.i32 = phi (1.i32 block0) (v5 block2);
+        v2.i32 = phi (0.i32 block0) (v1 block2);
+        v3.i32 = phi (0.i32 block0) (v6 block2);
+        v4.i1 = lt v3 v0;
+        br v4 block2 block3;
+
+    block2:
+        v5.i32 = add v2 v1;
+        v6.i32 = add v3 1.i32;
+        jump block1;
+
+    block3:
+        return v2;
+}

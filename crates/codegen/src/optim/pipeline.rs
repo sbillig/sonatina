@@ -43,6 +43,7 @@ use super::{
     branch_canonicalize::BranchCanonicalize,
     cfg_cleanup::CfgCleanup,
     checked_arith_elim::{CheckedArithElim, has_supported_checked_arith},
+    counted_loop_canonicalize::CountedLoopCanonicalize,
     dead_arg::{DeadArgElimConfig, run_dead_arg_elim},
     dead_func::{DeadFuncElimConfig, collect_object_roots, run_dead_func_elim},
     gvn::GvnSolver,
@@ -80,6 +81,8 @@ pub enum Pass {
     LoadStore,
     /// Promote exact scalar alloca memory slots into SSA values.
     ScalarAllocaPromote,
+    /// Canonicalize induction-only ascending count loops into remaining-count loops.
+    CountedLoopCanonicalize,
     /// Cheap local scalar canonicalization (zero-compares, neg-arith, pow2 mul, cast chains).
     ScalarCanonicalize,
     /// Simplify expressions with precise known-bit reasoning.
@@ -152,6 +155,11 @@ impl Pass {
             },
             Pass::ScalarAllocaPromote => PassInfo {
                 name: "scalar_alloca_promote",
+                needs_func_behavior: false,
+                invalidates_func_behavior: true,
+            },
+            Pass::CountedLoopCanonicalize => PassInfo {
+                name: "counted_loop_canonicalize",
                 needs_func_behavior: false,
                 invalidates_func_behavior: true,
             },
@@ -336,6 +344,24 @@ const POST_DEAD_ARG_CLEANUP_PASSES: &[Pass] = &[
     Pass::CfgCleanup,
 ];
 
+const FINAL_FUNC_PASSES: &[Pass] = &[
+    Pass::CfgCleanup,
+    Pass::AggregateCombine,
+    Pass::BranchCanonicalize,
+    Pass::ObjectLoadStore,
+    Pass::AggregateScalarize,
+    Pass::LoadStore,
+    Pass::ScalarAllocaPromote,
+    Pass::CheckedArithElim,
+    Pass::RangeBranchSimplify,
+    Pass::Sccp,
+    Pass::ScalarCanonicalize,
+    Pass::Gvn,
+    Pass::BranchCanonicalize,
+    Pass::CountedLoopCanonicalize,
+    Pass::CfgCleanup,
+];
+
 const NATIVE_FUNC_PASSES: &[Pass] = &[
     Pass::CfgCleanup,
     Pass::ScalarAllocaPromote,
@@ -345,6 +371,7 @@ const NATIVE_FUNC_PASSES: &[Pass] = &[
     Pass::Sccp,
     Pass::ScalarCanonicalize,
     Pass::KnownBitsSimplify,
+    Pass::CountedLoopCanonicalize,
     Pass::CfgCleanup,
 ];
 
@@ -413,7 +440,7 @@ impl Pipeline {
         p.add_step(Step::FuncPasses(POST_DEAD_ARG_CLEANUP_PASSES.to_vec()));
         p.add_step(Step::DeadFuncElim);
         p.add_step(Step::Inline);
-        p.add_step(Step::FuncPasses(SECONDARY_FUNC_PASSES.to_vec()));
+        p.add_step(Step::FuncPasses(FINAL_FUNC_PASSES.to_vec()));
         p.add_step(Step::DeadFuncElim);
         p
     }
@@ -508,7 +535,10 @@ impl Pipeline {
     ///    - `Sccp`
     ///    - `BranchCanonicalize`
     ///    - `CfgCleanup`
-    /// 7. `DeadFuncElim` — prune unreachable private definitions from object roots
+    /// 7. Final inline and per-function cleanup; the last round runs
+    ///    `CountedLoopCanonicalize` after branch canonicalization so later
+    ///    scalar rewrites do not undo the countdown loop form.
+    /// 8. `DeadFuncElim` — prune unreachable private definitions from object roots
     pub fn default_pipeline() -> Self {
         Self::speed()
     }
@@ -1164,6 +1194,34 @@ fn run_pass(
                 return PassResult::skipped(pass);
             }
             ScalarAllocaPromote::new().run(func)
+        }
+        Pass::CountedLoopCanonicalize => {
+            let _span =
+                trace_span!("sonatina.optim.pipeline.pass.counted_loop_canonicalize").entered();
+            {
+                let _span =
+                    trace_span!("sonatina.optim.pipeline.counted_loop.compute_cfg").entered();
+                ctx.cfg.compute(func);
+            }
+            {
+                let _span =
+                    trace_span!("sonatina.optim.pipeline.counted_loop.compute_domtree").entered();
+                ctx.domtree.compute(&ctx.cfg);
+            }
+            {
+                let _span =
+                    trace_span!("sonatina.optim.pipeline.counted_loop.compute_looptree").entered();
+                ctx.lpt.compute(&ctx.cfg, &ctx.domtree);
+            }
+            {
+                let _span = trace_span!("sonatina.optim.pipeline.counted_loop.solve").entered();
+                CountedLoopCanonicalize::new().run(
+                    func,
+                    &mut ctx.cfg,
+                    &mut ctx.domtree,
+                    &mut ctx.lpt,
+                )
+            }
         }
         Pass::ScalarCanonicalize => {
             let _span = trace_span!("sonatina.optim.pipeline.pass.scalar_canonicalize").entered();
