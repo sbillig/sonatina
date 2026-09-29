@@ -606,6 +606,11 @@ fn classify_inst_effects_with<S: EffectSink>(
         return sink.finish();
     }
 
+    if <&data::BlackBox as InstDowncast>::downcast(is, inst).is_some() {
+        sink.add_other(OtherEffects::OBSERVE | OtherEffects::MUTATE);
+        return sink.finish();
+    }
+
     if <&data::EnumGetTag as InstDowncast>::downcast(is, inst).is_some() {
         sink.add_other(OtherEffects::OBSERVE);
         return sink.finish();
