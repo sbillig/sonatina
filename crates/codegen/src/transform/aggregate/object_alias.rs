@@ -181,8 +181,7 @@ block0:
             |func, aliases, facts| {
                 let results: Vec<_> = func
                     .layout
-                    .iter_block()
-                    .flat_map(|block| func.layout.iter_inst(block))
+                    .iter_all_insts()
                     .filter_map(|inst| func.dfg.inst_result(inst))
                     .collect();
                 let exact = |value| facts.complete().exact_projection(value).unwrap();
@@ -239,8 +238,7 @@ block2:
             |func, aliases, facts| {
                 let results: Vec<_> = func
                     .layout
-                    .iter_block()
-                    .flat_map(|block| func.layout.iter_inst(block))
+                    .iter_all_insts()
                     .filter_map(|inst| func.dfg.inst_result(inst))
                     .collect();
                 let [known, unrelated, opaque, merged] = results.as_slice() else {
@@ -274,8 +272,7 @@ block2:
             |func, aliases, facts| {
                 let value = func
                     .layout
-                    .iter_block()
-                    .flat_map(|block| func.layout.iter_inst(block))
+                    .iter_all_insts()
                     .find_map(|inst| func.dfg.inst_result(inst))
                     .unwrap();
                 let projection = facts.complete().exact_projection(value).unwrap();

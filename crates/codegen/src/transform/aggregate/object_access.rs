@@ -679,8 +679,7 @@ block0:
             |func, facts, summaries| {
                 let call = func
                     .layout
-                    .iter_block()
-                    .flat_map(|block| func.layout.iter_inst(block))
+                    .iter_all_insts()
                     .find(|&inst| func.dfg.call_info(inst).is_some())
                     .unwrap();
                 let effects = facts.effects(func, call, Some(summaries));
@@ -726,8 +725,7 @@ block0:
             |func, facts, summaries| {
                 let store = func
                     .layout
-                    .iter_block()
-                    .flat_map(|block| func.layout.iter_inst(block))
+                    .iter_all_insts()
                     .find(|&inst| {
                         downcast::<&data::ObjStore>(func.inst_set(), func.dfg.inst(inst))
                             .is_some_and(|store| *store.object() == ValueId::from_u32(3))

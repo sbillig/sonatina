@@ -145,8 +145,7 @@ impl AggregateCombine {
             let tracked = accesses.tracked_all(func, &mut self.layout_cache);
             let effects = func
                 .layout
-                .iter_block()
-                .flat_map(|block| func.layout.iter_inst(block))
+                .iter_all_insts()
                 .map(|inst| (inst, accesses.effects(func, inst, object_effects)))
                 .collect();
             let enum_aliases = EnumAliasContext {
@@ -774,8 +773,7 @@ fn remove_dead_local_enum_writes(
     let local_tracked = accesses.tracked_for_roots(func, &local_roots, layout_cache);
     let effects = func
         .layout
-        .iter_block()
-        .flat_map(|block| func.layout.iter_inst(block))
+        .iter_all_insts()
         .map(|inst| (inst, accesses.effects(func, inst, summaries)))
         .collect();
     let enum_aliases = EnumAliasContext {

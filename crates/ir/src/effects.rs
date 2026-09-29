@@ -1020,8 +1020,7 @@ mod tests {
     {
         let is = func.inst_set();
         func.layout
-            .iter_block()
-            .flat_map(|block| func.layout.iter_inst(block))
+            .iter_all_insts()
             .find(|&inst| <&T as InstDowncast>::downcast(is, func.dfg.inst(inst)).is_some())
             .expect("instruction should exist")
     }
