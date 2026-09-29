@@ -46,8 +46,7 @@ enum AggregateFieldLookup {
 }
 
 type EnumObjectFacts = FxHashMap<ExactEnumSlice, KnownEnumObjectState>;
-type PendingEnumWrites = FxHashMap<ExactEnumSlice, PendingEnumWrite>;
-type EnumLiveMap = LiveLeafMap;
+type PendingEnumWrites = FxHashMap<ExactEnumSlice, InstId>;
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 struct EnumFlowState {
     facts: EnumObjectFacts,
@@ -119,10 +118,6 @@ struct KnownEnumObjectState {
     variant: EnumVariantRef,
     payloads: SmallVec<[Option<ValueId>; 2]>,
 }
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct PendingEnumWrite {
-    inst: InstId,
-}
 impl AggregateCombine {
     pub fn run(&mut self, func: &mut Function) -> bool {
         self.run_with_effects(func, None)
@@ -143,11 +138,7 @@ impl AggregateCombine {
             let value_facts = AggregateValueFacts::compute(func);
             let accesses = ObjectAccessFacts::new(func, object_effects);
             let tracked = accesses.tracked_all(func, &mut self.layout_cache);
-            let effects = func
-                .layout
-                .iter_all_insts()
-                .map(|inst| (inst, accesses.effects(func, inst, object_effects)))
-                .collect();
+            let effects = accesses.effects_map(func, object_effects);
             let enum_aliases = EnumAliasContext {
                 tracked: &tracked,
                 accesses: &accesses,
@@ -273,7 +264,7 @@ impl AggregateCombine {
                 .any(|&write| aliases.accesses.may_overlap(write, object.slice()))
         });
         if let Some(object) = written_object {
-            pending.insert(object, PendingEnumWrite { inst });
+            pending.insert(object, inst);
         }
         transfer_enum_object_facts(func, inst, aliases, state);
         if let Some(variant) = tag_variant {
@@ -771,11 +762,7 @@ fn remove_dead_local_enum_writes(
     let accesses = ObjectAccessFacts::new(func, summaries);
     let tracked = accesses.tracked_all(func, layout_cache);
     let local_tracked = accesses.tracked_for_roots(func, &local_roots, layout_cache);
-    let effects = func
-        .layout
-        .iter_all_insts()
-        .map(|inst| (inst, accesses.effects(func, inst, summaries)))
-        .collect();
+    let effects = accesses.effects_map(func, summaries);
     let enum_aliases = EnumAliasContext {
         tracked: &tracked,
         accesses: &accesses,
@@ -785,8 +772,8 @@ fn remove_dead_local_enum_writes(
     cfg.compute(func);
     let reachable = cfg.reachable_blocks();
     let order: Vec<_> = cfg.post_order().collect();
-    let mut in_states = SecondaryMap::<BlockId, EnumLiveMap>::new();
-    let mut out_states = SecondaryMap::<BlockId, EnumLiveMap>::new();
+    let mut in_states = SecondaryMap::<BlockId, LiveLeafMap>::new();
+    let mut out_states = SecondaryMap::<BlockId, LiveLeafMap>::new();
 
     loop {
         let mut changed = false;
@@ -901,7 +888,7 @@ fn try_remove_dead_local_enum_write(
     inst: InstId,
     local_roots: &FxHashSet<ValueId>,
     enum_aliases: EnumAliasContext<'_>,
-    live: &EnumLiveMap,
+    live: &LiveLeafMap,
 ) -> bool {
     if let Some(obj_store) = downcast::<&data::ObjStore>(func.inst_set(), func.dfg.inst(inst))
         && let Some((object, variant, field)) = enum_field_of_value(func, *obj_store.object())
@@ -1248,10 +1235,10 @@ fn remove_dead_overwritten_enum_write(
     let Some(previous) = pending.remove(&object) else {
         return false;
     };
-    if !func.layout.is_inst_inserted(previous.inst) {
+    if !func.layout.is_inst_inserted(previous) {
         return false;
     }
-    let previous_effects = &aliases.effects[&previous.inst];
+    let previous_effects = &aliases.effects[&previous];
     let next_effects = &aliases.effects[&next];
     if previous_effects.overwrites.is_empty()
         || !previous_effects.overwrites.iter().all(|&old| {
@@ -1264,7 +1251,7 @@ fn remove_dead_overwritten_enum_write(
     {
         return false;
     }
-    InstInserter::at_location(CursorLocation::At(previous.inst)).remove_inst(func);
+    InstInserter::at_location(CursorLocation::At(previous)).remove_inst(func);
     true
 }
 

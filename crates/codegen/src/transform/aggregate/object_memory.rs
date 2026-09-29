@@ -189,11 +189,7 @@ impl ObjectMemoryAnalysis {
             return;
         }
 
-        let effects: FxHashMap<_, _> = func
-            .layout
-            .iter_all_insts()
-            .map(|inst| (inst, accesses.effects(func, inst, object_effects)))
-            .collect();
+        let effects = accesses.effects_map(func, object_effects);
         let mut cfg = ControlFlowGraph::new();
         cfg.compute(func);
         let reachable = cfg.reachable_blocks();

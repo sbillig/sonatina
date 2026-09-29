@@ -357,6 +357,18 @@ impl ObjectAccessFacts {
         out
     }
 
+    /// Every instruction's effects, keyed by instruction.
+    pub(crate) fn effects_map(
+        &self,
+        func: &Function,
+        summaries: Option<&ObjectEffectSummaryMap>,
+    ) -> FxHashMap<InstId, ObjectInstEffects> {
+        func.layout
+            .iter_all_insts()
+            .map(|inst| (inst, self.effects(func, inst, summaries)))
+            .collect()
+    }
+
     pub(crate) fn effects(
         &self,
         func: &Function,
