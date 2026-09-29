@@ -2386,8 +2386,31 @@ mod tests {
         test_support::{lookup_func, parse_test_module},
         transform::aggregate::compute_object_effect_summaries,
     };
+    use sonatina_ir::Module;
 
     use super::super::object_tracking::{collect_root_slices, whole_root_slice};
+
+    /// Builds `%f`'s root provenance the way every test here builds it, with
+    /// callee effect summaries in play, and hands it to `check`.
+    fn with_provenance<R>(
+        module: &Module,
+        check: impl FnOnce(&Function, &ProvenanceFacts) -> R,
+    ) -> R {
+        let func_ref = lookup_func(module, "f");
+        let object_effects = compute_object_effect_summaries(module);
+        module.func_store.view(func_ref, |func| {
+            let mut layout_cache = shape::AggregateLayoutCache::default();
+            let root_slices = collect_root_slices_with_arg_roots(func, &mut layout_cache);
+            let provenance = collect_root_provenance(
+                func,
+                func.ctx(),
+                &root_slices,
+                &mut layout_cache,
+                Some(&object_effects),
+            );
+            check(func, &provenance)
+        })
+    }
 
     fn sorted_known_roots(roots: KnownRoots<'_>) -> Vec<ValueId> {
         let mut roots: Vec<_> = roots.iter().map(RootValue::value).collect();
@@ -2610,19 +2633,7 @@ block0:
 "#,
         );
 
-        let func_ref = lookup_func(&module, "f");
-        let object_effects = compute_object_effect_summaries(&module);
-        module.func_store.view(func_ref, |func| {
-            let mut layout_cache = shape::AggregateLayoutCache::default();
-            let root_slices = collect_root_slices_with_arg_roots(func, &mut layout_cache);
-            let provenance = collect_root_provenance(
-                func,
-                func.ctx(),
-                &root_slices,
-                &mut layout_cache,
-                Some(&object_effects),
-            );
-
+        with_provenance(&module, |func, provenance| {
             let loaded = func
                 .layout
                 .iter_all_insts()
@@ -2678,19 +2689,7 @@ block2:
 "#,
         );
 
-        let func_ref = lookup_func(&module, "f");
-        let object_effects = compute_object_effect_summaries(&module);
-        module.func_store.view(func_ref, |func| {
-            let mut layout_cache = shape::AggregateLayoutCache::default();
-            let root_slices = collect_root_slices_with_arg_roots(func, &mut layout_cache);
-            let provenance = collect_root_provenance(
-                func,
-                func.ctx(),
-                &root_slices,
-                &mut layout_cache,
-                Some(&object_effects),
-            );
-
+        with_provenance(&module, |func, provenance| {
             let loaded = func
                 .layout
                 .iter_all_insts()
@@ -2730,19 +2729,7 @@ block0:
 "#,
         );
 
-        let func_ref = lookup_func(&module, "f");
-        let object_effects = compute_object_effect_summaries(&module);
-        module.func_store.view(func_ref, |func| {
-            let mut layout_cache = shape::AggregateLayoutCache::default();
-            let root_slices = collect_root_slices_with_arg_roots(func, &mut layout_cache);
-            let provenance = collect_root_provenance(
-                func,
-                func.ctx(),
-                &root_slices,
-                &mut layout_cache,
-                Some(&object_effects),
-            );
-
+        with_provenance(&module, |func, provenance| {
             let loads: Vec<_> = func
                 .layout
                 .iter_all_insts()
@@ -2806,19 +2793,7 @@ block3:
 "#,
         );
 
-        let func_ref = lookup_func(&module, "f");
-        let object_effects = compute_object_effect_summaries(&module);
-        module.func_store.view(func_ref, |func| {
-            let mut layout_cache = shape::AggregateLayoutCache::default();
-            let root_slices = collect_root_slices_with_arg_roots(func, &mut layout_cache);
-            let provenance = collect_root_provenance(
-                func,
-                func.ctx(),
-                &root_slices,
-                &mut layout_cache,
-                Some(&object_effects),
-            );
-
+        with_provenance(&module, |func, provenance| {
             let loaded = func
                 .layout
                 .iter_all_insts()
@@ -2883,19 +2858,7 @@ block0:
 "#,
         );
 
-        let func_ref = lookup_func(&module, "f");
-        let object_effects = compute_object_effect_summaries(&module);
-        module.func_store.view(func_ref, |func| {
-            let mut layout_cache = shape::AggregateLayoutCache::default();
-            let root_slices = collect_root_slices_with_arg_roots(func, &mut layout_cache);
-            let provenance = collect_root_provenance(
-                func,
-                func.ctx(),
-                &root_slices,
-                &mut layout_cache,
-                Some(&object_effects),
-            );
-
+        with_provenance(&module, |func, provenance| {
             let loads: Vec<_> = func
                 .layout
                 .iter_all_insts()
@@ -2957,19 +2920,7 @@ block0:
 "#,
         );
 
-        let func_ref = lookup_func(&module, "f");
-        let object_effects = compute_object_effect_summaries(&module);
-        module.func_store.view(func_ref, |func| {
-            let mut layout_cache = shape::AggregateLayoutCache::default();
-            let root_slices = collect_root_slices_with_arg_roots(func, &mut layout_cache);
-            let provenance = collect_root_provenance(
-                func,
-                func.ctx(),
-                &root_slices,
-                &mut layout_cache,
-                Some(&object_effects),
-            );
-
+        with_provenance(&module, |func, provenance| {
             let loads: Vec<_> = func
                 .layout
                 .iter_all_insts()
@@ -3040,18 +2991,7 @@ block3:
 "#,
         );
 
-        let func_ref = lookup_func(&module, "f");
-        let object_effects = compute_object_effect_summaries(&module);
-        module.func_store.view(func_ref, |func| {
-            let mut layout_cache = shape::AggregateLayoutCache::default();
-            let root_slices = collect_root_slices_with_arg_roots(func, &mut layout_cache);
-            let provenance = collect_root_provenance(
-                func,
-                func.ctx(),
-                &root_slices,
-                &mut layout_cache,
-                Some(&object_effects),
-            );
+        with_provenance(&module, |func, provenance| {
             let loaded = func
                 .layout
                 .iter_all_insts()
@@ -3094,18 +3034,7 @@ block0:
 "#,
         );
 
-        let func_ref = lookup_func(&module, "f");
-        let object_effects = compute_object_effect_summaries(&module);
-        module.func_store.view(func_ref, |func| {
-            let mut layout_cache = shape::AggregateLayoutCache::default();
-            let root_slices = collect_root_slices_with_arg_roots(func, &mut layout_cache);
-            let provenance = collect_root_provenance(
-                func,
-                func.ctx(),
-                &root_slices,
-                &mut layout_cache,
-                Some(&object_effects),
-            );
+        with_provenance(&module, |func, provenance| {
             let [projected, call_result] = func
                 .layout
                 .iter_all_insts()
@@ -3147,18 +3076,7 @@ block0:
 "#,
         );
 
-        let func_ref = lookup_func(&module, "f");
-        let object_effects = compute_object_effect_summaries(&module);
-        module.func_store.view(func_ref, |func| {
-            let mut layout_cache = shape::AggregateLayoutCache::default();
-            let root_slices = collect_root_slices_with_arg_roots(func, &mut layout_cache);
-            let provenance = collect_root_provenance(
-                func,
-                func.ctx(),
-                &root_slices,
-                &mut layout_cache,
-                Some(&object_effects),
-            );
+        with_provenance(&module, |func, provenance| {
             let call_result = func
                 .layout
                 .iter_all_insts()
@@ -3223,18 +3141,7 @@ block3:
 "#,
         );
 
-        let func_ref = lookup_func(&module, "f");
-        let object_effects = compute_object_effect_summaries(&module);
-        module.func_store.view(func_ref, |func| {
-            let mut layout_cache = shape::AggregateLayoutCache::default();
-            let root_slices = collect_root_slices_with_arg_roots(func, &mut layout_cache);
-            let provenance = collect_root_provenance(
-                func,
-                func.ctx(),
-                &root_slices,
-                &mut layout_cache,
-                Some(&object_effects),
-            );
+        with_provenance(&module, |func, provenance| {
             let loaded = func
                 .layout
                 .iter_all_insts()
@@ -3292,18 +3199,7 @@ block3:
 "#,
         );
 
-        let func_ref = lookup_func(&module, "f");
-        let object_effects = compute_object_effect_summaries(&module);
-        module.func_store.view(func_ref, |func| {
-            let mut layout_cache = shape::AggregateLayoutCache::default();
-            let root_slices = collect_root_slices_with_arg_roots(func, &mut layout_cache);
-            let provenance = collect_root_provenance(
-                func,
-                func.ctx(),
-                &root_slices,
-                &mut layout_cache,
-                Some(&object_effects),
-            );
+        with_provenance(&module, |func, provenance| {
             let loaded = func
                 .layout
                 .iter_all_insts()
