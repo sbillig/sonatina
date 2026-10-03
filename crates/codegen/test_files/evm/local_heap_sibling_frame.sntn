@@ -1,0 +1,88 @@
+#! evm.config: { mem_plan_detail: true }
+#! evm.case: local_zero
+#!   calldata: u256(0) u256(0)
+#!   expect: return u256(25)
+#! evm.case: local_value
+#!   calldata: u256(0) u256(17)
+#!   expect: return u256(59)
+#! evm.case: large_sibling
+#!   calldata: u256(1) u256(17)
+#!   expect: return u256(260)
+#! evm.case: local_max
+#!   calldata: u256(0) u256(0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff)
+#!   expect: return u256(23)
+#! evm.case: sibling_max
+#!   calldata: u256(1) u256(0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff)
+#!   expect: return u256(242)
+
+# A local heap buffer dies before returning to the dispatcher. Its floor must
+# preserve the dispatcher's live frame without including a sibling's large frame.
+target = "evm-ethereum-osaka"
+
+func private %local(v0.i256) -> i256 {
+block0:
+    v1.*i8 = evm_malloc 32.i256;
+    mstore v1 v0 i256;
+    v2.*i8 = evm_malloc 32.i256;
+    v3.i256 = add v0 1.i256;
+    mstore v2 v3 i256;
+    v4.i256 = mload v1 i256;
+    v5.i256 = mload v2 i256;
+    v6.i256 = add v4 v5;
+    return v6;
+}
+
+func private %clobber(v0.*i256) -> i256 {
+block0:
+    v1.*[i256; 8] = alloca [i256; 8];
+    v2.*i256 = gep v1 0.i8 7.i8;
+    mstore v2 17.i256 i256;
+    v3.i256 = mload v0 i256;
+    v4.i256 = mload v2 i256;
+    v5.i256 = add v3 v4;
+    return v5;
+}
+
+func private %heavy(v0.i256) -> i256 {
+block0:
+    v1.*[i256; 64] = alloca [i256; 64];
+    v2.*i256 = gep v1 0.i8 0.i8;
+    v3.*i256 = gep v1 0.i8 63.i8;
+    mstore v2 101.i256 i256;
+    mstore v3 v0 i256;
+    v4.i256 = call %clobber v2;
+    v5.i256 = mload v2 i256;
+    v6.i256 = mload v3 i256;
+    v7.i256 = add v4 v5;
+    v8.i256 = add v7 v6;
+    return v8;
+}
+
+func public %entry() {
+block0:
+    v0.i256 = evm_calldata_load 0.i256;
+    v1.i256 = evm_calldata_load 32.i256;
+    v2.*[i256; 2] = alloca [i256; 2];
+    v3.*i256 = gep v2 0.i8 0.i8;
+    v4.*i256 = gep v2 0.i8 1.i8;
+    mstore v3 11.i256 i256;
+    mstore v4 13.i256 i256;
+    v5.i1 = eq v0 0.i256;
+    br v5 block1 block2;
+block1:
+    v6.i256 = call %local v1;
+    jump block3;
+block2:
+    v7.i256 = call %heavy v1;
+    jump block3;
+block3:
+    v8.i256 = phi (v6 block1) (v7 block2);
+    v9.i256 = mload v3 i256;
+    v10.i256 = mload v4 i256;
+    v11.i256 = add v8 v9;
+    v12.i256 = add v11 v10;
+    mstore 0.i256 v12 i256;
+    evm_return 0.i256 32.i256;
+}
+
+object @Contract { section runtime { entry %entry; } }

@@ -20,7 +20,8 @@ use crate::{
 
 use super::{
     super::{
-        EvmBackend, heap_plan, malloc_plan,
+        EvmBackend, heap_plan,
+        malloc_plan::{self, MallocEscapeKind},
         memory_plan::{
             self, BackendSpillPlan, BackendSpillReserve, FinalScratchReserveRange, FuncPreAnalysis,
             StableMode, WORD_BYTES, expect_func_entry,
@@ -1700,13 +1701,18 @@ fn malloc_min_base(
         .get(&inst)
         .copied()
         .unwrap_or(dyn_base_words)
-        .max(func_plan.return_escape_caller_abs_words)
         .max(backend_spill_reserve_peak);
     let escape_kinds = func_plan
         .malloc_escape_kinds
         .get(&inst)
         .copied()
         .unwrap_or_default();
+    // Entry/future bounds already preserve the live caller frames. Only an
+    // escaping allocation can survive this call and meet a caller's later
+    // sibling calls, whose frames are included in the caller clamp.
+    if escape_kinds != MallocEscapeKind::default() {
+        future_words = future_words.max(func_plan.return_escape_caller_abs_words);
+    }
     if escape_kinds.has_global_or_unknown() {
         future_words = future_words.max(dyn_base_words.max(backend_spill_reserve_peak));
     }
@@ -1727,7 +1733,7 @@ mod tests {
     use sonatina_ir::InstId;
 
     use super::*;
-    use crate::isa::evm::{STATIC_BASE, malloc_plan::MallocEscapeKind};
+    use crate::isa::evm::STATIC_BASE;
 
     fn mem_plan_for_malloc(escape_kinds: MallocEscapeKind) -> memory_plan::SemanticFuncPlan {
         let malloc = InstId::from_u32(7);
@@ -1753,10 +1759,23 @@ mod tests {
     }
 
     #[test]
-    fn local_malloc_honors_caller_clamp() {
+    fn local_malloc_uses_its_future_bound() {
         let malloc = InstId::from_u32(7);
         let min_base = malloc_min_base(
             &mem_plan_for_malloc(MallocEscapeKind::default()),
+            STATIC_BASE + WORD_BYTES,
+            0,
+            malloc,
+        );
+
+        assert_eq!(min_base, STATIC_BASE + WORD_BYTES);
+    }
+
+    #[test]
+    fn returned_malloc_honors_caller_clamp() {
+        let malloc = InstId::from_u32(7);
+        let min_base = malloc_min_base(
+            &mem_plan_for_malloc(MallocEscapeKind::RETURNS_TO_CALLER),
             STATIC_BASE + WORD_BYTES,
             0,
             malloc,

@@ -2166,6 +2166,34 @@ fn memory_planning_at_all_optimization_levels() {
             "heap across spill loop",
             include_str!("../test_files/evm/heap_live_across_final_spill_loop.sntn"),
         ),
+        (
+            "local heap and sibling frame",
+            include_str!("../test_files/evm/local_heap_sibling_frame.sntn"),
+        ),
+        (
+            "returned heap across sibling clobber",
+            include_str!("../test_files/evm/malloc_return_escape_clobber_bug.sntn"),
+        ),
+        (
+            "heap under live recursive frame",
+            include_str!("../test_files/evm/malloc_helper_under_live_frame.sntn"),
+        ),
+        (
+            "heap before lazy frame entry",
+            include_str!("../test_files/evm/malloc_helper_before_lazy_enter.sntn"),
+        ),
+        (
+            "heap pointer passed to allocating callee",
+            include_str!("../test_files/evm/malloc_call_arg_barrier.sntn"),
+        ),
+        (
+            "heap pointer escaping through a copy",
+            include_str!("../test_files/evm/malloc_mcopy_nonlocal_escape_bug.sntn"),
+        ),
+        (
+            "heap pointer escaping through byte stores",
+            include_str!("../test_files/evm/malloc_mstore8_nonlocal_escape_bug.sntn"),
+        ),
     ] {
         for level in [OptLevel::O0, OptLevel::O1, OptLevel::O2, OptLevel::Os] {
             let parsed = parse_sona(source);

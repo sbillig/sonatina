@@ -1,6 +1,6 @@
 ---
 source: crates/codegen/tests/evm.rs
-assertion_line: 1262
+assertion_line: 1315
 expression: "String::from_utf8(out).unwrap()"
 input_file: test_files/evm/vault.sntn
 ---
@@ -1964,14 +1964,14 @@ runtime_decoder__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f__e4e3f8d20b3805a2:
     JUMPDEST
     PUSH1 0x40 (64)  // v2.i256 = evm_mload v0;
     MLOAD
-    PUSH2 0x11f (287)  // v22.i256 = gt v2 287.i256;
+    PUSH1 0x9f (159)  // v24.i256 = gt v2 159.i256;
     DUP2
     GT
-    PUSH1 block3  // br v22 block10 block2;
+    PUSH1 block3  // br v24 block10 block2;
     JUMPI
   block2:
     POP  // jump block3;
-    PUSH2 0x120 (288)
+    PUSH1 0xa0 (160)
   block3:
     JUMPDEST
     PUSH0  // evm_mstore v5 0.i256;
@@ -1984,14 +1984,14 @@ runtime_decoder__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f__e4e3f8d20b3805a2:
     MSTORE
     PUSH1 0x40 (64)  // v9.i256 = evm_mload v0;
     MLOAD
-    PUSH2 0x11f (287)  // v10.i256 = gt v9 287.i256;
+    PUSH1 0x9f (159)  // v10.i256 = gt v9 159.i256;
     DUP2
     GT
     PUSH1 block6  // br v10 block11 block5;
     JUMPI
   block5:
     POP  // jump block6;
-    PUSH2 0x120 (288)
+    PUSH1 0xa0 (160)
   block6:
     JUMPDEST
     PUSH0  // evm_mstore v11 0.i256;
@@ -2004,37 +2004,37 @@ runtime_decoder__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f__e4e3f8d20b3805a2:
     MSTORE
     PUSH1 0x40 (64)  // v14.i256 = evm_mload v0;
     MLOAD
-    PUSH2 0x11f (287)  // v15.i256 = gt v14 287.i256;
+    PUSH2 0x11f (287)  // v17.i256 = gt v14 287.i256;
     DUP2
     GT
-    PUSH1 block9  // br v15 block12 block8;
+    PUSH1 block9  // br v17 block12 block8;
     JUMPI
   block8:
     POP  // jump block9;
     PUSH2 0x120 (288)
   block9:
     JUMPDEST
-    PUSH1 0x60 (96)  // v18.i256 = add v16 96.i256;
+    PUSH1 0x60 (96)  // v20.i256 = add v18 96.i256;
     DUP2
     ADD
-    PUSH1 0x40 (64)  // evm_mstore v0 v18;
+    PUSH1 0x40 (64)  // evm_mstore v0 v20;
     MSTORE
-    PUSH0  // evm_mstore v16 0.i256;
+    PUSH0  // evm_mstore v18 0.i256;
     DUP2
     MSTORE
-    PUSH1 0x20 (32)  // v19.i256 = add v16 32.i256;
+    PUSH1 0x20 (32)  // v21.i256 = add v18 32.i256;
     DUP2
     ADD
-    PUSH1 0x4 (4)  // evm_mstore v19 4.i256;
+    PUSH1 0x4 (4)  // evm_mstore v21 4.i256;
     SWAP1
     MSTORE
-    PUSH1 0x40 (64)  // v20.i256 = add v16 v0;
+    PUSH1 0x40 (64)  // v22.i256 = add v18 v0;
     DUP2
     ADD
-    PUSH1 0x4 (4)  // evm_mstore v20 4.i256;
+    PUSH1 0x4 (4)  // evm_mstore v22 4.i256;
     SWAP1
     MSTORE
-    SWAP1  // return v16;
+    SWAP1  // return v18;
     JUMP
 
 // func private %return_value__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f_u256__c4b26908c66ef75f(v0.i256)

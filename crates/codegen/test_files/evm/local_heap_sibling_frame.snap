@@ -1,0 +1,36 @@
+---
+source: crates/codegen/tests/evm.rs
+expression: "String::from_utf8(out).unwrap()"
+input_file: test_files/evm/local_heap_sibling_frame.sntn
+---
+evm.config: stack_reach=16 vcode=false bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false mem_plan_detail=true
+
+object: Contract
+  section runtime: 157 bytes
+  total: 157 bytes
+
+functions:
+  mem: global_dyn_base=0x9e0 arena_base=0xa0 scratch_peak_words=8 stable_chain_peak_words=66
+  local: ir_blocks=4 ir_insts=17 vcode_ops=36 fixups=1 imm_bytes=10
+    mem: scratch_words=1 stable_words=0 stable_mode=None entry_abs_words=10 abs_words_end=1
+  clobber: ir_blocks=1 ir_insts=5 vcode_ops=10 fixups=0 imm_bytes=3
+    mem: scratch_words=8 stable_words=0 stable_mode=None entry_abs_words=74 abs_words_end=8
+  heavy: ir_blocks=1 ir_insts=8 vcode_ops=22 fixups=2 imm_bytes=6
+    mem: scratch_words=0 stable_words=64 stable_mode=StableAbs(base=0x1e0) entry_abs_words=10 abs_words_end=74
+  entry: ir_blocks=4 ir_insts=17 vcode_ops=42 fixups=6 imm_bytes=8
+    mem: scratch_words=0 stable_words=2 stable_mode=StableAbs(base=0x1a0) entry_abs_words=8 abs_words_end=10
+
+mem plan detail:
+evm mem plan: global_dyn_base=0x9e0 arena_base=0xa0 scratch_peak_words=8 stable_chain_peak_words=66
+evm mem plan: local scratch_words=1 stable_words=0 stable_mode=None entry_abs_words=10 abs_words_end=1
+evm mem plan: clobber scratch_words=8 stable_words=0 stable_mode=None entry_abs_words=74 abs_words_end=8
+evm mem plan: heavy scratch_words=0 stable_words=64 stable_mode=StableAbs(base=0x1e0) entry_abs_words=10 abs_words_end=74
+evm mem plan: entry scratch_words=0 stable_words=2 stable_mode=StableAbs(base=0x1a0) entry_abs_words=8 abs_words_end=10
+
+
+evm:
+  case local_zero: calldata_len=64 success reason=Return gas_used=21528 gas_refunded=0 logs=0 output=call len=32 tx_gas=21256 runtime_gas=272
+  case local_value: calldata_len=64 success reason=Return gas_used=21540 gas_refunded=0 logs=0 output=call len=32 tx_gas=21268 runtime_gas=272
+  case large_sibling: calldata_len=64 success reason=Return gas_used=21733 gas_refunded=0 logs=0 output=call len=32 tx_gas=21280 runtime_gas=453
+  case local_max: calldata_len=64 success reason=Return gas_used=21912 gas_refunded=0 logs=0 output=call len=32 tx_gas=21640 runtime_gas=272
+  case sibling_max: calldata_len=64 success reason=Return gas_used=22105 gas_refunded=0 logs=0 output=call len=32 tx_gas=21652 runtime_gas=453

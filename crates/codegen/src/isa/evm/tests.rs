@@ -40,7 +40,8 @@ use self::{
         final_spills::compute_malloc_spill_bounds,
         module::FuncMachineMap,
         placement::{
-            EvmMemoryPlacementPlan, MemoryPlacementSection, compute_semantic_memory_placement,
+            EvmMemoryPlacementPlan, MallocPlacement, MemoryPlacementSection,
+            compute_semantic_memory_placement,
         },
     },
     memory_plan::{
@@ -1782,6 +1783,50 @@ fn compute_test_memory_placement(
         backend,
         &BackendSpillPlan::default(),
     )
+}
+
+#[test]
+fn local_heap_does_not_reserve_sibling_frames() {
+    let parsed = parse_module(include_str!(
+        "../../../test_files/evm/local_heap_sibling_frame.sntn"
+    ))
+    .expect("module parses");
+    let backend = osaka_backend();
+    let entry = find_func(&parsed.module, "entry");
+    let local = find_func(&parsed.module, "local");
+    let placement = compute_test_memory_placement(&parsed.module, &backend, entry);
+    let plan = &placement.funcs[&local];
+    let malloc = parsed.module.func_store.view(local, |function| {
+        function
+            .layout
+            .iter_all_insts()
+            .find(|&inst| {
+                matches!(
+                    backend.isa.inst_set().resolve_inst(function.dfg.inst(inst)),
+                    EvmInstKind::EvmMalloc(_)
+                )
+            })
+            .expect("local allocates")
+    });
+    assert!(!plan.mem_plan.malloc_escape_kinds.contains_key(&malloc));
+    assert!(!plan.mem_plan.transient_mallocs.contains(&malloc));
+    let MallocPlacement::Heap { min_base, .. } = plan.malloc_placements[&malloc] else {
+        panic!("overlapping allocations require the heap cursor");
+    };
+    let own_floor = plan
+        .mem_plan
+        .abs_addr_for_word(plan.mem_plan.malloc_future_abs_words[&malloc]);
+    let caller_clamp = plan
+        .mem_plan
+        .abs_addr_for_word(plan.mem_plan.return_escape_caller_abs_words);
+    assert!(
+        own_floor < caller_clamp,
+        "fixture must have an unrelated large sibling"
+    );
+    assert_eq!(
+        min_base, own_floor,
+        "the local buffer dies before any sibling call"
+    );
 }
 
 #[test]
