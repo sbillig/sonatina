@@ -69,10 +69,19 @@ pub(crate) fn prepare_machine_stackify_analyses(
     placement: &EvmMemoryPlacementPlan,
     search_caches: &Mutex<SectionStackifySearchCaches>,
 ) -> Result<FxHashMap<FuncRef, MachineStackifyAnalysis>, String> {
+    let fixed_spill_slots = if placement.memory_guard.is_some() {
+        0
+    } else {
+        fixed_slots::FIXED_SPILL_SLOTS
+    };
     verify_machine_module(module, schedule.funcs())?;
     let _span = debug_span!("sonatina.codegen.evm.machine.prepare_stackify").entered();
-    let local_scratch_clobbers =
-        compute_local_machine_scratch_clobbers(module, schedule.funcs(), machine_isa);
+    let local_scratch_clobbers = compute_local_machine_scratch_clobbers(
+        module,
+        schedule.funcs(),
+        machine_isa,
+        fixed_spill_slots,
+    );
 
     let mut analyses = FxHashMap::default();
     let mut fixed_slot_effects = FxHashSet::default();
@@ -111,6 +120,7 @@ pub(crate) fn prepare_machine_stackify_analyses(
                         analysis_fixed_slot_effects,
                         analysis_scratch_arena_effects,
                         &mut search_cache,
+                        fixed_spill_slots,
                     )
                 });
                 search_caches.lock().unwrap().retain(func, search_cache);
@@ -177,6 +187,7 @@ fn prepare_machine_stackify_analysis(
     fixed_slot_effects: &FxHashSet<FuncRef>,
     scratch_arena_effects: &FxHashSet<FuncRef>,
     search_cache: &mut StackifySearchCache,
+    fixed_spill_slots: u32,
 ) -> MachineStackifyAnalysis {
     let _span = trace_span!("sonatina.codegen.evm.machine.prepare_stackify_func").entered();
     let mut cfg = ControlFlowGraph::new();
@@ -203,6 +214,7 @@ fn prepare_machine_stackify_analysis(
         fixed_slot_effects,
         scratch_arena_effects,
         &inst_liveness,
+        fixed_spill_slots,
     );
     let (scratch_live_values, stable_final_spill_values) = scratch_clobber_liveness.into_parts();
     let mut builder = StackifyBuilder::new(
@@ -214,7 +226,7 @@ fn prepare_machine_stackify_analysis(
     )
     .with_search_profile(backend.stackify_search_profile)
     .with_scratch_live_values(scratch_live_values)
-    .with_scratch_spills(fixed_slots::FIXED_SPILL_SLOTS)
+    .with_scratch_spills(fixed_spill_slots)
     .with_hot_immediate_caching();
 
     if backend.immediate_materialization_mode == ImmediateMaterializationMode::Size {
@@ -244,7 +256,11 @@ fn compute_local_machine_scratch_clobbers(
     module: &Module,
     funcs: &[FuncRef],
     machine_isa: &EvmMachine,
+    fixed_spill_slots: u32,
 ) -> FxHashSet<FuncRef> {
+    if fixed_spill_slots == 0 {
+        return FxHashSet::default();
+    }
     let mut local: Vec<_> = funcs
         .par_iter()
         .copied()
@@ -252,7 +268,12 @@ fn compute_local_machine_scratch_clobbers(
             module.func_store.view(func, |function| {
                 function.layout.iter_block().any(|block| {
                     function.layout.iter_inst(block).any(|inst| {
-                        fixed_slots::machine_inst_is_fixed_slot_clobber(function, machine_isa, inst)
+                        fixed_slots::machine_inst_is_fixed_slot_clobber(
+                            function,
+                            machine_isa,
+                            inst,
+                            fixed_spill_slots,
+                        )
                     })
                 })
             })

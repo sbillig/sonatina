@@ -22,11 +22,11 @@ use super::{
     super::{
         EvmBackend, heap_plan, malloc_plan,
         memory_plan::{
-            self, BackendSpillPlan, BackendSpillReserve, FinalScratchReserveRange, FuncPreAnalysis,
-            StableMode, WORD_BYTES, expect_func_entry,
+            self, BackendSpillPlan, BackendSpillReserve, DYN_SP_SLOT, FinalScratchReserveRange,
+            FuncPreAnalysis, StableMode, WORD_BYTES, expect_func_entry,
         },
         prepare::{
-            ArenaBaseFacts, SectionMemoryLayout, choose_arena_base,
+            ArenaBaseFacts, MemoryGuardConfig, SectionMemoryLayout, choose_arena_base,
             compute_return_escape_caller_clamp_words, function_free_ptr_slot_facts, value_imm_u32,
         },
         private_malloc::{
@@ -49,6 +49,8 @@ use super::{
 pub(crate) struct EvmMemoryPlacementPlan {
     pub(crate) arena_base: u32,
     pub(crate) global_dyn_base: u32,
+    pub(crate) dyn_sp_slot: u32,
+    pub(crate) memory_guard: Option<MemoryGuardConfig>,
     pub(crate) scratch_peak_words: u32,
     pub(crate) stable_chain_peak_words: u32,
     pub(crate) has_heap_mallocs: bool,
@@ -139,6 +141,7 @@ pub(crate) struct MemoryPlacementSection<'a> {
     pub(crate) entry: FuncRef,
     pub(crate) includes: &'a [FuncRef],
     pub(crate) fixed_reservations: &'a SectionMemoryLayout,
+    pub(crate) memory_guard: Option<MemoryGuardConfig>,
 }
 
 pub(crate) fn compute_semantic_memory_placement(
@@ -310,7 +313,11 @@ pub(crate) fn compute_semantic_memory_placement(
             backend_spill_scratch_reserve_words: backend_spill_scratch_reserve_peak,
             has_heap_mallocs,
         },
+        section.memory_guard,
     );
+    let dyn_sp_slot = section
+        .memory_guard
+        .map_or(DYN_SP_SLOT as u32, MemoryGuardConfig::compiler_prefix_start);
     if has_dynamic_frames {
         semantic_plan.scratch_peak_words = semantic_plan
             .scratch_peak_words
@@ -419,6 +426,8 @@ pub(crate) fn compute_semantic_memory_placement(
     EvmMemoryPlacementPlan {
         arena_base: semantic_plan.arena_base,
         global_dyn_base: semantic_plan.global_dyn_base,
+        dyn_sp_slot,
+        memory_guard: section.memory_guard,
         scratch_peak_words: semantic_plan.scratch_peak_words,
         stable_chain_peak_words: semantic_plan.stable_chain_peak_words,
         has_heap_mallocs,

@@ -56,12 +56,16 @@ impl<'a> EvmMachineFunctionLowering<'a> {
         self.section_plan.dyn_base
     }
 
+    fn dyn_sp_slot(&self) -> u32 {
+        self.section_plan.dyn_sp_slot
+    }
+
     fn frame_layout(&self) -> Option<DynamicFrameLayout> {
         self.function_plan.mem_plan.dynamic_frame_layout()
     }
 
     fn emit_frame_enter(&self, ctx: &mut Lower<OpCode>, frame_layout: DynamicFrameLayout) {
-        enter_frame_initialized(ctx, frame_layout);
+        enter_frame_initialized(ctx, frame_layout, self.dyn_sp_slot());
     }
 
     fn canonical_block_target(&self, block: BlockId) -> BlockId {
@@ -82,7 +86,7 @@ impl<'a> EvmMachineFunctionLowering<'a> {
         actions: &[crate::stackalloc::Action],
         frame_layout: Option<DynamicFrameLayout>,
     ) {
-        perform_actions(ctx, actions, frame_layout);
+        perform_actions(ctx, actions, frame_layout, self.dyn_sp_slot());
     }
 
     fn lazy_frame_plan_matches(&self, pred: impl FnOnce(&LazyFramePlan) -> bool) -> bool {
@@ -130,7 +134,7 @@ impl<'a> EvmMachineFunctionLowering<'a> {
         if self.lazy_frame_plan_matches(|plan| plan.exit_before_site(site))
             && let Some(frame_layout) = frame_layout
         {
-            leave_frame(ctx, frame_layout);
+            leave_frame(ctx, frame_layout, self.dyn_sp_slot());
         }
     }
 
@@ -165,18 +169,18 @@ impl<'a> EvmMachineFunctionLowering<'a> {
             {
                 self.emit_frame_enter(ctx, frame_layout);
             }
-            perform_action(ctx, action, frame_layout);
+            perform_action(ctx, action, frame_layout, self.dyn_sp_slot());
             if self.lazy_frame_plan_matches(|plan| plan.exit_after_action(site, index))
                 && let Some(frame_layout) = frame_layout
             {
-                leave_frame(ctx, frame_layout);
+                leave_frame(ctx, frame_layout, self.dyn_sp_slot());
             }
         }
 
         if self.lazy_frame_plan_matches(|plan| plan.exit_after_site(site))
             && let Some(frame_layout) = frame_layout
         {
-            leave_frame(ctx, frame_layout);
+            leave_frame(ctx, frame_layout, self.dyn_sp_slot());
         }
     }
 
@@ -270,8 +274,12 @@ impl<'a> EvmMachineFunctionLowering<'a> {
         );
         match self.function_plan.dyn_sp_plan.entry_init {
             None => {}
-            Some(DynSpInitKind::Always) => stack::init_dyn_sp(ctx, self.dyn_base()),
-            Some(DynSpInitKind::Checked) => stack::ensure_dyn_sp_init(ctx, self.dyn_base()),
+            Some(DynSpInitKind::Always) => {
+                stack::init_dyn_sp(ctx, self.dyn_base(), self.dyn_sp_slot());
+            }
+            Some(DynSpInitKind::Checked) => {
+                stack::ensure_dyn_sp_init(ctx, self.dyn_base(), self.dyn_sp_slot());
+            }
         }
 
         if self.has_lazy_frame_lowering() {

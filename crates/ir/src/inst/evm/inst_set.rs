@@ -167,4 +167,5 @@ pub struct EvmInstSet(
     evm::EvmRevert,
     evm::EvmSelfDestruct,
     evm::EvmMalloc,
+    evm::EvmMemoryGuard,
 );

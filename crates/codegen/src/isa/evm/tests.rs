@@ -1663,6 +1663,35 @@ object @Contract { section runtime { entry %entry; } }
 }
 
 #[test]
+fn memory_guard_rejects_inconsistent_sizes_and_fixed_accesses_outside_the_prefix() {
+    for (body, expected) in [
+        (
+            "v0.i256 = evm_memory_guard 128.i256; v1.i256 = evm_memory_guard 129.i256; evm_stop;",
+            "cannot mix evm_memory_guard sizes",
+        ),
+        (
+            "v0.i256 = evm_memory_guard 128.i256; evm_mstore 128.i256 7.i256; evm_stop;",
+            "fixed memory access ending at 0xa0",
+        ),
+        (
+            "v0.i256 = evm_memory_guard 128.i256; v1.i256 = evm_calldata_load 0.i256; evm_calldata_copy 512.i256 0.i256 v1; evm_stop;",
+            "fixed address 0x200",
+        ),
+        (
+            "v0.i256 = evm_memory_guard 4294967295.i256; evm_stop;",
+            "overflows the 32-bit memory planner",
+        ),
+    ] {
+        let body = body.replace("; ", ";\n");
+        let source = format!(
+            "target = \"evm-ethereum-osaka\"\nfunc public %entry() {{\nblock0:\n {body}\n}}\nobject @Contract {{ section runtime {{ entry %entry; }} }}"
+        );
+        let error = prepare_section_error(&source);
+        assert!(error.contains(expected), "{expected}: {error}");
+    }
+}
+
+#[test]
 fn dynamic_terminal_payload_write_does_not_reserve_arena_base() {
     let parsed = parse_module(
         r#"
@@ -1923,6 +1952,7 @@ block0:
         machine::placement::MemoryPlacementSection {
             schedule: &schedule,
             fixed_reservations: &fixed_reservations,
+            memory_guard: None,
             funcs: &funcs,
             entry: names["main"],
             includes: &[],
@@ -1996,6 +2026,7 @@ fn compute_test_memory_placement(
         MemoryPlacementSection {
             schedule: &schedule,
             fixed_reservations: &fixed_reservations,
+            memory_guard: None,
             funcs: &funcs,
             entry,
             includes: &[],

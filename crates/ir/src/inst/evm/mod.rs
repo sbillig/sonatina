@@ -545,3 +545,16 @@ pub struct EvmSelfDestruct {
 pub struct EvmMalloc {
     size: ValueId,
 }
+
+/// Establishes the Solidity/Yul memory-safety contract for an EVM section.
+///
+/// The operand is the byte length of the caller-owned low-memory region. The
+/// returned pointer is the first byte above the backend-owned memory reserve;
+/// The result also respects the current free-memory pointer at `0x40`.
+/// Callers may use memory below `size` and memory at or above the returned
+/// pointer, but must not access the interval between them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
+#[inst(side_effect(crate::inst::SideEffect::Write))]
+pub struct EvmMemoryGuard {
+    size: ValueId,
+}

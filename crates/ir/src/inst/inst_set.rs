@@ -179,6 +179,7 @@ define_inst_set_base! {
         evm::EvmRevert,
         evm::EvmSelfDestruct,
         evm::EvmMalloc,
+        evm::EvmMemoryGuard,
 
     }
 }

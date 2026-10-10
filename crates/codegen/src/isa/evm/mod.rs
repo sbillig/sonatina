@@ -40,9 +40,7 @@ pub(crate) use immediate::{
     ImmediateMaterializationPlan, immediate_materialization_code_len,
     immediate_materialization_cost_i256, immediate_materialization_plan, u32_to_be, u256_to_be,
 };
-pub(crate) use memory_plan::{
-    DYN_SP_SLOT, FREE_PTR_SLOT, MachineFuncPlan, ObjLoc, STATIC_BASE, WORD_BYTES,
-};
+pub(crate) use memory_plan::{FREE_PTR_SLOT, MachineFuncPlan, ObjLoc, STATIC_BASE, WORD_BYTES};
 pub(crate) use opcode::OpCode;
 pub(crate) use prepare::{EvmFunctionPlan, EvmSectionPlan, prepare_free_ptr_restore};
 pub(crate) use ptr_escape::{PtrEscapeSummary, compute_ptr_escape_summaries};

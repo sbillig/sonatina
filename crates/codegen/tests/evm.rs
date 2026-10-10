@@ -1437,6 +1437,35 @@ object @Contract { section runtime { entry %entry; } }
 }
 
 #[test]
+fn memory_guard_observes_raw_allocation_at_all_optimization_levels() {
+    let source = include_str!("../test_files/evm/memory_guard_tracks_free_pointer.sntn");
+    for level in [OptLevel::O0, OptLevel::O1, OptLevel::O2, OptLevel::Os] {
+        let module = parse_sona(source).module;
+        let compiler = Compile::new(module, EvmCompiler::default()).with_opt_level(level);
+        let artifacts = compiler.compile().expect("guarded section should compile");
+        let runtime = artifacts[0]
+            .sections
+            .iter()
+            .find(|(name, _)| name.0 == "runtime")
+            .unwrap();
+        let mut harness = EvmHarness::from_runtime(&runtime.1.bytes);
+        let result = harness.call(&[]);
+        let ExecutionResult::Success {
+            output: Output::Call(actual),
+            ..
+        } = result
+        else {
+            panic!("{level:?}: {result:?}");
+        };
+        assert_eq!(
+            actual.as_ref(),
+            IrU256::from(32).to_big_endian(),
+            "{level:?}"
+        );
+    }
+}
+
+#[test]
 fn nested_const_indices_execute_at_all_optimization_levels() {
     let mut source = include_str!("../test_files/const_data/nested_indices.sntn").to_string();
     source.push_str("\nfunc public %entry() {\nblock0:\nv0.i256 = evm_calldata_load 0.i256;\n");

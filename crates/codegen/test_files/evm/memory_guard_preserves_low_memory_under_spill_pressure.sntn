@@ -1,0 +1,65 @@
+#! evm.config: { stack_reach: 4 }
+#! evm.case: guarded_low_memory
+#!   calldata:
+#!   expect: return u256(930)
+
+target = "evm-ethereum-osaka"
+
+func private %id(v0.i256) -> i256 {
+block0:
+    return v0;
+}
+
+func public %entry() {
+block0:
+    v0.i256 = evm_memory_guard 128.i256;
+    mstore 64.i256 v0 i256;
+    mstore 0.i256 777.i256 i256;
+
+    v1.i256 = evm_calldata_load 0.i256;
+    v2.i256 = evm_calldata_load 32.i256;
+    v3.i256 = evm_calldata_load 64.i256;
+    v4.i256 = evm_calldata_load 96.i256;
+    v5.i256 = evm_calldata_load 128.i256;
+    v6.i256 = evm_calldata_load 160.i256;
+    v7.i256 = evm_calldata_load 192.i256;
+    v8.i256 = evm_calldata_load 224.i256;
+    v9.i256 = evm_calldata_load 256.i256;
+    v10.i256 = evm_calldata_load 288.i256;
+    v11.i256 = evm_calldata_load 320.i256;
+    v12.i256 = evm_calldata_load 352.i256;
+    v13.i256 = evm_calldata_load 384.i256;
+    v14.i256 = evm_calldata_load 416.i256;
+    v15.i256 = evm_calldata_load 448.i256;
+    v16.i256 = evm_calldata_load 480.i256;
+    v17.i256 = evm_calldata_load 512.i256;
+    v18.i256 = call %id 153.i256;
+
+    v19.i256 = add v1 v2;
+    v20.i256 = add v3 v4;
+    v21.i256 = add v5 v6;
+    v22.i256 = add v7 v8;
+    v23.i256 = add v9 v10;
+    v24.i256 = add v11 v12;
+    v25.i256 = add v13 v14;
+    v26.i256 = add v15 v16;
+    v27.i256 = add v17 v18;
+    v28.i256 = add v19 v20;
+    v29.i256 = add v21 v22;
+    v30.i256 = add v23 v24;
+    v31.i256 = add v25 v26;
+    v32.i256 = add v28 v29;
+    v33.i256 = add v30 v31;
+    v34.i256 = add v32 v33;
+    v35.i256 = add v34 v27;
+    v36.i256 = mload 0.i256 i256;
+    v37.i256 = add v35 v36;
+    mstore 0.i256 v37 i256;
+    evm_return 0.i256 32.i256;
+}
+
+object @Contract {
+  section runtime {
+    entry %entry;
+  }
+}

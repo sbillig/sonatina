@@ -179,9 +179,11 @@ impl EvmMachineFunctionLowering<'_> {
                     );
 
                     match self.frontier_init_kind(insn) {
-                        Some(DynSpInitKind::Always) => init_dyn_sp(ctx, self.dyn_base()),
+                        Some(DynSpInitKind::Always) => {
+                            init_dyn_sp(ctx, self.dyn_base(), self.dyn_sp_slot());
+                        }
                         Some(DynSpInitKind::Checked) => {
-                            ensure_dyn_sp_init(ctx, self.dyn_base());
+                            ensure_dyn_sp_init(ctx, self.dyn_base(), self.dyn_sp_slot());
                         }
                         None => {}
                     }
@@ -203,9 +205,11 @@ impl EvmMachineFunctionLowering<'_> {
                     );
 
                     match self.frontier_init_kind(insn) {
-                        Some(DynSpInitKind::Always) => init_dyn_sp(ctx, self.dyn_base()),
+                        Some(DynSpInitKind::Always) => {
+                            init_dyn_sp(ctx, self.dyn_base(), self.dyn_sp_slot());
+                        }
                         Some(DynSpInitKind::Checked) => {
-                            ensure_dyn_sp_init(ctx, self.dyn_base());
+                            ensure_dyn_sp_init(ctx, self.dyn_base(), self.dyn_sp_slot());
                         }
                         None => {}
                     }
@@ -220,7 +224,7 @@ impl EvmMachineFunctionLowering<'_> {
                 if !self.has_lazy_frame_lowering()
                     && let Some(frame_layout) = frame_layout
                 {
-                    super::stack::leave_frame(ctx, frame_layout);
+                    super::stack::leave_frame(ctx, frame_layout, self.dyn_sp_slot());
                 }
 
                 for depth in 1..=args.len() {

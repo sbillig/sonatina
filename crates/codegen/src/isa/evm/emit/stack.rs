@@ -12,8 +12,8 @@ use crate::{
 };
 
 use super::super::{
-    DYN_SP_SLOT, DynamicFrameLayout, FREE_PTR_SLOT, FrameLocalWord, ImmediateMaterializationPlan,
-    OpCode, immediate_materialization_plan, u32_to_be, u256_to_be,
+    DynamicFrameLayout, FREE_PTR_SLOT, FrameLocalWord, ImmediateMaterializationPlan, OpCode,
+    immediate_materialization_plan, u32_to_be, u256_to_be,
 };
 
 pub(crate) fn is_push_opcode(op: OpCode) -> bool {
@@ -427,10 +427,11 @@ pub(crate) fn emit_dyn_frame_addr(
     ctx: &mut Lower<OpCode>,
     frame_layout: DynamicFrameLayout,
     offset_words: FrameLocalWord,
+    dyn_sp_slot: u32,
 ) {
     let sp_relative_bytes = frame_layout.sp_relative_bytes(offset_words);
     push_bytes(ctx, &u32_to_be(sp_relative_bytes));
-    push_bytes(ctx, &[DYN_SP_SLOT]);
+    push_bytes(ctx, &u32_to_be(dyn_sp_slot));
     ctx.push(OpCode::MLOAD);
     ctx.push(OpCode::SUB);
 }
@@ -446,6 +447,7 @@ pub(crate) fn perform_action(
     ctx: &mut Lower<OpCode>,
     action: Action,
     frame_layout: Option<DynamicFrameLayout>,
+    dyn_sp_slot: u32,
 ) {
     match action {
         Action::StackDup(slot) => {
@@ -476,6 +478,7 @@ pub(crate) fn perform_action(
                 ctx,
                 frame_layout,
                 frame_layout.expect_local_word(offset, "load"),
+                dyn_sp_slot,
             );
             ctx.push(OpCode::MLOAD);
         }
@@ -489,6 +492,7 @@ pub(crate) fn perform_action(
                 ctx,
                 frame_layout,
                 frame_layout.expect_local_word(offset, "store"),
+                dyn_sp_slot,
             );
             ctx.push(OpCode::MSTORE);
         }
@@ -501,6 +505,7 @@ pub(crate) fn perform_action(
                 ctx,
                 frame_layout,
                 frame_layout.expect_local_word(offset_words, "address"),
+                dyn_sp_slot,
             );
             if extra_bytes > 0 {
                 push_bytes(ctx, &u256_to_be(&(extra_bytes as u64).into()));
@@ -527,10 +532,11 @@ pub(crate) fn perform_actions(
     ctx: &mut Lower<OpCode>,
     actions: &[Action],
     frame_layout: Option<DynamicFrameLayout>,
+    dyn_sp_slot: u32,
 ) {
     let folded = fold_stack_actions(actions);
     for action in folded {
-        perform_action(ctx, action, frame_layout);
+        perform_action(ctx, action, frame_layout, dyn_sp_slot);
     }
 }
 
@@ -686,29 +692,33 @@ fn emit_max_top_two(ctx: &mut Lower<OpCode>) {
     ctx.push(OpCode::POP);
 }
 
-pub(crate) fn init_dyn_sp(ctx: &mut Lower<OpCode>, dyn_base: u32) {
+pub(crate) fn init_dyn_sp(ctx: &mut Lower<OpCode>, dyn_base: u32, dyn_sp_slot: u32) {
     push_bytes(ctx, &u32_to_be(dyn_base));
-    push_bytes(ctx, &[DYN_SP_SLOT]);
+    push_bytes(ctx, &u32_to_be(dyn_sp_slot));
     ctx.push(OpCode::MSTORE);
 }
 
-pub(crate) fn ensure_dyn_sp_init(ctx: &mut Lower<OpCode>, dyn_base: u32) {
-    push_bytes(ctx, &[DYN_SP_SLOT]);
+pub(crate) fn ensure_dyn_sp_init(ctx: &mut Lower<OpCode>, dyn_base: u32, dyn_sp_slot: u32) {
+    push_bytes(ctx, &u32_to_be(dyn_sp_slot));
     ctx.push(OpCode::MLOAD);
 
     let skip_init_push = ctx.push(OpCode::PUSH1);
     ctx.push(OpCode::JUMPI);
 
     push_bytes(ctx, &u32_to_be(dyn_base));
-    push_bytes(ctx, &[DYN_SP_SLOT]);
+    push_bytes(ctx, &u32_to_be(dyn_sp_slot));
     ctx.push(OpCode::MSTORE);
 
     let skip_init = ctx.push(OpCode::JUMPDEST);
     ctx.add_label_reference(skip_init_push, Label::Insn(skip_init));
 }
 
-pub(crate) fn enter_frame_initialized(ctx: &mut Lower<OpCode>, frame_layout: DynamicFrameLayout) {
-    push_bytes(ctx, &[DYN_SP_SLOT]);
+pub(crate) fn enter_frame_initialized(
+    ctx: &mut Lower<OpCode>,
+    frame_layout: DynamicFrameLayout,
+    dyn_sp_slot: u32,
+) {
+    push_bytes(ctx, &u32_to_be(dyn_sp_slot));
     ctx.push(OpCode::MLOAD);
     ctx.push(OpCode::DUP1);
     push_bytes(ctx, &[FREE_PTR_SLOT]);
@@ -730,22 +740,32 @@ pub(crate) fn enter_frame_initialized(ctx: &mut Lower<OpCode>, frame_layout: Dyn
     ctx.push(OpCode::SWAP1);
     ctx.push(OpCode::POP);
 
-    push_bytes(ctx, &[DYN_SP_SLOT]);
+    // Publish the frame top through both compiler and Solidity frontiers. The free
+    // pointer remains monotonic when the frame exits, so raw 0x40-based allocators
+    // can never reuse storage that a live or completed compiler frame occupied.
+    ctx.push(OpCode::DUP1);
+    push_bytes(ctx, &u32_to_be(dyn_sp_slot));
+    ctx.push(OpCode::MSTORE);
+    push_bytes(ctx, &[FREE_PTR_SLOT]);
     ctx.push(OpCode::MSTORE);
 }
 
-pub(crate) fn leave_frame(ctx: &mut Lower<OpCode>, frame_layout: DynamicFrameLayout) {
+pub(crate) fn leave_frame(
+    ctx: &mut Lower<OpCode>,
+    frame_layout: DynamicFrameLayout,
+    dyn_sp_slot: u32,
+) {
     // Restore the caller SP from the hidden link slot so heap clamps inside the callee
     // cannot skew the caller's visible frame base on return.
     push_bytes(
         ctx,
         &u32_to_be(frame_layout.caller_link_sp_relative_bytes()),
     );
-    push_bytes(ctx, &[DYN_SP_SLOT]);
+    push_bytes(ctx, &u32_to_be(dyn_sp_slot));
     ctx.push(OpCode::MLOAD);
     ctx.push(OpCode::SUB);
     ctx.push(OpCode::MLOAD);
-    push_bytes(ctx, &[DYN_SP_SLOT]);
+    push_bytes(ctx, &u32_to_be(dyn_sp_slot));
     ctx.push(OpCode::MSTORE);
 }
 

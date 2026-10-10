@@ -2281,6 +2281,39 @@ impl VerifyInst for evm::EvmMalloc {
     }
 }
 
+impl VerifyInst for evm::EvmMemoryGuard {
+    fn verify_inst(&self, verifier: &mut FunctionVerifier<'_>, inst_id: InstId) {
+        verifier.verify_evm_rule_common(inst_id, &self.collect_values(), false);
+        let location = verifier.inst_location(inst_id);
+        if verifier.inst_result_ty(inst_id) != Some(Type::I256) {
+            verifier.emit(Diagnostic::error(
+                DiagnosticCode::InstResultTypeMismatch,
+                "evm_memory_guard result must be i256",
+                location.clone(),
+            ));
+        }
+        let Some(size) = verifier.value_imm(*self.size()) else {
+            verifier.emit(Diagnostic::error(
+                DiagnosticCode::InstOperandTypeMismatch,
+                "evm_memory_guard size must be an immediate value",
+                location,
+            ));
+            return;
+        };
+        if size
+            .to_nonnegative_usize()
+            .and_then(|size| u32::try_from(size).ok())
+            .is_none()
+        {
+            verifier.emit(Diagnostic::error(
+                DiagnosticCode::InstOperandTypeMismatch,
+                "evm_memory_guard size must be a non-negative 32-bit value",
+                location,
+            ));
+        }
+    }
+}
+
 macro_rules! impl_evm_general_result_rule {
     ($($ty:ty),+ $(,)?) => {
         $(

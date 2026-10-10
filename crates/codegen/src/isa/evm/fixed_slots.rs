@@ -12,8 +12,6 @@ use super::memory_plan::WORD_BYTES;
 
 pub(crate) const FIXED_SPILL_SLOTS: u32 = 2;
 
-const FIXED_SLOTS_END_BYTES: u32 = FIXED_SPILL_SLOTS * WORD_BYTES;
-
 pub(crate) struct MachineSpillClobberLiveness {
     fixed_slot_live_values: BitSet<ValueId>,
     stable_final_spill_values: BitSet<ValueId>,
@@ -26,6 +24,7 @@ impl MachineSpillClobberLiveness {
         fixed_slot_effects: &FxHashSet<FuncRef>,
         scratch_arena_effects: &FxHashSet<FuncRef>,
         inst_liveness: &InstLiveness,
+        fixed_spill_slots: u32,
     ) -> Self {
         let mut liveness = Self {
             fixed_slot_live_values: BitSet::default(),
@@ -45,7 +44,8 @@ impl MachineSpillClobberLiveness {
                     if clobbers_fixed_slots || scratch_arena_effects.contains(&call.callee()) {
                         liveness.record_stable_final_spill_clobber(function, inst_liveness, inst);
                     }
-                } else if machine_inst_is_fixed_slot_clobber(function, isa, inst) {
+                } else if machine_inst_is_fixed_slot_clobber(function, isa, inst, fixed_spill_slots)
+                {
                     liveness.record_fixed_slot_clobber(function, inst_liveness, inst);
                 }
             }
@@ -119,13 +119,23 @@ fn imm_lt_u32(imm: Immediate, bound: u32) -> bool {
     }
 }
 
-fn machine_addr_may_overlap_fixed_slots(function: &Function, addr: ValueId) -> bool {
+fn machine_addr_may_overlap_fixed_slots(
+    function: &Function,
+    addr: ValueId,
+    fixed_spill_slots: u32,
+) -> bool {
+    if fixed_spill_slots == 0 {
+        return false;
+    }
+    let fixed_slots_end_bytes = fixed_spill_slots
+        .checked_mul(WORD_BYTES)
+        .expect("fixed spill slot range overflow");
     if function.dfg.value_is_imm(addr) {
         let imm = function
             .dfg
             .value_imm(addr)
             .expect("imm value missing payload");
-        imm_lt_u32(imm, FIXED_SLOTS_END_BYTES)
+        imm_lt_u32(imm, fixed_slots_end_bytes)
     } else {
         true
     }
@@ -135,40 +145,41 @@ pub(crate) fn machine_inst_is_fixed_slot_clobber(
     function: &Function,
     isa: &EvmMachine,
     inst: InstId,
+    fixed_spill_slots: u32,
 ) -> bool {
     match isa.inst_set().resolve_inst(function.dfg.inst(inst)) {
         EvmMachineInstKind::EvmMstore(mstore) => {
-            machine_addr_may_overlap_fixed_slots(function, *mstore.addr())
+            machine_addr_may_overlap_fixed_slots(function, *mstore.addr(), fixed_spill_slots)
         }
         EvmMachineInstKind::EvmMstore8(mstore8) => {
-            machine_addr_may_overlap_fixed_slots(function, *mstore8.addr())
+            machine_addr_may_overlap_fixed_slots(function, *mstore8.addr(), fixed_spill_slots)
         }
         EvmMachineInstKind::EvmCalldataCopy(copy) => {
-            machine_addr_may_overlap_fixed_slots(function, *copy.dst_addr())
+            machine_addr_may_overlap_fixed_slots(function, *copy.dst_addr(), fixed_spill_slots)
         }
         EvmMachineInstKind::EvmCodeCopy(copy) => {
-            machine_addr_may_overlap_fixed_slots(function, *copy.dst_addr())
+            machine_addr_may_overlap_fixed_slots(function, *copy.dst_addr(), fixed_spill_slots)
         }
         EvmMachineInstKind::EvmExtCodeCopy(copy) => {
-            machine_addr_may_overlap_fixed_slots(function, *copy.dst_addr())
+            machine_addr_may_overlap_fixed_slots(function, *copy.dst_addr(), fixed_spill_slots)
         }
         EvmMachineInstKind::EvmReturnDataCopy(copy) => {
-            machine_addr_may_overlap_fixed_slots(function, *copy.dst_addr())
+            machine_addr_may_overlap_fixed_slots(function, *copy.dst_addr(), fixed_spill_slots)
         }
         EvmMachineInstKind::EvmMcopy(copy) => {
-            machine_addr_may_overlap_fixed_slots(function, *copy.dest())
+            machine_addr_may_overlap_fixed_slots(function, *copy.dest(), fixed_spill_slots)
         }
         EvmMachineInstKind::EvmCall(call) => {
-            machine_addr_may_overlap_fixed_slots(function, *call.ret_addr())
+            machine_addr_may_overlap_fixed_slots(function, *call.ret_addr(), fixed_spill_slots)
         }
         EvmMachineInstKind::EvmCallCode(call) => {
-            machine_addr_may_overlap_fixed_slots(function, *call.ret_addr())
+            machine_addr_may_overlap_fixed_slots(function, *call.ret_addr(), fixed_spill_slots)
         }
         EvmMachineInstKind::EvmDelegateCall(call) => {
-            machine_addr_may_overlap_fixed_slots(function, *call.ret_addr())
+            machine_addr_may_overlap_fixed_slots(function, *call.ret_addr(), fixed_spill_slots)
         }
         EvmMachineInstKind::EvmStaticCall(call) => {
-            machine_addr_may_overlap_fixed_slots(function, *call.ret_addr())
+            machine_addr_may_overlap_fixed_slots(function, *call.ret_addr(), fixed_spill_slots)
         }
         _ => false,
     }
@@ -293,6 +304,7 @@ mod tests {
                 fixed_slot_effects,
                 scratch_arena_effects,
                 &inst_liveness,
+                FIXED_SPILL_SLOTS,
             );
             let (fixed_scratch, stable_final) = scratch_liveness.into_parts();
             (function.arg_values[0], fixed_scratch, stable_final)

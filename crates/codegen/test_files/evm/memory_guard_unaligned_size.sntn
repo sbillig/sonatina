@@ -1,0 +1,19 @@
+#! evm.case: aligned_guard_result
+#!   calldata:
+#!   expect: return u256(160)
+
+target = "evm-ethereum-osaka"
+
+func public %entry() {
+block0:
+    v0.i256 = evm_memory_guard 129.i256;
+    mstore 64.i256 v0 i256;
+    mstore 0.i256 v0 i256;
+    evm_return 0.i256 32.i256;
+}
+
+object @Contract {
+  section runtime {
+    entry %entry;
+  }
+}

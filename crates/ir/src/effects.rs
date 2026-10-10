@@ -14,10 +14,10 @@ use crate::{
             EvmCaller, EvmChainId, EvmCodeCopy, EvmCodeLoad, EvmCodeSize, EvmCoinBase, EvmCreate,
             EvmCreate2, EvmDelegateCall, EvmExtCodeCopy, EvmExtCodeHash, EvmExtCodeSize, EvmGas,
             EvmGasLimit, EvmGasPrice, EvmInvalid, EvmKeccak256, EvmLog0, EvmLog1, EvmLog2, EvmLog3,
-            EvmLog4, EvmMalloc, EvmMcopy, EvmMload, EvmMsize, EvmMstore, EvmMstore8, EvmNumber,
-            EvmOrigin, EvmPrevRandao, EvmReturn, EvmReturnDataCopy, EvmReturnDataSize, EvmRevert,
-            EvmSelfBalance, EvmSelfDestruct, EvmSload, EvmSstore, EvmStaticCall, EvmStop,
-            EvmTimestamp, EvmTload, EvmTstore,
+            EvmLog4, EvmMalloc, EvmMcopy, EvmMemoryGuard, EvmMload, EvmMsize, EvmMstore,
+            EvmMstore8, EvmNumber, EvmOrigin, EvmPrevRandao, EvmReturn, EvmReturnDataCopy,
+            EvmReturnDataSize, EvmRevert, EvmSelfBalance, EvmSelfDestruct, EvmSload, EvmSstore,
+            EvmStaticCall, EvmStop, EvmTimestamp, EvmTload, EvmTstore,
         },
     },
     isa::evm::space::{CALLDATA, CODE, MEMORY, RETURNDATA, STORAGE, TRANSIENT},
@@ -835,6 +835,18 @@ fn classify_declared_effects_with<S: EffectSink>(
             *call.ret_len(),
             false,
         );
+        return sink.finish();
+    }
+
+    if <&EvmMemoryGuard as InstDowncast>::downcast(is, inst).is_some() {
+        sink.read_exact_imm(
+            MEMORY,
+            Immediate::from(EVM_FREE_PTR_SLOT),
+            EVM_WORD_BYTES,
+            Type::I256,
+        );
+        // Reserving the compiler prefix must survive even when its frontier is unused.
+        sink.add_other(OtherEffects::ALLOC);
         return sink.finish();
     }
 

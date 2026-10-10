@@ -24,8 +24,8 @@ use crate::{
 
 use super::{
     super::{
-        DYN_SP_SLOT, DynamicFrameLayout, EvmBackend, FREE_PTR_SLOT, ObjLoc, WORD_BYTES,
-        immediate_u32, memory_plan::StableMode,
+        DynamicFrameLayout, EvmBackend, FREE_PTR_SLOT, ObjLoc, WORD_BYTES, immediate_u32,
+        memory_plan::StableMode,
     },
     module::{FuncMachineMap, MachineSectionModule, SourceMachineMap},
     placement::{EvmFuncPlacementPlan, EvmMemoryPlacementPlan, MallocPlacement},
@@ -55,17 +55,13 @@ pub(crate) fn lower_section_to_machine(
 
     let mut source_to_machine = SourceMachineMap::default();
     for &func_ref in funcs {
-        let func_placement = placement
-            .funcs
-            .get(&func_ref)
-            .ok_or_else(|| format!("missing placement for func {}", func_ref.as_u32()))?;
         let (machine_func, func_map) = source.func_store.view(func_ref, |source_func| {
             lower_function(
                 func_ref,
                 source_func,
                 &source.ctx,
                 &machine_module.ctx,
-                func_placement,
+                placement,
                 backend.isa.inst_set(),
                 machine_isa.inst_set(),
             )
@@ -124,6 +120,8 @@ struct FuncLowerCtx<'a> {
     source: &'a Function,
     source_module: &'a ModuleCtx,
     placement: &'a EvmFuncPlacementPlan,
+    memory_guard_ptr: Option<u32>,
+    dyn_sp_slot: u32,
     source_is: &'static EvmInstSet,
     is: &'static EvmMachineInstSet,
     machine: Function,
@@ -140,10 +138,14 @@ fn lower_function(
     source: &Function,
     source_module: &ModuleCtx,
     machine_module: &ModuleCtx,
-    placement: &EvmFuncPlacementPlan,
+    section_placement: &EvmMemoryPlacementPlan,
     source_is: &'static EvmInstSet,
     is: &'static EvmMachineInstSet,
 ) -> Result<(Function, FuncMachineMap), String> {
+    let placement = section_placement
+        .funcs
+        .get(&func_ref)
+        .ok_or_else(|| format!("missing placement for func {}", func_ref.as_u32()))?;
     let sig = machine_module.func_sig(func_ref, Clone::clone);
     let machine = Function::new(machine_module, &sig);
     let source_block_order = source_lowering_order(source);
@@ -152,6 +154,10 @@ fn lower_function(
         source,
         source_module,
         placement,
+        memory_guard_ptr: section_placement
+            .memory_guard
+            .map(|_| section_placement.global_dyn_base),
+        dyn_sp_slot: section_placement.dyn_sp_slot,
         source_is,
         is,
         machine,
@@ -341,6 +347,7 @@ impl FuncLowerCtx<'_> {
             EvmInstKind::Alloca(_) => self.lower_alloca(source_inst),
             EvmInstKind::Gep(gep) => self.lower_gep(source_inst, gep.values()),
             EvmInstKind::EvmMalloc(_) => self.lower_malloc(source_inst),
+            EvmInstKind::EvmMemoryGuard(_) => self.lower_memory_guard(source_inst),
             EvmInstKind::Memzero(memzero) => self.lower_memzero(source_inst, memzero),
             EvmInstKind::Le(_) => {
                 let (lhs, rhs) = self.lower_binary_values(source_inst)?;
@@ -470,7 +477,7 @@ impl FuncLowerCtx<'_> {
                 let local_word = layout
                     .local_word(offset_words)
                     .ok_or_else(|| "dynamic frame alloca offset out of range".to_string())?;
-                let dyn_sp = self.emit_mload_abs(DYN_SP_SLOT as u32);
+                let dyn_sp = self.emit_mload_abs(self.dyn_sp_slot);
                 let offset = layout.sp_relative_bytes(local_word);
                 if offset == 0 {
                     dyn_sp
@@ -763,13 +770,24 @@ impl FuncLowerCtx<'_> {
     ) -> ValueId {
         let mut base = self.emit_mload_abs(FREE_PTR_SLOT as u32);
         if needs_dyn_sp_clamp {
-            let dyn_sp = self.emit_mload_abs(DYN_SP_SLOT as u32);
+            let dyn_sp = self.emit_mload_abs(self.dyn_sp_slot);
             base = self.emit_word_max(base, dyn_sp);
         }
         if known_free_ptr_floor.is_some_and(|floor| floor >= min_base) {
             return base;
         }
         self.emit_word_max_const_u32(base, min_base)
+    }
+
+    fn lower_memory_guard(&mut self, source_inst: sonatina_ir::InstId) -> Result<(), String> {
+        let ptr = self.memory_guard_ptr.ok_or_else(|| {
+            format!(
+                "evm_memory_guard at inst{} is missing its section memory plan",
+                source_inst.as_u32()
+            )
+        })?;
+        let value = self.emit_heap_base(ptr, false, None);
+        self.alias_inst_single_result(source_inst, value)
     }
 
     fn emit_word_max(&mut self, lhs: ValueId, rhs: ValueId) -> ValueId {

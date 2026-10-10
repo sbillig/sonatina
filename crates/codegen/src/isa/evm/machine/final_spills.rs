@@ -26,6 +26,7 @@ use super::{
     super::{
         EvmBackend,
         memory_plan::{BackendSpillPlan, FuncPreAnalysis},
+        prepare::MemoryGuardConfig,
         ptr_escape::PtrEscapeSummary,
     },
     placement::{MemoryPlacementSection, compute_semantic_memory_placement},
@@ -370,6 +371,7 @@ pub(crate) struct FinalSpillReplanCtx<'a> {
     pub(crate) pre_analyses: &'a FxHashMap<FuncRef, FuncPreAnalysis>,
     pub(crate) ptr_escape: &'a FxHashMap<FuncRef, PtrEscapeSummary>,
     pub(crate) backend: &'a EvmBackend,
+    pub(crate) memory_guard: Option<MemoryGuardConfig>,
 }
 
 pub(crate) struct FinalSpillChoiceCtx<'a> {
@@ -520,6 +522,7 @@ impl FinalSpillChoiceCtx<'_> {
                 backend_spill_scratch_reserve_words: reserve_scratch_peak,
                 has_heap_mallocs: self.base_placement.has_heap_mallocs,
             },
+            self.base_placement.memory_guard,
         );
         let global_dyn_base = arena_base
             .checked_add(
@@ -568,6 +571,7 @@ impl FinalSpillChoiceCtx<'_> {
                 entry: replan.section_entry,
                 includes: replan.section_includes,
                 fixed_reservations: self.fixed_reservations,
+                memory_guard: replan.memory_guard,
             },
             replan.pre_analyses,
             replan.ptr_escape,

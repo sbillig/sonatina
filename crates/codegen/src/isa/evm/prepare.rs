@@ -113,6 +113,7 @@ impl EvmPreparedSection {
 pub(crate) struct EvmSectionPlan {
     pub(crate) arena_base: u32,
     pub(crate) dyn_base: u32,
+    pub(crate) dyn_sp_slot: u32,
     pub(crate) scratch_peak_words: u32,
     pub(crate) stable_chain_peak_words: u32,
 }
@@ -251,6 +252,20 @@ pub(crate) struct FreePtrSlotFacts {
     pub(crate) writes: bool,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct MemoryGuardConfig {
+    pub(crate) size: u32,
+    pub(crate) aligned_size: u32,
+}
+
+impl MemoryGuardConfig {
+    pub(crate) fn compiler_prefix_start(self) -> u32 {
+        // The guard reads the fixed public allocator cursor even for small
+        // caller prefixes; neither the arena nor the private SP may occupy it.
+        self.aligned_size.max(FREE_PTR_SLOT_END)
+    }
+}
+
 pub(crate) fn function_free_ptr_slot_facts(
     function: &Function,
     backend: &EvmBackend,
@@ -324,6 +339,16 @@ impl SectionMemoryLayout {
             base
         }
     }
+
+    fn validate_memory_guard(&self, guard: MemoryGuardConfig) -> Result<(), String> {
+        if self.max_reserved_end <= guard.size {
+            return Ok(());
+        }
+        Err(format!(
+            "evm_memory_guard reserves {:#x} low-memory bytes, but the section has a fixed memory access ending at {:#x}",
+            guard.size, self.max_reserved_end
+        ))
+    }
 }
 
 /// A fixed-address access whose length is not a compile-time constant. The source
@@ -338,6 +363,7 @@ fn memory_layout_reservation_for_addr_len(
     addr: ValueId,
     len: MemoryAccessLen,
     prov: &SecondaryMap<ValueId, Provenance>,
+    memory_guard: Option<MemoryGuardConfig>,
 ) -> Result<MemoryLayoutReservation, UnboundedFixedAccess> {
     if len.is_zero(function) {
         return Ok(MemoryLayoutReservation::None);
@@ -349,7 +375,19 @@ fn memory_layout_reservation_for_addr_len(
         };
         return match len {
             MemoryAccessLen::Value(len) if !function.dfg.value_is_imm(len) => {
-                Err(UnboundedFixedAccess { start })
+                // The guard is a caller promise that raw accesses stay below
+                // `size` or above its returned frontier. A fixed low address
+                // therefore cannot extend into the compiler-owned gap.
+                if let Some(guard) = memory_guard
+                    && start < guard.size
+                {
+                    Ok(MemoryLayoutReservation::Reserve {
+                        start,
+                        len: guard.size - start,
+                    })
+                } else {
+                    Err(UnboundedFixedAccess { start })
+                }
             }
             // An immediate length beyond `u32` can only exhaust gas.
             _ => Ok(len
@@ -371,6 +409,7 @@ fn memory_layout_reservation_from_effect(
     function: &Function,
     access: &MemoryAccess,
     prov: &SecondaryMap<ValueId, Provenance>,
+    memory_guard: Option<MemoryGuardConfig>,
 ) -> Result<MemoryLayoutReservation, UnboundedFixedAccess> {
     if access.space != MEMORY {
         return Ok(MemoryLayoutReservation::None);
@@ -382,6 +421,7 @@ fn memory_layout_reservation_from_effect(
             *addr,
             MemoryAccessLen::Known(*bytes),
             prov,
+            memory_guard,
         ),
         AccessLoc::LinearExactImm { addr, bytes, .. } => Ok(immediate_u32(*addr)
             .map_or(MemoryLayoutReservation::ConservativeFloor, |start| {
@@ -392,6 +432,7 @@ fn memory_layout_reservation_from_effect(
             *addr,
             MemoryAccessLen::Value(*len),
             prov,
+            memory_guard,
         ),
         AccessLoc::WholeSpace | AccessLoc::Unknown => {
             Ok(MemoryLayoutReservation::ConservativeFloor)
@@ -574,6 +615,7 @@ fn reserve_function_memory_layout(
     function: &Function,
     backend: &EvmBackend,
     prov: &SecondaryMap<ValueId, Provenance>,
+    memory_guard: Option<MemoryGuardConfig>,
 ) -> Result<(), String> {
     let terminal_payload_scratch = terminal_payload_scratch_insts(function, backend);
 
@@ -584,13 +626,16 @@ fn reserve_function_memory_layout(
             }
             if matches!(
                 backend.isa.inst_set().resolve_inst(function.dfg.inst(inst)),
-                EvmInstKind::Call(_) | EvmInstKind::EvmMalloc(_) | EvmInstKind::EvmMsize(_)
+                EvmInstKind::Call(_)
+                    | EvmInstKind::EvmMalloc(_)
+                    | EvmInstKind::EvmMemoryGuard(_)
+                    | EvmInstKind::EvmMsize(_)
             ) {
                 continue;
             }
 
             for access in &function.dfg.effects(inst).accesses {
-                let reservation = memory_layout_reservation_from_effect(function, access, prov)
+                let reservation = memory_layout_reservation_from_effect(function, access, prov, memory_guard)
                     .map_err(|access| {
                         let name = function.ctx().func_sig(func, |sig| sig.name().to_string());
                         let mut text = Vec::new();
@@ -778,6 +823,7 @@ pub(crate) fn scan_fixed_reservations(
     backend: &EvmBackend,
     analyses: &FxHashMap<FuncRef, memory_plan::FuncPreAnalysis>,
 ) -> Result<SectionMemoryLayout, String> {
+    let memory_guard = scan_memory_guard(module, funcs, backend)?;
     let mut layout = SectionMemoryLayout::default();
     for &func in funcs {
         let analysis = expect_func_entry(analyses, func, "pre-analysis");
@@ -788,6 +834,7 @@ pub(crate) fn scan_fixed_reservations(
                 function,
                 backend,
                 &analysis.prov.value,
+                memory_guard,
             )
         })?;
     }
@@ -797,7 +844,19 @@ pub(crate) fn scan_fixed_reservations(
 pub(crate) fn choose_arena_base(
     fixed_reservations: &SectionMemoryLayout,
     facts: ArenaBaseFacts,
+    memory_guard: Option<MemoryGuardConfig>,
 ) -> u32 {
+    if let Some(guard) = memory_guard {
+        return if facts.has_dynamic_frames {
+            guard
+                .compiler_prefix_start()
+                .checked_add(WORD_BYTES)
+                .expect("guarded dynamic stack slot overflow")
+        } else {
+            guard.compiler_prefix_start()
+        };
+    }
+
     let mut layout = fixed_reservations.clone();
 
     let spill_reserve_words = if facts.has_stackify_fixed_slot_spills {
@@ -817,6 +876,53 @@ pub(crate) fn choose_arena_base(
     }
 
     layout.arena_base()
+}
+
+fn scan_memory_guard(
+    module: &Module,
+    funcs: &[FuncRef],
+    backend: &EvmBackend,
+) -> Result<Option<MemoryGuardConfig>, String> {
+    let mut found: Option<MemoryGuardConfig> = None;
+    for &func in funcs {
+        module.func_store.view(func, |function| {
+            for block in function.layout.iter_block() {
+                for inst in function.layout.iter_inst(block) {
+                    let EvmInstKind::EvmMemoryGuard(guard) =
+                        backend.isa.inst_set().resolve_inst(function.dfg.inst(inst))
+                    else {
+                        continue;
+                    };
+                    let size = value_imm_u32(function, *guard.size()).ok_or_else(|| {
+                        format!(
+                            "evm_memory_guard size at inst{} in func{} must be a non-negative 32-bit immediate",
+                            inst.as_u32(),
+                            func.as_u32()
+                        )
+                    })?;
+                    let aligned_size = memory_plan::align_up_to_word(size).ok_or_else(|| {
+                        format!(
+                            "evm_memory_guard size at inst{} in func{} overflows the 32-bit memory planner",
+                            inst.as_u32(),
+                            func.as_u32()
+                        )
+                    })?;
+                    let config = MemoryGuardConfig { size, aligned_size };
+                    if let Some(expected) = found
+                        && expected != config
+                    {
+                        return Err(format!(
+                            "an EVM section cannot mix evm_memory_guard sizes {:#x} and {size:#x}",
+                            expected.size
+                        ));
+                    }
+                    found = Some(config);
+                }
+            }
+            Ok::<(), String>(())
+        })?;
+    }
+    Ok(found)
 }
 
 pub(crate) fn prepare_section(
@@ -851,10 +957,14 @@ fn prepare_machine_section_after_pipeline(
     membership: SectionMembership,
 ) -> Result<EvmPreparedSection, String> {
     let source_module = work.module();
+    let memory_guard = scan_memory_guard(source_module, &funcs, backend)?;
     let pre_analyses = compute_high_evm_pre_analyses(source_module, &funcs, backend, &ptr_escape);
     let schedule = CallGraphSchedule::compute(source_module, &funcs);
     let fixed_reservations =
         scan_fixed_reservations(source_module, &funcs, backend, &pre_analyses)?;
+    if let Some(memory_guard) = memory_guard {
+        fixed_reservations.validate_memory_guard(memory_guard)?;
+    }
     let mut fixed_slot_effects = FxHashSet::default();
     let mut backend_spills = BackendSpillPlan::default();
     let mut last_convergence_error = None;
@@ -871,6 +981,7 @@ fn prepare_machine_section_after_pipeline(
                 entry: work.entry(),
                 includes: work.includes(),
                 fixed_reservations: &fixed_reservations,
+                memory_guard,
             },
             &pre_analyses,
             &ptr_escape,
@@ -962,6 +1073,7 @@ fn prepare_machine_section_after_pipeline(
                 pre_analyses: &pre_analyses,
                 ptr_escape: &ptr_escape,
                 backend,
+                memory_guard,
             },
         }
         .choose_optional_placements();
@@ -969,6 +1081,7 @@ fn prepare_machine_section_after_pipeline(
         let section_plan = EvmSectionPlan {
             arena_base: placement.arena_base,
             dyn_base: placement.global_dyn_base,
+            dyn_sp_slot: placement.dyn_sp_slot,
             scratch_peak_words: placement.scratch_peak_words,
             stable_chain_peak_words: placement.stable_chain_peak_words,
         };
@@ -1634,7 +1747,10 @@ mod tests {
         module::ModuleCtx,
     };
 
-    use super::{FixedMemoryWriteRange, machine_fixed_memory_write_ranges};
+    use super::{
+        ArenaBaseFacts, FixedMemoryWriteRange, MemoryGuardConfig, SectionMemoryLayout, WORD_BYTES,
+        choose_arena_base, machine_fixed_memory_write_ranges,
+    };
 
     fn machine_builder() -> ModuleBuilder {
         ModuleBuilder::new(ModuleCtx::new(&EvmMachine::new(osaka_triple())))
@@ -1830,5 +1946,41 @@ mod tests {
         });
 
         assert!(ranges.is_empty());
+    }
+
+    #[test]
+    fn memory_guard_rejects_fixed_access_beyond_caller_reserve() {
+        let mut layout = SectionMemoryLayout::default();
+        layout.reserve_len(0x80, WORD_BYTES);
+        let guard = MemoryGuardConfig {
+            size: 0x80,
+            aligned_size: 0x80,
+        };
+
+        assert!(layout.validate_memory_guard(guard).is_err());
+    }
+
+    #[test]
+    fn guarded_arena_protects_allocator_state_and_the_private_stack_slot() {
+        for (size, aligned_size, prefix_end) in [(0, 0, 96), (64, 64, 96), (129, 160, 160)] {
+            let guard = MemoryGuardConfig { size, aligned_size };
+            for has_dynamic_frames in [false, true] {
+                let arena_base = choose_arena_base(
+                    &SectionMemoryLayout::default(),
+                    ArenaBaseFacts {
+                        has_dynamic_frames,
+                        has_stackify_fixed_slot_spills: false,
+                        backend_spill_scratch_reserve_words: 0,
+                        has_heap_mallocs: false,
+                    },
+                    Some(guard),
+                );
+                let expected = prefix_end + if has_dynamic_frames { WORD_BYTES } else { 0 };
+                assert_eq!(
+                    arena_base, expected,
+                    "size={size}, frames={has_dynamic_frames}"
+                );
+            }
+        }
     }
 }
