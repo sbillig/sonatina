@@ -200,18 +200,35 @@ impl InitializedValue {
 
     pub(crate) fn join(&self, ctx: &ModuleCtx, other: &Self) -> Self {
         debug_assert_eq!(self.ty, other.ty);
-        if self.defined(ctx) && other.defined(ctx) && self.variant != other.variant {
+        if self.default_defined == other.default_defined
+            && self.variant == other.variant
+            && self.children.ptr_eq(&other.children)
+        {
+            return self.clone();
+        }
+        if self.variant != other.variant && self.defined(ctx) && other.defined(ctx) {
             return Self::new(self.ty, true);
         }
-        let mut result = Self::new(self.ty, self.default_defined && other.default_defined);
+        let mut result = self.clone();
+        result.default_defined &= other.default_defined;
         result.variant = self
             .variant
             .filter(|variant| Some(*variant) == other.variant);
-        for &index in self.children.keys().chain(other.children.keys()) {
+        // Join overlapping keys once. Retained snapshots share unchanged
+        // entries, and only changed children need a new persistent map path.
+        for &index in self.children.keys().chain(
+            other
+                .children
+                .keys()
+                .filter(|index| !self.children.contains_key(*index)),
+        ) {
             if let Some(a) = self.child(ctx, index)
                 && let Some(b) = other.child(ctx, index)
             {
-                result.children.insert_mut(index, a.join(ctx, &b));
+                let child = a.join(ctx, &b);
+                if result.children.get(&index) != Some(&child) {
+                    result.children.insert_mut(index, child);
+                }
             }
         }
         result
@@ -514,5 +531,126 @@ block0:
                 );
             }
         });
+    }
+
+    #[test]
+    fn nested_joins_intersect_definedness_with_sparse_defaults() {
+        let parsed = parse_module(
+            r#"
+target = "evm-ethereum-osaka"
+type @Pair = { i256, i256 };
+type @Nested = { @Pair, @Pair };
+func private %f(v0.@Nested) {
+block0:
+    return;
+}
+"#,
+        )
+        .unwrap();
+        let ctx = &parsed.module.ctx;
+        let ty = ctx.func_sig(parsed.module.funcs()[0], |sig| sig.args()[0]);
+        let slices = [[0, 0], [0, 1], [1, 0], [1, 1]]
+            .map(|path| shape::aggregate_slice_for_path(ctx, ty, &path).unwrap());
+        let states: Vec<_> = [false, true]
+            .into_iter()
+            .flat_map(|default| (0_u8..16).map(move |mask| (default, mask)))
+            .map(|(default, mask)| {
+                let mut layout = AggregateLayoutCache::default();
+                let mut value = InitializedValue::new(ty, default);
+                let mut defined = [default; 4];
+                for (index, slice) in slices.iter().enumerate() {
+                    if mask & (1 << index) != 0 {
+                        defined[index] = !default;
+                        value.put(
+                            ctx,
+                            *slice,
+                            InitializedValue::new(slice.ty, !default),
+                            &mut layout,
+                        );
+                    }
+                }
+                (value, defined)
+            })
+            .collect();
+        for (left, left_bits) in &states {
+            for (right, right_bits) in &states {
+                let joined = left.join(ctx, right);
+                let mut layout = AggregateLayoutCache::default();
+                let expected: Vec<_> = left_bits
+                    .iter()
+                    .zip(right_bits)
+                    .map(|(a, b)| *a && *b)
+                    .collect();
+                assert_eq!(joined.defined(ctx), expected.iter().all(|bit| *bit));
+                for (slice, expected) in slices.iter().zip(expected) {
+                    assert_eq!(joined.at(ctx, *slice, &mut layout).defined(ctx), expected);
+                }
+                assert_eq!(joined, right.join(ctx, left));
+                assert_eq!(joined, joined.join(ctx, &joined));
+                assert_eq!(left.defined(ctx), left_bits.iter().all(|bit| *bit));
+                assert_eq!(right.defined(ctx), right_bits.iter().all(|bit| *bit));
+            }
+        }
+    }
+
+    #[test]
+    fn unchanged_joins_share_storage_without_merging_variant_metadata() {
+        let parsed = parse_module(
+            r#"
+target = "evm-ethereum-osaka"
+type @E = enum { #None, #Some(i256) };
+type @Pair = { @E, @E };
+func private %f(v0.@Pair) {
+block0:
+    return;
+}
+"#,
+        )
+        .unwrap();
+        let ctx = &parsed.module.ctx;
+        let ty = ctx.func_sig(parsed.module.funcs()[0], |sig| sig.args()[0]);
+        let enum_ty = shape::aggregate_child_ty(ctx, ty, 0).unwrap();
+        let Type::Compound(enum_id) = enum_ty else {
+            panic!("expected enum");
+        };
+        let some = EnumVariantRef::new(enum_id, 1);
+        let none = EnumVariantRef::new(enum_id, 0);
+        let mut value = InitializedValue::new(ty, false);
+        let mut layout = AggregateLayoutCache::default();
+        let mut populated = InitializedValue::new(enum_ty, false);
+        populated.select(ctx, some);
+        let payload = shape::enum_variant_field_slice(ctx, enum_ty, some, 0).unwrap();
+        populated.put(
+            ctx,
+            payload,
+            InitializedValue::new(payload.ty, true),
+            &mut layout,
+        );
+        for index in [0, 1] {
+            let slice = shape::aggregate_slice_for_path(ctx, ty, &[index]).unwrap();
+            value.put(ctx, slice, populated.clone(), &mut layout);
+        }
+        assert!(value.defined(ctx));
+        let joined = value.join(ctx, &value);
+        assert!(joined.children.ptr_eq(&value.children));
+        let mut changed = value.clone();
+        let first = shape::aggregate_slice_for_path(ctx, ty, &[0]).unwrap();
+        let mut alternate = populated.clone();
+        alternate.assume_variant(none);
+        assert!(alternate.children.ptr_eq(&populated.children));
+        assert!(alternate.defined(ctx));
+        changed.put(ctx, first, alternate, &mut layout);
+        let mixed = value.join(ctx, &changed);
+        assert!(mixed.defined(ctx));
+        assert_eq!(mixed.children[&0].variant(), None);
+        assert_eq!(mixed.children[&1].variant(), Some(some));
+        assert!(ptr::eq(&mixed.children[&1], &value.children[&1]));
+        assert_eq!(value.children[&0].variant(), Some(some));
+        assert_eq!(changed.children[&0].variant(), Some(none));
+        let mut fork = joined;
+        fork.forget(ctx, first, &mut layout);
+        assert!(!fork.defined(ctx));
+        assert!(value.defined(ctx));
+        assert!(mixed.defined(ctx));
     }
 }
