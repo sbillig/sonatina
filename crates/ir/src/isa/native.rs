@@ -5,7 +5,9 @@ use sonatina_triple::{Architecture, OperatingSystem, TargetTriple, Vendor};
 use super::{Endian, Isa, TypeLayout, TypeLayoutError};
 use crate::{
     AddressSpaceDesc, AddressSpaceId, AddressSpaceInfo, AddressSpaceKind, Type,
-    inst::native::inst_set::NativeInstSet, module::ModuleCtx, types::CompoundType,
+    inst::native::inst_set::NativeInstSet,
+    module::ModuleCtx,
+    types::{CompoundType, TypeStore},
 };
 
 pub mod space {
@@ -88,74 +90,89 @@ pub fn inst_set() -> &'static NativeInstSet {
     &INST_SET
 }
 
-impl TypeLayout for NativeTypeLayout {
-    fn size_of(&self, ty: Type, ctx: &ModuleCtx) -> Result<usize, TypeLayoutError> {
-        let size = match ty {
-            Type::Unit => 0,
-            Type::I1 | Type::I8 => 1,
-            Type::I16 => 2,
-            Type::I32 => 4,
-            Type::I64 => 8,
-            Type::I128 => 16,
-            Type::I256 => 32,
-            Type::EnumTag(_) => return Err(TypeLayoutError::UnrepresentableType(ty)),
-            Type::Compound(compound) => {
-                match ctx.with_ty_store(|store| store.resolve_compound(compound).clone()) {
-                    CompoundType::Array { elem, len } => self.size_of(elem, ctx)? * len,
-                    CompoundType::Struct(data) => {
-                        if data.packed {
-                            return Err(TypeLayoutError::UnsupportedType(ty));
-                        }
-                        let mut size = 0usize;
-                        let mut struct_align = 1usize;
-                        for field in data.fields {
-                            let align = self.align_of(field, ctx)?;
-                            size = size.next_multiple_of(align);
-                            size += self.size_of(field, ctx)?;
-                            struct_align = struct_align.max(align);
-                        }
-                        size.next_multiple_of(struct_align)
-                    }
-                    CompoundType::Ptr(_) | CompoundType::ObjRef(_) | CompoundType::ConstRef(_) => 8,
-                    CompoundType::Enum(_) | CompoundType::Func { .. } => {
-                        return Err(TypeLayoutError::UnrepresentableType(ty));
-                    }
+impl NativeTypeLayout {
+    fn size(ty: Type, store: &TypeStore) -> Result<usize, TypeLayoutError> {
+        let Type::Compound(compound) = ty else {
+            return Self::scalar_layout(ty).map(|(size, _)| size);
+        };
+        let size = match store.resolve_compound(compound) {
+            CompoundType::Array { elem, len } => Self::size(*elem, store)? * len,
+            CompoundType::Struct(data) => {
+                if data.packed {
+                    return Err(TypeLayoutError::UnsupportedType(ty));
                 }
+                let mut size = 0usize;
+                let mut struct_align = 1usize;
+                for &field in &data.fields {
+                    let align = Self::align(field, store)?;
+                    size = size.next_multiple_of(align);
+                    size += Self::size(field, store)?;
+                    struct_align = struct_align.max(align);
+                }
+                size.next_multiple_of(struct_align)
+            }
+            CompoundType::Ptr(_) | CompoundType::ObjRef(_) | CompoundType::ConstRef(_) => 8,
+            CompoundType::Enum(_) | CompoundType::Func { .. } => {
+                return Err(TypeLayoutError::UnrepresentableType(ty));
             }
         };
         Ok(size)
     }
 
-    fn align_of(&self, ty: Type, ctx: &ModuleCtx) -> Result<usize, TypeLayoutError> {
-        let align = match ty {
-            Type::Unit | Type::I1 | Type::I8 => 1,
-            Type::I16 => 2,
-            Type::I32 => 4,
-            Type::I64 => 8,
-            Type::I128 => 16,
-            Type::I256 => 16,
-            Type::EnumTag(_) => return Err(TypeLayoutError::UnrepresentableType(ty)),
-            Type::Compound(compound) => {
-                match ctx.with_ty_store(|store| store.resolve_compound(compound).clone()) {
-                    CompoundType::Array { elem, .. } => self.align_of(elem, ctx)?,
-                    CompoundType::Struct(data) => {
-                        if data.packed {
-                            return Err(TypeLayoutError::UnsupportedType(ty));
-                        }
-                        let mut align = 1usize;
-                        for field in data.fields {
-                            align = align.max(self.align_of(field, ctx)?);
-                        }
-                        align
-                    }
-                    CompoundType::Ptr(_) | CompoundType::ObjRef(_) | CompoundType::ConstRef(_) => 8,
-                    CompoundType::Enum(_) | CompoundType::Func { .. } => {
-                        return Err(TypeLayoutError::UnrepresentableType(ty));
-                    }
+    fn align(ty: Type, store: &TypeStore) -> Result<usize, TypeLayoutError> {
+        let Type::Compound(compound) = ty else {
+            return Self::scalar_layout(ty).map(|(_, align)| align);
+        };
+        let align = match store.resolve_compound(compound) {
+            CompoundType::Array { elem, .. } => Self::align(*elem, store)?,
+            CompoundType::Struct(data) => {
+                if data.packed {
+                    return Err(TypeLayoutError::UnsupportedType(ty));
                 }
+                let mut align = 1usize;
+                for &field in &data.fields {
+                    align = align.max(Self::align(field, store)?);
+                }
+                align
+            }
+            CompoundType::Ptr(_) | CompoundType::ObjRef(_) | CompoundType::ConstRef(_) => 8,
+            CompoundType::Enum(_) | CompoundType::Func { .. } => {
+                return Err(TypeLayoutError::UnrepresentableType(ty));
             }
         };
         Ok(align)
+    }
+
+    fn scalar_layout(ty: Type) -> Result<(usize, usize), TypeLayoutError> {
+        Ok(match ty {
+            Type::Unit => (0, 1),
+            Type::I1 | Type::I8 => (1, 1),
+            Type::I16 => (2, 2),
+            Type::I32 => (4, 4),
+            Type::I64 => (8, 8),
+            Type::I128 => (16, 16),
+            Type::I256 => (32, 16),
+            Type::EnumTag(_) => return Err(TypeLayoutError::UnrepresentableType(ty)),
+            Type::Compound(_) => unreachable!("compound layout needs its type store"),
+        })
+    }
+}
+
+impl TypeLayout for NativeTypeLayout {
+    fn size_of(&self, ty: Type, ctx: &ModuleCtx) -> Result<usize, TypeLayoutError> {
+        if matches!(ty, Type::Compound(_)) {
+            ctx.with_ty_store(|store| Self::size(ty, store))
+        } else {
+            Self::scalar_layout(ty).map(|(size, _)| size)
+        }
+    }
+
+    fn align_of(&self, ty: Type, ctx: &ModuleCtx) -> Result<usize, TypeLayoutError> {
+        if matches!(ty, Type::Compound(_)) {
+            ctx.with_ty_store(|store| Self::align(ty, store))
+        } else {
+            Self::scalar_layout(ty).map(|(_, align)| align)
+        }
     }
 
     fn pointer_repl(&self) -> Type {
@@ -269,5 +286,37 @@ mod tests {
             .with_ty_store_mut(|store| store.make_ptr(function));
         assert_eq!(module.ctx.size_of(pointer).unwrap(), 8);
         assert_eq!(module.ctx.align_of(pointer).unwrap(), 8);
+    }
+    #[test]
+    fn native_nested_layouts_follow_type_updates_and_isolate_forked_stores() {
+        let module = Module::new(&native_isa());
+        let (inner, outer) = module.ctx.with_ty_store_mut(|store| {
+            let inner = store.make_struct("Inner", &[Type::I8, Type::I128], false);
+            let array = store.make_array(inner, 3);
+            let outer = store.make_struct("Outer", &[Type::I8, array, Type::I256], false);
+            (inner, outer)
+        });
+        let shared = module.ctx.clone();
+        let forked = module.ctx.fork();
+        let copied = module.ctx.deep_clone();
+        for ctx in [&module.ctx, &shared, &forked, &copied] {
+            assert_eq!(ctx.size_of(inner).unwrap(), 32);
+            assert_eq!(ctx.align_of(inner).unwrap(), 16);
+            assert_eq!(ctx.size_of(outer).unwrap(), 144);
+            assert_eq!(ctx.align_of(outer).unwrap(), 16);
+        }
+        module.ctx.with_ty_store_mut(|store| {
+            store.update_struct_fields("Inner", &[Type::I8, Type::I64]);
+        });
+        for ctx in [&module.ctx, &shared] {
+            assert_eq!(ctx.size_of(inner).unwrap(), 16);
+            assert_eq!(ctx.align_of(inner).unwrap(), 8);
+            assert_eq!(ctx.size_of(outer).unwrap(), 96);
+            assert_eq!(ctx.align_of(outer).unwrap(), 16);
+        }
+        for ctx in [&forked, &copied] {
+            assert_eq!(ctx.size_of(inner).unwrap(), 32);
+            assert_eq!(ctx.size_of(outer).unwrap(), 144);
+        }
     }
 }
