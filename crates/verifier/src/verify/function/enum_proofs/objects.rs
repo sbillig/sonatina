@@ -366,6 +366,7 @@ impl State {
         let mut result = Self {
             objects: self.objects.clone(),
             bound: self.bound.union(&other.bound).copied().collect(),
+            view_index: self.view_index.clone(),
             ..Self::default()
         };
         // Allocation facts are conditional on that allocation existing. Phi
@@ -383,20 +384,26 @@ impl State {
                 result.values.insert(id, a.join(ctx, b));
             }
         }
+        // Joined views are a subset of our views; values and guard facts do not
+        // affect the index. Only changed or missing references need reindexing.
         for (&id, a) in &self.views {
             if let Some(b) = other.views.get(&id) {
+                let references = a.references.join(&b.references);
+                if references != a.references {
+                    result.view_index.update(id, &a.references, false);
+                    result.view_index.update(id, &references, true);
+                }
                 result.views.insert(
                     id,
                     ViewFact {
-                        references: a.references.join(&b.references),
+                        references,
                         value: a.value.join(ctx, &b.value),
                         guards: a.guards && b.guards,
                     },
                 );
+            } else {
+                result.view_index.update(id, &a.references, false);
             }
-        }
-        for (&id, fact) in &result.views {
-            result.view_index.update(id, &fact.references, true);
         }
         for (&id, refs) in &self.observations {
             if let Some(other) = other.observations.get(&id)
@@ -594,5 +601,122 @@ impl State {
             });
         }
         self.close_exposure(ctx);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use sonatina_ir::{Module, isa::evm::Evm};
+    use sonatina_triple::TargetTriple;
+
+    use super::{
+        super::views::{Anchor, Guard, View},
+        *,
+    };
+
+    #[test]
+    fn joins_retain_only_common_views_and_update_reference_candidates() {
+        let module = Module::new(&Evm::new(
+            TargetTriple::parse("evm-ethereum-cancun").unwrap(),
+        ));
+        let ids = [0, 1, 2, 3, 4, 5].map(ValueId::from_u32);
+        let witness = ValueId::from_u32(10);
+        let anchor = ValueId::from_u32(11);
+        let mut left = State::default();
+        for &id in &ids[..4] {
+            let mut references = References::root(Root::Recent(id));
+            references.cache = Some(id);
+            left.views.insert(
+                id,
+                ViewFact {
+                    references,
+                    value: ValueState::new(Type::I32, true),
+                    guards: true,
+                },
+            );
+        }
+        left.views.get_mut(&ids[2]).unwrap().references.views = BTreeSet::from([View {
+            place: Place {
+                root: Root::Recent(ids[2]),
+                path: vec![],
+            },
+            guards: BTreeSet::from([Guard {
+                place: Place {
+                    root: Root::Summary(ids[0]),
+                    path: vec![],
+                },
+                variant: 0,
+                witness: Some(witness),
+                anchor: Some(Anchor {
+                    value: anchor,
+                    path: vec![],
+                }),
+            }]),
+        }]);
+        for (&id, fact) in &left.views {
+            left.view_index.update(id, &fact.references, true);
+        }
+        let mut right = left.clone();
+        right.views.get_mut(&ids[0]).unwrap().guards = false;
+        let mut moved = References::root(Root::Recent(ids[4]));
+        moved.cache = Some(ids[1]);
+        for (id, references) in [
+            (ids[1], moved),
+            (ids[3], References::root(Root::Recent(ids[3]))),
+        ] {
+            let fact = right.views.get_mut(&id).unwrap();
+            right.view_index.update(id, &fact.references, false);
+            fact.references = references;
+            right.view_index.update(id, &fact.references, true);
+        }
+        let removed = right.views.remove(&ids[2]).unwrap();
+        right.view_index.update(ids[2], &removed.references, false);
+        let added = ViewFact {
+            references: References::root(Root::Recent(ids[5])),
+            value: ValueState::new(Type::I32, true),
+            guards: true,
+        };
+        right.view_index.update(ids[5], &added.references, true);
+        right.views.insert(ids[5], added);
+
+        let joined = left.join(&module.ctx, &right);
+        assert_eq!(
+            joined.views.keys().copied().collect::<Vec<_>>(),
+            vec![ids[0], ids[1], ids[3]]
+        );
+        assert!(!joined.views[&ids[0]].guards);
+        for (root, expected) in [
+            (Root::Recent(ids[0]), BTreeSet::from([ids[0]])),
+            (Root::Recent(ids[1]), BTreeSet::from([ids[1]])),
+            (Root::Recent(ids[2]), BTreeSet::new()),
+            (Root::Recent(ids[3]), BTreeSet::from([ids[3]])),
+            (Root::Recent(ids[4]), BTreeSet::from([ids[1]])),
+            (Root::Recent(ids[5]), BTreeSet::new()),
+            (Root::Summary(ids[0]), BTreeSet::new()),
+        ] {
+            assert_eq!(
+                joined.view_index.candidates(&References::root(root)),
+                expected,
+                "{root:?}"
+            );
+        }
+        for id in [ids[2], ids[3], witness, anchor] {
+            assert!(
+                joined.view_index.binding_candidates(id).is_empty(),
+                "{id:?}"
+            );
+            assert_eq!(
+                left.view_index.binding_candidates(id),
+                BTreeSet::from([if id == ids[3] { ids[3] } else { ids[2] }])
+            );
+        }
+        let mut cached = References::root(Root::Recent(ids[5]));
+        cached.cache = Some(ids[3]);
+        assert!(joined.view_index.candidates(&cached).is_empty());
+        assert_eq!(
+            left.view_index.candidates(&cached),
+            BTreeSet::from([ids[3]])
+        );
+        assert_eq!(joined, right.join(&module.ctx, &left));
     }
 }
