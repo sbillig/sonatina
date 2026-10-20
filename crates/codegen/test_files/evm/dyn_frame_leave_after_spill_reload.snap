@@ -6,18 +6,18 @@ input_file: test_files/evm/dyn_frame_leave_after_spill_reload.sntn
 evm.config: stack_reach=4 vcode=true bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false
 
 object: Contract
-  section runtime: 176 bytes
-  total: 176 bytes
+  section runtime: 169 bytes
+  total: 169 bytes
 
 functions:
   mem: global_dyn_base=0xa0 arena_base=0xa0 scratch_peak_words=0 stable_chain_peak_words=0
   entry: ir_blocks=1 ir_insts=4 vcode_ops=15 fixups=2 imm_bytes=3
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
-  rec: ir_blocks=3 ir_insts=24 vcode_ops=127 fixups=4 imm_bytes=27
-    mem: scratch_words=0 stable_words=3 stable_mode=DynamicFrame entry_abs_words=0 abs_words_end=0
+  rec: ir_blocks=3 ir_insts=24 vcode_ops=124 fixups=4 imm_bytes=23
+    mem: scratch_words=0 stable_words=2 stable_mode=DynamicFrame entry_abs_words=0 abs_words_end=0
 
 evm:
-  case ok: calldata_len=32 success reason=Return gas_used=22387 gas_refunded=0 logs=0 output=call len=32 tx_gas=21140 runtime_gas=1247
+  case ok: calldata_len=32 success reason=Return gas_used=22351 gas_refunded=0 logs=0 output=call len=32 tx_gas=21140 runtime_gas=1211
 
 
 --------------- DEBUG ---------------
@@ -72,7 +72,7 @@ rec:
     SWAP1
     JUMPDEST
     POP
-    PUSH1 0x80 (128)
+    PUSH1 0x60 (96)
     ADD
     DUP2
     PUSH1 0x20 (32)
@@ -83,7 +83,7 @@ rec:
     POP
     PUSH1 0x80 (128)
     MSTORE
-    PUSH1 0x80 (128)
+    PUSH1 0x60 (96)
     PUSH1 0x80 (128)
     MLOAD
     SUB
@@ -91,12 +91,6 @@ rec:
     PUSH1 0x2 (2)  // v6.i256 = add v0 v5;
     DUP3
     ADD
-    DUP1
-    PUSH1 0x60 (96)
-    PUSH1 0x80 (128)
-    MLOAD
-    SUB
-    MSTORE
     PUSH1 0x3 (3)  // v8.i256 = add v0 v7;
     DUP4
     ADD
@@ -110,15 +104,14 @@ rec:
     SUB
     MSTORE
     SWAP4  // v12.i256 = add v0 v11;
-    DUP1
     PUSH1 0x5 (5)
+    DUP2
     ADD
     PUSH1 0x6 (6)  // v14.i256 = add v0 v13;
     DUP3
     ADD
     PUSH1 0x1 (1)  // v15.i256 = sub v0 v3;
     SWAP1
-    SWAP2
     SWAP3
     SUB
     PUSH1 `pc + (4)`  // v16.i256 = call %rec v15;
@@ -126,19 +119,21 @@ rec:
     PUSH1 FuncRef(1)
     JUMP
     JUMPDEST
-    PUSH1 0x80 (128)  // v17.i256 = add v16 v4;
+    PUSH1 0x60 (96)  // v17.i256 = add v16 v4;
     PUSH1 0x80 (128)
     MLOAD
     SUB
     MLOAD
     ADD
-    PUSH1 0x60 (96)  // v18.i256 = add v17 v6;
-    PUSH1 0x80 (128)
-    MLOAD
-    SUB
-    MLOAD
+    SWAP3  // v18.i256 = add v17 v6;
+    SWAP4
+    DUP1
+    SWAP4
     ADD
-    DUP4  // v19.i256 = add v18 v8;
+    SWAP3  // v19.i256 = add v18 v8;
+    SWAP4
+    DUP1
+    SWAP4
     ADD
     PUSH1 0x40 (64)  // v20.i256 = add v19 v10;
     PUSH1 0x80 (128)
@@ -153,11 +148,13 @@ rec:
     PUSH1 0x80 (128)
     MSTORE
     ADD
-    DUP3  // v21.i256 = add v20 v12;
+    DUP2  // v21.i256 = add v20 v12;
     ADD
-    DUP2  // v22.i256 = add v21 v14;
+    DUP3  // v22.i256 = add v21 v14;
     ADD
-    XOR  // v23.i256 = xor v22 v14;
+    SWAP1  // v23.i256 = xor v22 v14;
+    SWAP2
+    XOR
     XOR  // v24.i256 = xor v23 v12;
     SWAP1  // v25.i256 = xor v24 v10;
     SWAP4

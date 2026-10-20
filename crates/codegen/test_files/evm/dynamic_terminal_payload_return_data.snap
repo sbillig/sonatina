@@ -15,7 +15,7 @@ functions:
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
 
 evm:
-  case echo: calldata_len=64 success reason=Return gas_used=22196 gas_refunded=0 logs=0 output=call len=64 tx_gas=22000 runtime_gas=196
+  case echo: calldata_len=64 success reason=Return gas_used=22194 gas_refunded=0 logs=0 output=call len=64 tx_gas=22000 runtime_gas=194
 
 
 --------------- DEBUG ---------------
@@ -26,7 +26,7 @@ entry:
     CALLDATASIZE  // v0.i256 = evm_calldata_size;
     DUP1  // evm_calldata_copy v1 v1 v0;
     PUSH0
-    DUP1
+    PUSH0
     CALLDATACOPY
     GAS  // v2.i256 = evm_gas;
     PUSH0  // v4.i256 = evm_static_call v2 v3 v1 v0 v1 v1;
@@ -43,7 +43,7 @@ entry:
     RETURNDATASIZE
     DUP1  // evm_return_data_copy v1 v1 v5;
     PUSH0
-    DUP1
+    PUSH0
     RETURNDATACOPY
     PUSH0  // evm_return v1 v5;
     RETURN

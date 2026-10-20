@@ -54,10 +54,10 @@ init:
     PUSH1 0x80 (128)
   block3:
     JUMPDEST
-    DUP2  // evm_code_copy v9 v2 v3;
-    SWAP1
-    SWAP2
+    DUP1  // evm_code_copy v9 v2 v3;
     SWAP3
     DUP3
+    SWAP2
     CODECOPY
-    RETURN  // evm_return v9 v3;
+    SWAP1  // evm_return v9 v3;
+    RETURN

@@ -128,8 +128,8 @@ join:
     PUSH1 0x40 (64)
     MSTORE
     SWAP16  // v55.i256 = add v1 v54;
-    DUP1
     PUSH1 0x11 (17)
+    DUP2
     ADD
     DUP1
     PUSH1 0x40 (64)
@@ -314,8 +314,8 @@ join:
     PUSH1 0x40 (64)
     MSTORE
     SWAP16  // v95.i256 = add v1 117.i256;
-    DUP1
     PUSH1 0x75 (117)
+    DUP2
     ADD
     DUP1
     PUSH1 0x40 (64)

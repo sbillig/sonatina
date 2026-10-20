@@ -334,21 +334,6 @@ impl<'a, 'ctx: 'a> Planner<'a, 'ctx> {
             return Some(plan);
         }
 
-        if !self.ctx.search_profile.budgets().exact_operand_prep {
-            return solve_greedy_operand_prep_plan(
-                self.ctx,
-                self.stack,
-                args,
-                OperandPrepConstraints {
-                    consume_last_use,
-                    cache_preserve,
-                },
-                true,
-                &cost,
-                search_cfg,
-            );
-        }
-
         let use_query_cache = self.use_operand_prep_query_cache(args.len());
         let cache_key = use_query_cache.then(|| {
             self.operand_prep_query_key(args, consume_last_use, cache_preserve, search_cfg)
