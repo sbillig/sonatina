@@ -14,7 +14,7 @@ use crate::{
     stackalloc::{Action, Allocator, StackifyAlloc},
 };
 use sonatina_ir::{
-    AccessKind, AccessLoc, Function, GlobalVariableRef, InstDowncast, InstId, InstSetExt,
+    AccessKind, AccessLoc, BlockId, Function, GlobalVariableRef, InstDowncast, InstId, InstSetExt,
     MemoryAccess, Module, ValueId,
     cfg::ControlFlowGraph,
     inst::evm::{
@@ -198,6 +198,11 @@ fn memory_access_may_touch_range(
     }
 
     let prov = &prov[addr];
+    // EXPERIMENT: assume the reserved slots are reachable only through
+    // immediate addresses, so computed addresses never touch them.
+    if std::env::var_os("SONATINA_IMM_ONLY_SLOTS").is_some() {
+        return false;
+    }
     !addr_is_allocator_managed(prov)
 }
 
@@ -263,11 +268,13 @@ pub(crate) fn function_free_ptr_slot_facts(
 ) -> FreePtrSlotFacts {
     // Only its own terminal reads a terminal payload, so no malloc can observe it.
     let terminal_payload_scratch = terminal_payload_scratch_insts(function, backend);
+    let returning = blocks_reaching_return(function, backend);
     let mut facts = FreePtrSlotFacts::default();
     for block in function.layout.iter_block() {
         for inst in function.layout.iter_inst(block) {
             // Section callees are scanned directly; call summaries only expose whole-space writes.
             if terminal_payload_scratch.contains(&inst)
+                || is_entry_free_ptr_restore(function, backend, inst)
                 || matches!(
                     backend.isa.inst_set().resolve_inst(function.dfg.inst(inst)),
                     EvmInstKind::Call(_) | EvmInstKind::EvmMalloc(_)
@@ -279,7 +286,7 @@ pub(crate) fn function_free_ptr_slot_facts(
             for access in &function.dfg.effects(inst).accesses {
                 if memory_access_may_touch_free_ptr_slot(function, access, prov) {
                     facts.touches = true;
-                    facts.writes |= access.kind == AccessKind::Write;
+                    facts.writes |= access.kind == AccessKind::Write && returning.contains(&block);
                     if facts.writes {
                         return facts;
                     }
@@ -288,6 +295,60 @@ pub(crate) fn function_free_ptr_slot_facts(
         }
     }
     facts
+}
+
+/// Whether `inst` stores to the free-pointer slot the value the entry block's
+/// first instruction loaded from it, as the internal-return restore does.
+fn is_entry_free_ptr_restore(function: &Function, backend: &EvmBackend, inst: InstId) -> bool {
+    let is_slot = |addr: ValueId| value_imm_u32(function, addr) == Some(FREE_PTR_SLOT as u32);
+    let EvmInstKind::Mstore(store) = backend.isa.inst_set().resolve_inst(function.dfg.inst(inst))
+    else {
+        return false;
+    };
+    if !is_slot(*store.addr()) {
+        return false;
+    }
+    let Some(load) = function.dfg.value_inst(*store.value()) else {
+        return false;
+    };
+    let first = function.layout.entry_block().and_then(|entry| {
+        function
+            .layout
+            .iter_inst(entry)
+            .find(|&inst| !function.dfg.is_phi(inst))
+    });
+    first == Some(load)
+        && matches!(
+            backend.isa.inst_set().resolve_inst(function.dfg.inst(load)),
+            EvmInstKind::Mload(mload) if is_slot(*mload.addr())
+        )
+}
+
+/// The blocks from which a return to the caller is reachable.
+fn blocks_reaching_return(function: &Function, backend: &EvmBackend) -> FxHashSet<BlockId> {
+    let mut cfg = ControlFlowGraph::new();
+    cfg.compute(function);
+    let mut reaching: FxHashSet<BlockId> = function
+        .layout
+        .iter_block()
+        .filter(|&block| {
+            function.layout.last_inst_of(block).is_some_and(|inst| {
+                matches!(
+                    backend.isa.inst_set().resolve_inst(function.dfg.inst(inst)),
+                    EvmInstKind::Return(_)
+                )
+            })
+        })
+        .collect();
+    let mut pending: Vec<_> = reaching.iter().copied().collect();
+    while let Some(block) = pending.pop() {
+        for &pred in cfg.preds_of(block) {
+            if reaching.insert(pred) {
+                pending.push(pred);
+            }
+        }
+    }
+    reaching
 }
 
 #[derive(Clone, Copy)]
