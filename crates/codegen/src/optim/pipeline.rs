@@ -359,7 +359,7 @@ fn size_inliner_config() -> InlinerConfig {
         max_inlinee_blocks: 8,
         max_inlinee_insts: 48,
         max_growth_per_caller: 64,
-        max_total_growth: 320,
+        max_total_growth: 640,
         max_inline_depth: 3,
         inline_threshold: 16,
         inline_threshold_cold: 10,
