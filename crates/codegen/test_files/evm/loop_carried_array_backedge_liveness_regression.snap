@@ -21,7 +21,7 @@ functions:
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=30 abs_words_end=0
 
 evm:
-  case ok: calldata_len=0 success reason=Return gas_used=22412 gas_refunded=0 logs=0 output=call len=0 tx_gas=21000 runtime_gas=1412
+  case ok: calldata_len=0 success reason=Return gas_used=22411 gas_refunded=0 logs=0 output=call len=0 tx_gas=21000 runtime_gas=1411
 
 
 --------------- DEBUG ---------------
@@ -207,7 +207,7 @@ assert:
     JUMPI
   block1:
     PUSH0  // evm_revert 0.i256 0.i256;
-    DUP1
+    PUSH0
     REVERT
   block2:
     JUMPDEST
@@ -282,5 +282,5 @@ __repro_runtime_entry:
     JUMP
     JUMPDEST
     PUSH0  // evm_return 0.i256 0.i256;
-    DUP1
+    PUSH0
     RETURN

@@ -47,32 +47,13 @@ pub enum StackifySearchProfile {
     Exact,
 }
 
-/// Operand-prep beam search depth slack: either a fixed amount or "as deep as `SWAP*` reach".
-#[derive(Clone, Copy, Debug)]
-pub(super) enum BeamSlack {
-    Fixed(usize),
-    SwapMax,
-}
-
-impl BeamSlack {
-    pub(super) fn resolve(self, swap_max: usize) -> usize {
-        match self {
-            BeamSlack::Fixed(n) => n,
-            BeamSlack::SwapMax => swap_max,
-        }
-    }
-}
-
 /// Search-effort knobs for a `StackifySearchProfile`, expressed as data instead of code.
 pub(super) struct SearchBudgets {
-    pub(super) exact_operand_prep: bool,
     pub(super) exact_expansions: usize,
     pub(super) operand_prep_exact_expansions: usize,
     /// `(with incumbent, without incumbent)`.
     normalize_max_states: (usize, usize),
     pub(super) operand_prep_max_states: usize,
-    pub(super) operand_prep_beam_width: usize,
-    pub(super) operand_prep_beam_depth_slack: BeamSlack,
 }
 
 impl SearchBudgets {
@@ -86,33 +67,24 @@ impl SearchBudgets {
 }
 
 const FAST_BUDGETS: SearchBudgets = SearchBudgets {
-    exact_operand_prep: false,
     exact_expansions: 0,
-    operand_prep_exact_expansions: 0,
+    operand_prep_exact_expansions: 250,
     normalize_max_states: (0, 0),
-    operand_prep_max_states: 0,
-    operand_prep_beam_width: 16,
-    operand_prep_beam_depth_slack: BeamSlack::Fixed(4),
+    operand_prep_max_states: 25_000,
 };
 
 const GREEDY_WIDE_BUDGETS: SearchBudgets = SearchBudgets {
-    exact_operand_prep: true,
     exact_expansions: 1_000,
     operand_prep_exact_expansions: 250,
     normalize_max_states: (25_000, 50_000),
     operand_prep_max_states: 25_000,
-    operand_prep_beam_width: 64,
-    operand_prep_beam_depth_slack: BeamSlack::SwapMax,
 };
 
 const EXACT_BUDGETS: SearchBudgets = SearchBudgets {
-    exact_operand_prep: true,
     exact_expansions: 50_000,
     operand_prep_exact_expansions: 50_000,
     normalize_max_states: (200_000, 500_000),
     operand_prep_max_states: 150_000,
-    operand_prep_beam_width: 192,
-    operand_prep_beam_depth_slack: BeamSlack::SwapMax,
 };
 
 impl StackifySearchProfile {

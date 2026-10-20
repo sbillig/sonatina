@@ -66,7 +66,7 @@ evm:
   block2 P=[] T=[]
     // evm_mstore 0.i256 0.i256;
     - stack=[]
-      pre: [PUSH(0), DUP1]
+      pre: [PUSH(0), PUSH(0)]
       evm_mstore [0, 0]
     // evm_return 0.i256 32.i256;
     - stack=[]
@@ -171,7 +171,7 @@ entry:
   block2:
     JUMPDEST
     PUSH0  // evm_mstore v0 v0;
-    DUP1
+    PUSH0
     MSTORE
     PUSH1 0x20 (32)  // evm_return v0 32.i256;
     PUSH0
