@@ -2218,9 +2218,40 @@ fn free_ptr_floor_meets_cfg_edges_and_initial_entry_state() {
             "block0:\n    evm_mstore 64.i256 512.i256;\n    jump block1;\nblock1:\n    call %clobber v1;",
             None,
         ),
+        // A computed address never reaches the free-pointer slot.
+        (
+            "block0:\n    evm_mstore 64.i256 512.i256;\n    mstore v1 7.i256 i256;\n    jump block1;\nblock1:",
+            Some(512),
+        ),
+        // `restore` hands back the free pointer it was called with.
+        (
+            "block0:\n    evm_mstore 64.i256 512.i256;\n    jump block1;\nblock1:\n    call %restore v1;",
+            Some(512),
+        ),
+        // `abort_clobber` writes the slot only on a path that never returns.
+        (
+            "block0:\n    evm_mstore 64.i256 512.i256;\n    jump block1;\nblock1:\n    call %abort_clobber v0 v1;",
+            Some(512),
+        ),
         // The section entry stores the heap floor before calling `probe`.
         ("block0:", Some(96)),
     ] {
+        // Only the callees a case calls join its module, which keeps the
+        // others' memory layout, and so the entry floor, unchanged.
+        let callees: String = [
+            (
+                "%restore",
+                "func private %restore(v0.i256) {\nblock0:\n    v1.i256 = mload 64.i256 i256;\n    v2.*i8 = evm_malloc 32.i256;\n    v3.i256 = ptr_to_int v2 i256;\n    mstore v3 v0 i256;\n    mstore 64.i256 v1 i256;\n    return;\n}\n",
+            ),
+            (
+                "%abort_clobber",
+                "func private %abort_clobber(v0.i1, v1.i256) {\nblock0:\n    br v0 block1 block2;\nblock1:\n    evm_mstore 64.i256 v1;\n    evm_revert 0.i256 0.i256;\nblock2:\n    return;\n}\n",
+            ),
+        ]
+        .into_iter()
+        .filter(|(name, _)| body.contains(name))
+        .map(|(_, source)| source)
+        .collect();
         let exit = if body == "block0:" {
             "br v0 block0 block1;\nblock1:\n    return v3;"
         } else {
@@ -2240,6 +2271,7 @@ block0:
     evm_mstore 64.i256 v0;
     return;
 }}
+{callees}
 func public %entry() {{
 block0:
     v0.i256 = call %probe 0.i1 0.i256;
