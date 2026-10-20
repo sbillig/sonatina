@@ -339,7 +339,7 @@ fn check_lifetimes(function: &Function, effects: &ObjectEffectSummaryMap) -> Res
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::transform::aggregate::ObjectReturnEffect;
+    use crate::{test_support::lookup_func, transform::aggregate::ObjectReturnEffect};
     use sonatina_parser::parse_module;
     use sonatina_verifier::{VerificationLevel, VerifierConfig, verify_module};
 
@@ -541,6 +541,13 @@ block0:
             r#"func private %escape(v0.objref<objref<i64>>) -> objref<i64> {
 block0:
     v1.objref<i64> = obj.load v0;
+    return v1;
+}"#,
+            r#"type @pair = {i64, objref<i64>};
+func private %escape() -> @pair {
+block0:
+    v0.objref<i64> = obj.alloc i64;
+    v1.@pair = insert_value undef.@pair 1.i64 v0;
     return v1;
 }"#,
         ] {
@@ -813,30 +820,117 @@ block0:
 
     #[test]
     fn heap_exported_holders_put_what_they_reference_on_the_heap() {
-        // `v0` rests in `v2`'s memory, through an SSA pair; exporting `v2` to
-        // the heap exports `v0` with it.
-        let module = verified_module(
-            r#"
-type @pair = { i64, objref<i64> };
-func private %export(v0.i64) -> *@pair {
+        // `v1` rests in a holder's memory. Exporting the holder to the heap,
+        // or any part of it, exports `v1` with it.
+        for (name, body, heap_roots) in [
+            (
+                "ssa_pair",
+                "v2.@pair = insert_value undef.@pair 1.i64 v1;
+    v3.objref<@pair> = obj.alloc @pair;
+    obj.store v3 v2;
+    v4.*@pair = obj.materialize.heap v3;",
+                &[1, 3][..],
+            ),
+            (
+                "callee",
+                "v2.objref<@pair> = obj.alloc @pair;
+    v3.objref<objref<i64>> = obj.proj v2 1.i64;
+    obj.store v3 v1;
+    v4.*@pair = call %export v2;",
+                &[1, 2],
+            ),
+            (
+                "outer_holder",
+                "v2.objref<@pair> = obj.alloc @pair;
+    v3.objref<objref<i64>> = obj.proj v2 1.i64;
+    obj.store v3 v1;
+    v4.objref<@outer> = obj.alloc @outer;
+    v5.objref<objref<@pair>> = obj.proj v4 0.i64;
+    obj.store v5 v2;
+    v6.*@outer = obj.materialize.heap v4;",
+                &[1, 2, 4],
+            ),
+            (
+                "sibling",
+                "v2.objref<@pair> = obj.alloc @pair;
+    v3.objref<objref<i64>> = obj.proj v2 1.i64;
+    obj.store v3 v1;
+    v4.objref<i64> = obj.proj v2 0.i64;
+    v5.*i64 = obj.materialize.heap v4;",
+                &[1, 2],
+            ),
+        ] {
+            let module = verified_module(&format!(
+                r#"
+type @pair = {{ i64, objref<i64> }};
+type @outer = {{ objref<@pair> }};
+func private %export(v0.objref<@pair>) -> *@pair {{
+block0:
+    v1.*@pair = obj.materialize.heap v0;
+    return v1;
+}}
+func private %f(v0.i64) {{
 block0:
     v1.objref<i64> = obj.alloc i64;
     obj.store v1 v0;
-    v2.@pair = insert_value undef.@pair 1.i64 v1;
-    v3.objref<@pair> = obj.alloc @pair;
-    obj.store v3 v2;
-    v4.*@pair = obj.materialize.heap v3;
-    return v4;
+    {body}
+    return;
+}}
+"#
+            ));
+            let effects = compute_object_effect_summaries(&module);
+            module
+                .func_store
+                .view(lookup_func(&module, "f"), |function| {
+                    let roots = native_heap_object_roots(function, &effects);
+                    for &root in heap_roots {
+                        assert!(
+                            roots.contains(&ValueId::from_u32(root)),
+                            "{name}: {roots:?}"
+                        );
+                    }
+                    check_lifetimes(function, &effects)
+                        .unwrap_or_else(|error| panic!("{name}: {error}"));
+                });
+        }
+    }
+
+    #[test]
+    fn references_beside_a_held_reference_may_leave_the_frame() {
+        // `v2` rests beside the argument `v0` in SSA aggregates and in a local
+        // allocation; what is read out of the argument's part may escape.
+        let module = verified_module(
+            r#"
+type @pair = { objref<i64>, objref<i64> };
+type @both = enum { #None, #Both(objref<i64>,objref<i64>) };
+func private %route(v0.objref<i64>, v1.objref<objref<i64>>) -> i64 {
+block0:
+    v2.objref<i64> = obj.alloc i64;
+    obj.store v2 3.i64;
+    v3.@pair = insert_value undef.@pair 0.i64 v2;
+    v4.@pair = insert_value v3 1.i64 v0;
+    v5.objref<i64> = extract_value v4 1.i64;
+    obj.store v1 v5;
+    v6.@both = enum.make @both #Both (v2, v0);
+    enum.assert_variant v6 #Both;
+    v7.objref<i64> = enum.extract v6 #Both 1.i8;
+    obj.store v1 v7;
+    v8.objref<@pair> = obj.alloc @pair;
+    obj.store v8 v4;
+    v9.objref<objref<i64>> = obj.proj v8 1.i64;
+    v10.objref<i64> = obj.load v9;
+    obj.store v1 v10;
+    v11.objref<i64> = extract_value v4 0.i64;
+    v12.i64 = obj.load v11;
+    return v12;
 }
 "#,
         );
         let effects = compute_object_effect_summaries(&module);
-        let func = module.funcs()[0];
-        module.func_store.view(func, |function| {
-            let roots = native_heap_object_roots(function, &effects);
-            assert!(roots.contains(&ValueId::from_u32(1)), "{roots:?}");
-            assert!(roots.contains(&ValueId::from_u32(3)), "{roots:?}");
-            check_lifetimes(function, &effects).unwrap();
-        });
+        module
+            .func_store
+            .view(lookup_func(&module, "route"), |function| {
+                check_lifetimes(function, &effects).unwrap();
+            });
     }
 }

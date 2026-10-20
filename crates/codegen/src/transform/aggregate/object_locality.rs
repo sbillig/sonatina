@@ -1,4 +1,5 @@
 use rustc_hash::{FxHashMap, FxHashSet};
+use smallvec::SmallVec;
 use sonatina_ir::{
     Function, InstId, Module, Type, ValueId,
     inst::{cast, control_flow, data, downcast, evm},
@@ -8,7 +9,7 @@ use std::ops::ControlFlow;
 
 use super::{
     ObjectEffectSummaryMap, compute_object_effect_summaries, object_abi::OutputBufferContract,
-    shape,
+    object_tracking::objref_element_ty, shape,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -67,24 +68,121 @@ pub(crate) enum SpecialObjectUse<'a> {
         value: ValueId,
         ret: &'a control_flow::Return,
     },
-    /// A reference into the object enters an SSA aggregate or the memory of a
-    /// local allocation. Continuing follows it: through the aggregate's
-    /// extractions, and through loads from the allocation, whose own uses then
-    /// count as uses of the object.
+    /// A value that reaches the object enters an SSA aggregate or the memory
+    /// of a local allocation. Continuing follows it to the parts that keep it:
+    /// through the aggregate's extractions, and through loads from the
+    /// allocation, whose other uses then count as uses of the object.
     Carry,
     Unknown,
 }
 
-/// How a walked value can reach the object.
+/// How a walked value reaches the object: through these hops, outermost
+/// first. Without hops the value is a reference into the object. Otherwise the
+/// first hop lies in the value when it is an SSA aggregate, or else in the
+/// pointee of the value, a view of a holder: a local allocation whose memory
+/// keeps what the hop leads to. Each later hop lies in the pointee of the
+/// reference kept at the leaves of the hop before it.
+#[derive(Clone, Default, PartialEq, Eq, Hash)]
+struct Carrier(SmallVec<[Hop; 2]>);
+
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
-enum Carrier {
-    /// A reference into the object, or one derived from it.
-    Reference,
-    /// An SSA aggregate holding such a reference.
-    Aggregate,
-    /// A reference into a local allocation whose memory holds such a
-    /// reference or aggregate.
-    Holder,
+struct Hop {
+    /// The leaves `start..end` that can keep the next hop, or `None` if any
+    /// can. A view covering none of them still exposes them when it is
+    /// materialized, since that exposes the whole allocation.
+    leaves: Option<(usize, usize)>,
+    /// The holder whose memory the hop lies in, or `None` in an SSA
+    /// aggregate, which only the first hop can be. Walks of lowered objects
+    /// see pointers rather than references, so types cannot tell these apart.
+    holder: Option<ValueId>,
+}
+
+impl Carrier {
+    /// Whether the value this carrier describes is an SSA aggregate.
+    fn is_aggregate(&self) -> bool {
+        self.0.first().is_some_and(|hop| hop.holder.is_none())
+    }
+
+    /// The carrier of the part, found by `slice`, of the value or pointee this
+    /// one describes; `None` is an unknown part.
+    fn within(&self, slice: impl FnOnce() -> Option<shape::AggregateSlice>) -> Self {
+        let mut carrier = self.clone();
+        if let Some(hop) = carrier.0.first_mut()
+            && let Some((start, end)) = hop.leaves
+        {
+            hop.leaves = slice().map(|slice| {
+                let (first, last) = (slice.first_leaf, slice.first_leaf + slice.leaf_count);
+                (
+                    start.clamp(first, last) - first,
+                    end.clamp(first, last) - first,
+                )
+            });
+        }
+        carrier
+    }
+
+    /// The carrier of a value or pointee whose part from leaf `first` on this
+    /// one describes; `None` is an unknown position.
+    fn shifted(&self, first: Option<usize>) -> Self {
+        let mut carrier = self.clone();
+        if let Some(hop) = carrier.0.first_mut() {
+            hop.leaves = hop
+                .leaves
+                .zip(first)
+                .map(|((start, end), first)| (start + first, end + first));
+        }
+        carrier
+    }
+
+    /// The carrier of an aggregate or memory keeping the value this one
+    /// describes from leaf `first` on.
+    fn placed(&self, first: Option<usize>) -> Self {
+        let mut carrier = self.clone();
+        if !self.is_aggregate() {
+            // A reference is a single leaf.
+            carrier.0.insert(
+                0,
+                Hop {
+                    leaves: Some((0, 1)),
+                    holder: None,
+                },
+            );
+        }
+        carrier.shifted(first)
+    }
+
+    /// The carrier of a value of type `ty` read from the part this one
+    /// describes: the reference its first hop leads to, or an aggregate
+    /// keeping that reference.
+    fn read(&self, function: &Function, ty: Type) -> Option<Self> {
+        let mut carrier = self.clone();
+        if carrier
+            .0
+            .first()?
+            .leaves
+            .is_some_and(|(start, end)| start >= end)
+        {
+            return None;
+        }
+        if ty.is_obj_ref(function.ctx()) {
+            carrier.0.remove(0);
+        } else if shape::is_reference_aggregate(function.ctx(), ty) {
+            carrier.0[0].holder = None;
+        } else {
+            return None;
+        }
+        Some(carrier)
+    }
+
+    /// The carrier of a reference that a callee derives, perhaps through a
+    /// projection, from a value this one describes.
+    fn borrowed(&self) -> Self {
+        let mut carrier = self.clone();
+        if let Some(hop) = carrier.0.first_mut() {
+            hop.leaves = None;
+        }
+        carrier
+    }
 }
 
 // This walks the full module and must run before any `func_store.modify(...)` loop.
@@ -444,11 +542,11 @@ fn walk_object_root_uses_impl<T>(
     object_effects: Option<&ObjectEffectSummaryMap>,
     on_special: &mut impl FnMut(SpecialObjectUse<'_>) -> ControlFlow<T>,
 ) -> Option<T> {
-    let mut worklist = vec![(root, Carrier::Reference)];
+    let mut worklist = vec![(root, Carrier::default())];
     let mut seen = FxHashSet::default();
 
     while let Some((value, carrier)) = worklist.pop() {
-        if !seen.insert((value, carrier)) {
+        if !seen.insert((value, carrier.clone())) {
             continue;
         }
 
@@ -456,21 +554,15 @@ fn walk_object_root_uses_impl<T>(
             if !function.layout.is_inst_inserted(user) {
                 continue;
             }
-            let flow = match carrier {
-                Carrier::Reference => reference_use(
-                    function,
-                    user,
-                    value,
-                    object_effects,
-                    &mut worklist,
-                    on_special,
-                ),
-                Carrier::Aggregate => {
-                    aggregate_use(function, user, value, &mut worklist, on_special)
-                }
-                Carrier::Holder => holder_use(function, user, value, &mut worklist, on_special),
-            };
-            if let ControlFlow::Break(result) = flow {
+            if let ControlFlow::Break(result) = walk_use(
+                function,
+                user,
+                value,
+                &carrier,
+                object_effects,
+                &mut worklist,
+                on_special,
+            ) {
                 return Some(result);
             }
         }
@@ -479,55 +571,118 @@ fn walk_object_root_uses_impl<T>(
     None
 }
 
-/// Walks one use of `value`, a reference into the object.
-fn reference_use<T>(
+/// Walks one use of `value`, which reaches the object as `carrier` describes.
+fn walk_use<T>(
     function: &Function,
     user: InstId,
     value: ValueId,
+    carrier: &Carrier,
     object_effects: Option<&ObjectEffectSummaryMap>,
     worklist: &mut Vec<(ValueId, Carrier)>,
     on_special: &mut impl FnMut(SpecialObjectUse<'_>) -> ControlFlow<T>,
 ) -> ControlFlow<T> {
+    let ctx = function.ctx();
+    let dfg = &function.dfg;
     let inst_set = function.inst_set();
-    let inst = function.dfg.inst(user);
+    let inst = dfg.inst(user);
     // Only single-result instructions are asked for their result.
-    let result = || function.dfg.inst_result(user);
+    let result = || dfg.inst_result(user);
 
     if let Some(store) = downcast::<&data::ObjStore>(inst_set, inst)
         && *store.value() == value
     {
-        return carry_into(function, *store.object(), worklist, on_special);
+        let carrier = carrier.placed(Some(0));
+        return carry_into(function, *store.object(), carrier, worklist, on_special);
     }
-    if let Some(enum_write_variant) = downcast::<&data::EnumWriteVariant>(inst_set, inst)
-        && enum_write_variant.values().contains(&value)
+    if let Some(write) = downcast::<&data::EnumWriteVariant>(inst_set, inst)
+        && write.values().contains(&value)
     {
-        return carry_into(function, *enum_write_variant.object(), worklist, on_special);
+        let enum_ty = objref_element_ty(ctx, dfg.value_ty(*write.object()));
+        for field in value_fields(write.values(), value) {
+            let slot = enum_ty
+                .and_then(|ty| shape::enum_variant_field_slice(ctx, ty, *write.variant(), field));
+            let carrier = carrier.placed(slot.map(|slot| slot.first_leaf));
+            carry_into(function, *write.object(), carrier, worklist, on_special)?;
+        }
+        return ControlFlow::Continue(());
     }
-    if downcast::<&data::InsertValue>(inst_set, inst).is_some_and(|insert| *insert.value() == value)
-        || downcast::<&data::EnumMake>(inst_set, inst)
-            .is_some_and(|make| make.values().contains(&value))
+    if let Some(make) = downcast::<&data::EnumMake>(inst_set, inst)
+        && make.values().contains(&value)
     {
         on_special(SpecialObjectUse::Carry)?;
-        worklist.extend(result().map(|result| (result, Carrier::Aggregate)));
+        for field in value_fields(make.values(), value) {
+            let slot = shape::enum_variant_field_slice(ctx, *make.ty(), *make.variant(), field);
+            let carrier = carrier.placed(slot.map(|slot| slot.first_leaf));
+            worklist.extend(result().map(|result| (result, carrier)));
+        }
+        return ControlFlow::Continue(());
+    }
+    if let Some(insert) = downcast::<&data::InsertValue>(inst_set, inst)
+        && (*insert.dest() == value || *insert.value() == value)
+    {
+        if *insert.value() == value {
+            on_special(SpecialObjectUse::Carry)?;
+            let slot = shape::aggregate_slice_for_object_path(
+                ctx,
+                dfg.value_ty(*insert.dest()),
+                &[*insert.idx()],
+                dfg,
+            );
+            let carrier = carrier.placed(slot.map(|slot| slot.first_leaf));
+            worklist.extend(result().map(|result| (result, carrier)));
+        }
+        if *insert.dest() == value {
+            worklist.extend(result().map(|result| (result, carrier.clone())));
+        }
         return ControlFlow::Continue(());
     }
 
-    if downcast::<&data::ObjProj>(inst_set, inst)
-        .is_some_and(|proj| proj.values().first() == Some(&value))
-        || downcast::<&data::ObjIndex>(inst_set, inst).is_some_and(|index| *index.object() == value)
-        || downcast::<&control_flow::Phi>(inst_set, inst)
-            .is_some_and(|phi| phi.args().iter().any(|(arg, _)| *arg == value))
-        || downcast::<&data::EnumProj>(inst_set, inst)
-            .is_some_and(|enum_proj| *enum_proj.object() == value)
+    if downcast::<&control_flow::Phi>(inst_set, inst)
+        .is_some_and(|phi| phi.args().iter().any(|(arg, _)| *arg == value))
         || downcast::<&data::EnumAssertVariantRef>(inst_set, inst)
             .is_some_and(|enum_assert_ref| *enum_assert_ref.object() == value)
     {
-        worklist.extend(result().map(|result| (result, Carrier::Reference)));
+        worklist.extend(result().map(|result| (result, carrier.clone())));
+        return ControlFlow::Continue(());
+    }
+    if view_base(function, user) == Some(value) {
+        // Every view of the object reaches it; a view of a holder keeps only
+        // the leaves it covers.
+        let carrier = carrier.within(|| view_slice(function, user));
+        worklist.extend(result().map(|result| (result, carrier)));
         return ControlFlow::Continue(());
     }
 
-    if downcast::<&data::ObjLoad>(inst_set, inst).is_some_and(|load| *load.object() == value)
-        || downcast::<&data::ObjStore>(inst_set, inst).is_some_and(|store| *store.object() == value)
+    let read = if let Some(load) = downcast::<&data::ObjLoad>(inst_set, inst)
+        && *load.object() == value
+    {
+        Some(carrier.clone())
+    } else if let Some(extract) = downcast::<&data::ExtractValue>(inst_set, inst)
+        && *extract.dest() == value
+    {
+        Some(carrier.within(|| {
+            shape::aggregate_slice_for_object_path(ctx, dfg.value_ty(value), &[*extract.idx()], dfg)
+        }))
+    } else if let Some(extract) = downcast::<&data::EnumExtract>(inst_set, inst)
+        && *extract.value() == value
+    {
+        Some(carrier.within(|| {
+            let field = shape::const_u32(dfg, *extract.field())?;
+            shape::enum_variant_field_slice(ctx, dfg.value_ty(value), *extract.variant(), field)
+        }))
+    } else {
+        None
+    };
+    if let Some(part) = read {
+        // Loading through a reference into the object reads no reference into
+        // it; the walk of the object as its own holder follows any it keeps.
+        worklist.extend(
+            result().and_then(|result| Some((result, part.read(function, dfg.value_ty(result))?))),
+        );
+        return ControlFlow::Continue(());
+    }
+
+    if downcast::<&data::ObjStore>(inst_set, inst).is_some_and(|store| *store.object() == value)
         || downcast::<&data::ObjInitConst>(inst_set, inst)
             .is_some_and(|init| *init.object() == value)
         || downcast::<&data::EnumGetTag>(inst_set, inst)
@@ -536,87 +691,7 @@ fn reference_use<T>(
             .is_some_and(|enum_set_tag| *enum_set_tag.object() == value)
         || downcast::<&data::EnumWriteVariant>(inst_set, inst)
             .is_some_and(|enum_write_variant| *enum_write_variant.object() == value)
-    {
-        return ControlFlow::Continue(());
-    }
-
-    if let Some(mat_stack) = downcast::<&data::ObjMaterializeStack>(inst_set, inst)
-        && *mat_stack.object() == value
-    {
-        return on_special(SpecialObjectUse::MaterializeStack(result()));
-    }
-    if let Some(mat_heap) = downcast::<&data::ObjMaterializeHeap>(inst_set, inst)
-        && *mat_heap.object() == value
-    {
-        return on_special(SpecialObjectUse::MaterializeHeap);
-    }
-    if let Some(call) = downcast::<&control_flow::Call>(inst_set, inst)
-        && call.args().contains(&value)
-    {
-        let flow = on_special(SpecialObjectUse::Call {
-            inst: user,
-            value,
-            call,
-        });
-        if let Some(result) = call_borrowed_root_result(function, user, call, value, object_effects)
-        {
-            worklist.push((result, Carrier::Reference));
-        }
-        return flow;
-    }
-    if let Some(ret) = downcast::<&control_flow::Return>(inst_set, inst)
-        && ret.args().iter().any(|arg| *arg == value)
-    {
-        return on_special(SpecialObjectUse::Return { value, ret });
-    }
-
-    on_special(SpecialObjectUse::Unknown)
-}
-
-/// Walks one use of `value`, an SSA aggregate holding a reference into the
-/// object. Only extracting the reference and storing the aggregate keep it
-/// within reach of the walk.
-fn aggregate_use<T>(
-    function: &Function,
-    user: InstId,
-    value: ValueId,
-    worklist: &mut Vec<(ValueId, Carrier)>,
-    on_special: &mut impl FnMut(SpecialObjectUse<'_>) -> ControlFlow<T>,
-) -> ControlFlow<T> {
-    let inst_set = function.inst_set();
-    let inst = function.dfg.inst(user);
-    // Only single-result instructions are asked for their result.
-    let result = || function.dfg.inst_result(user);
-
-    if let Some(store) = downcast::<&data::ObjStore>(inst_set, inst)
-        && *store.value() == value
-    {
-        return carry_into(function, *store.object(), worklist, on_special);
-    }
-    if let Some(enum_write_variant) = downcast::<&data::EnumWriteVariant>(inst_set, inst)
-        && enum_write_variant.values().contains(&value)
-    {
-        return carry_into(function, *enum_write_variant.object(), worklist, on_special);
-    }
-    if downcast::<&data::InsertValue>(inst_set, inst)
-        .is_some_and(|insert| *insert.dest() == value || *insert.value() == value)
-        || downcast::<&data::EnumMake>(inst_set, inst)
-            .is_some_and(|make| make.values().contains(&value))
-        || downcast::<&control_flow::Phi>(inst_set, inst)
-            .is_some_and(|phi| phi.args().iter().any(|(arg, _)| *arg == value))
-    {
-        worklist.extend(result().map(|result| (result, Carrier::Aggregate)));
-        return ControlFlow::Continue(());
-    }
-    if downcast::<&data::ExtractValue>(inst_set, inst)
-        .is_some_and(|extract| *extract.dest() == value)
-        || downcast::<&data::EnumExtract>(inst_set, inst)
-            .is_some_and(|extract| *extract.value() == value)
-    {
-        worklist.extend(result().and_then(|result| carried(function, result)));
-        return ControlFlow::Continue(());
-    }
-    if downcast::<&data::EnumTag>(inst_set, inst).is_some_and(|tag| *tag.value() == value)
+        || downcast::<&data::EnumTag>(inst_set, inst).is_some_and(|tag| *tag.value() == value)
         || downcast::<&data::EnumIsVariant>(inst_set, inst)
             .is_some_and(|is_variant| *is_variant.value() == value)
         || downcast::<&data::EnumAssertVariant>(inst_set, inst)
@@ -625,102 +700,95 @@ fn aggregate_use<T>(
         return ControlFlow::Continue(());
     }
 
-    on_special(SpecialObjectUse::Unknown)
-}
-
-/// Walks one use of `value`, a reference into a local allocation whose memory
-/// holds a reference into the object. A load can recover the reference;
-/// anything that lets the allocation's contents leave the walk is unknown.
-fn holder_use<T>(
-    function: &Function,
-    user: InstId,
-    value: ValueId,
-    worklist: &mut Vec<(ValueId, Carrier)>,
-    on_special: &mut impl FnMut(SpecialObjectUse<'_>) -> ControlFlow<T>,
-) -> ControlFlow<T> {
-    let inst_set = function.inst_set();
-    let inst = function.dfg.inst(user);
-    // Only single-result instructions are asked for their result.
-    let result = || function.dfg.inst_result(user);
-
-    if downcast::<&data::ObjProj>(inst_set, inst)
-        .is_some_and(|proj| proj.values().first() == Some(&value))
-        || downcast::<&data::ObjIndex>(inst_set, inst).is_some_and(|index| *index.object() == value)
-        || downcast::<&control_flow::Phi>(inst_set, inst)
-            .is_some_and(|phi| phi.args().iter().any(|(arg, _)| *arg == value))
-        || downcast::<&data::EnumProj>(inst_set, inst)
-            .is_some_and(|enum_proj| *enum_proj.object() == value)
-        || downcast::<&data::EnumAssertVariantRef>(inst_set, inst)
-            .is_some_and(|enum_assert_ref| *enum_assert_ref.object() == value)
+    if let Some(mat_stack) = downcast::<&data::ObjMaterializeStack>(inst_set, inst)
+        && *mat_stack.object() == value
     {
-        worklist.extend(result().map(|result| (result, Carrier::Holder)));
-        return ControlFlow::Continue(());
+        // A raw pointer into a holder can read the reference it keeps.
+        return on_special(if carrier.0.is_empty() {
+            SpecialObjectUse::MaterializeStack(result())
+        } else {
+            SpecialObjectUse::Unknown
+        });
     }
-    if downcast::<&data::ObjLoad>(inst_set, inst).is_some_and(|load| *load.object() == value) {
-        worklist.extend(result().and_then(|result| carried(function, result)));
-        return ControlFlow::Continue(());
-    }
-    if downcast::<&data::ObjStore>(inst_set, inst)
-        .is_some_and(|store| *store.object() == value && *store.value() != value)
-        || downcast::<&data::ObjInitConst>(inst_set, inst)
-            .is_some_and(|init| *init.object() == value)
-        || downcast::<&data::EnumGetTag>(inst_set, inst)
-            .is_some_and(|enum_get_tag| *enum_get_tag.object() == value)
-        || downcast::<&data::EnumSetTag>(inst_set, inst)
-            .is_some_and(|enum_set_tag| *enum_set_tag.object() == value)
-        || downcast::<&data::EnumWriteVariant>(inst_set, inst).is_some_and(|enum_write_variant| {
-            *enum_write_variant.object() == value && !enum_write_variant.values().contains(&value)
-        })
-    {
-        return ControlFlow::Continue(());
-    }
-    if downcast::<&data::ObjMaterializeHeap>(inst_set, inst)
-        .is_some_and(|mat_heap| *mat_heap.object() == value)
+    if let Some(mat_heap) = downcast::<&data::ObjMaterializeHeap>(inst_set, inst)
+        && *mat_heap.object() == value
     {
         return on_special(SpecialObjectUse::MaterializeHeap);
     }
+    // Callee summaries describe object arguments, not references inside SSA
+    // aggregates.
+    if let Some(call) = downcast::<&control_flow::Call>(inst_set, inst)
+        && call.args().contains(&value)
+        && !carrier.is_aggregate()
+    {
+        let flow = on_special(SpecialObjectUse::Call {
+            inst: user,
+            value,
+            call,
+        });
+        if let Some(result) = call_borrowed_root_result(function, user, call, value, object_effects)
+        {
+            worklist.push((result, carrier.borrowed()));
+        }
+        return flow;
+    }
+    if let Some(ret) = downcast::<&control_flow::Return>(inst_set, inst)
+        && ret.args().iter().any(|arg| *arg == value)
+        && carrier.0.is_empty()
+    {
+        return on_special(SpecialObjectUse::Return { value, ret });
+    }
 
     on_special(SpecialObjectUse::Unknown)
 }
 
-/// Follows a reference into the object, or an aggregate holding one, stored
-/// into `object`: every allocation it may point into then holds the
-/// reference. A store into anything but this function's allocations is
-/// unknown.
+/// The fields of an enum variant whose value is `value`.
+fn value_fields(values: &[ValueId], value: ValueId) -> impl Iterator<Item = u32> + '_ {
+    values
+        .iter()
+        .enumerate()
+        .filter(move |(_, field_value)| **field_value == value)
+        .filter_map(|(field, _)| u32::try_from(field).ok())
+}
+
+/// Follows a value stored into the memory `object` points to, which `carrier`
+/// then describes, back to every local allocation `object` may point into:
+/// each becomes a holder. Memory anywhere else is unknown, as is a holder
+/// already on the carrier's chain, which would keep a reference into itself.
 fn carry_into<T>(
     function: &Function,
     object: ValueId,
+    carrier: Carrier,
     worklist: &mut Vec<(ValueId, Carrier)>,
     on_special: &mut impl FnMut(SpecialObjectUse<'_>) -> ControlFlow<T>,
 ) -> ControlFlow<T> {
     on_special(SpecialObjectUse::Carry)?;
-    let mut pending = vec![object];
+    let mut pending = vec![(object, carrier)];
     let mut seen = FxHashSet::default();
-    while let Some(value) = pending.pop() {
-        if !seen.insert(value) {
+    while let Some((value, mut carrier)) = pending.pop() {
+        if !seen.insert((value, carrier.clone())) {
             continue;
         }
         let Some(inst) = function.dfg.value_inst(value) else {
             return on_special(SpecialObjectUse::Unknown);
         };
         let inst_set = function.inst_set();
-        let inst = function.dfg.inst(inst);
-        if downcast::<&data::ObjAlloc>(inst_set, inst).is_some() {
-            worklist.push((value, Carrier::Holder));
-        } else if let Some(source) = downcast::<&data::ObjProj>(inst_set, inst)
-            .and_then(|proj| proj.values().first().copied())
-            .or_else(|| downcast::<&data::ObjIndex>(inst_set, inst).map(|index| *index.object()))
-            .or_else(|| {
-                downcast::<&data::EnumProj>(inst_set, inst).map(|enum_proj| *enum_proj.object())
-            })
-            .or_else(|| {
-                downcast::<&data::EnumAssertVariantRef>(inst_set, inst)
-                    .map(|enum_assert_ref| *enum_assert_ref.object())
-            })
+        let inst_data = function.dfg.inst(inst);
+        if downcast::<&data::ObjAlloc>(inst_set, inst_data).is_some() {
+            if carrier.0.iter().any(|hop| hop.holder == Some(value)) {
+                return on_special(SpecialObjectUse::Unknown);
+            }
+            carrier.0[0].holder = Some(value);
+            worklist.push((value, carrier));
+        } else if let Some(phi) = downcast::<&control_flow::Phi>(inst_set, inst_data) {
+            pending.extend(phi.args().iter().map(|(arg, _)| (*arg, carrier.clone())));
+        } else if let Some(enum_assert_ref) =
+            downcast::<&data::EnumAssertVariantRef>(inst_set, inst_data)
         {
-            pending.push(source);
-        } else if let Some(phi) = downcast::<&control_flow::Phi>(inst_set, inst) {
-            pending.extend(phi.args().iter().map(|(arg, _)| *arg));
+            pending.push((*enum_assert_ref.object(), carrier));
+        } else if let Some(base) = view_base(function, inst) {
+            let first = view_slice(function, inst).map(|slice| slice.first_leaf);
+            pending.push((base, carrier.shifted(first)));
         } else {
             return on_special(SpecialObjectUse::Unknown);
         }
@@ -728,17 +796,41 @@ fn carry_into<T>(
     ControlFlow::Continue(())
 }
 
-/// How a value read out of an aggregate or allocation can still reach the
-/// object: as a reference, or as an aggregate holding one.
-fn carried(function: &Function, value: ValueId) -> Option<(ValueId, Carrier)> {
-    let ty = function.dfg.value_ty(value);
-    if ty.is_obj_ref(function.ctx()) {
-        Some((value, Carrier::Reference))
-    } else if shape::is_reference_aggregate(function.ctx(), ty) {
-        Some((value, Carrier::Aggregate))
-    } else {
-        None
+/// The reference a projection views.
+fn view_base(function: &Function, inst: InstId) -> Option<ValueId> {
+    let inst_set = function.inst_set();
+    let inst = function.dfg.inst(inst);
+    downcast::<&data::ObjProj>(inst_set, inst)
+        .and_then(|proj| proj.values().first().copied())
+        .or_else(|| downcast::<&data::ObjIndex>(inst_set, inst).map(|index| *index.object()))
+        .or_else(|| {
+            downcast::<&data::EnumProj>(inst_set, inst).map(|enum_proj| *enum_proj.object())
+        })
+}
+
+/// The part of its base's pointee that a projection views, if known.
+fn view_slice(function: &Function, inst: InstId) -> Option<shape::AggregateSlice> {
+    let ctx = function.ctx();
+    let dfg = &function.dfg;
+    let inst_set = function.inst_set();
+    let inst = dfg.inst(inst);
+    let pointee = |base: ValueId| objref_element_ty(ctx, dfg.value_ty(base));
+    if let Some(proj) = downcast::<&data::ObjProj>(inst_set, inst) {
+        let (&base, indices) = proj.values().split_first()?;
+        return shape::aggregate_slice_for_object_path(ctx, pointee(base)?, indices, dfg);
     }
+    if let Some(index) = downcast::<&data::ObjIndex>(inst_set, inst) {
+        let ty = pointee(*index.object())?;
+        return shape::aggregate_slice_for_object_path(ctx, ty, &[*index.index()], dfg);
+    }
+    let enum_proj = downcast::<&data::EnumProj>(inst_set, inst)?;
+    let field = shape::const_u32(dfg, *enum_proj.field())?;
+    shape::enum_variant_field_slice(
+        ctx,
+        pointee(*enum_proj.object())?,
+        *enum_proj.variant(),
+        field,
+    )
 }
 
 fn call_root_preserves_locality(

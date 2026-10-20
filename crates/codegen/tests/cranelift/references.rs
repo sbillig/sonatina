@@ -497,12 +497,23 @@ block5:
 
 #[test]
 fn references_held_in_local_aggregates_and_allocations_stay_on_the_stack() {
-    // A reference into `v1` rests in an SSA pair, a local pair allocation and
-    // a local enum allocation; each copy is read back and written through.
+    // A reference into `v1` rests in an SSA pair, a local pair allocation, a
+    // local enum allocation and, through the pair allocation, an outer one;
+    // each copy is read back and written through, the last by a helper.
     let source = r#"
 type @cell = { i64 };
 type @pair = { i64, objref<i64> };
 type @slot = enum { #Empty, #Full(objref<i64>) };
+type @outer = { objref<@pair> };
+func inline(never) private %bump(v0.objref<@pair>) {
+block0:
+    v1.objref<objref<i64>> = obj.proj v0 1.i64;
+    v2.objref<i64> = obj.load v1;
+    v3.i64 = obj.load v2;
+    v4.i64 = add v3 100.i64;
+    obj.store v2 v4;
+    return;
+}
 func public %exercise(v0.i64) -> i64 {
 block0:
     v1.objref<@cell> = obj.alloc @cell;
@@ -530,8 +541,13 @@ block0:
     v18.i64 = obj.load v17;
     v19.i64 = add v18 2.i64;
     obj.store v17 v19;
-    v20.i64 = obj.load v4;
-    return v20;
+    v20.objref<@outer> = obj.alloc @outer;
+    v21.objref<objref<@pair>> = obj.proj v20 0.i64;
+    obj.store v21 v2;
+    v22.objref<@pair> = obj.load v21;
+    call %bump v22;
+    v23.i64 = obj.load v4;
+    return v23;
 }
 "#;
     for level in [OptLevel::O0, OptLevel::O1, OptLevel::O2] {
@@ -547,7 +563,7 @@ block0:
         for input in [0, 4, -9] {
             assert_eq!(
                 unsafe { exercise(input) },
-                (input + 1) * 10 + 2,
+                (input + 1) * 10 + 102,
                 "{level:?}"
             );
         }
@@ -556,30 +572,39 @@ block0:
 
 #[test]
 fn references_held_beyond_the_frame_are_rejected() {
-    // Each case lets a reference into the local `v1` outlive the frame or the
-    // iteration that allocated it, through a holder or an SSA pair.
+    // Each case lets a reference into the local `v1` outlive the frame,
+    // through a holder or an SSA aggregate.
     for (name, body) in [
         (
-            "returned_pair",
-            "v2.@pair = insert_value undef.@pair 1.i64 v1;\n    return v2;",
-        ),
-        (
             "stored_in_argument",
-            "v2.@pair = insert_value undef.@pair 1.i64 v1;\n    obj.store v0 v2;\n    return undef.@pair;",
+            "v2.@pair = insert_value undef.@pair 1.i64 v1;\n    obj.store v0 v2;",
         ),
         (
             "holder_passed_on",
-            "v2.objref<@holder> = obj.alloc @holder;\n    v3.objref<objref<i64>> = obj.proj v2 0.i64;\n    obj.store v3 v1;\n    call %keep v2 v0;\n    return undef.@pair;",
+            "v2.objref<@holder> = obj.alloc @holder;\n    v3.objref<objref<i64>> = obj.proj v2 0.i64;\n    obj.store v3 v1;\n    call %keep v2 v0;",
         ),
         (
             "recovered_from_holder",
-            "v2.objref<@holder> = obj.alloc @holder;\n    v3.objref<objref<i64>> = obj.proj v2 0.i64;\n    obj.store v3 v1;\n    v4.objref<i64> = obj.load v3;\n    v5.@pair = insert_value undef.@pair 1.i64 v4;\n    obj.store v0 v5;\n    return undef.@pair;",
+            "v2.objref<@holder> = obj.alloc @holder;\n    v3.objref<objref<i64>> = obj.proj v2 0.i64;\n    obj.store v3 v1;\n    v4.objref<i64> = obj.load v3;\n    v5.@pair = insert_value undef.@pair 1.i64 v4;\n    obj.store v0 v5;",
+        ),
+        (
+            "extracted_from_pair",
+            "v2.@pair = insert_value undef.@pair 1.i64 v1;\n    v3.objref<i64> = extract_value v2 1.i64;\n    v4.objref<objref<i64>> = obj.proj v0 1.i64;\n    obj.store v4 v3;",
+        ),
+        (
+            "recovered_through_outer_holder",
+            "v2.objref<@holder> = obj.alloc @holder;\n    v3.objref<objref<i64>> = obj.proj v2 0.i64;\n    obj.store v3 v1;\n    v4.objref<@outer> = obj.alloc @outer;\n    v5.objref<objref<@holder>> = obj.proj v4 0.i64;\n    obj.store v5 v2;\n    v6.objref<@holder> = obj.load v5;\n    v7.objref<objref<i64>> = obj.proj v6 0.i64;\n    v8.objref<i64> = obj.load v7;\n    v9.objref<objref<i64>> = obj.proj v0 1.i64;\n    obj.store v9 v8;",
+        ),
+        (
+            "read_raw_beside_holder",
+            "v2.objref<@pair> = obj.alloc @pair;\n    v3.objref<objref<i64>> = obj.proj v2 1.i64;\n    obj.store v3 v1;\n    v4.objref<i64> = obj.proj v2 0.i64;\n    v5.*i64 = obj.materialize.stack v4;\n    v6.*i64 = gep v5 1.i64;\n    v7.i64 = mload v6 i64;\n    v8.objref<i64> = obj.proj v0 0.i64;\n    obj.store v8 v7;",
         ),
     ] {
         let source = format!(
             r#"
 type @pair = {{ i64, objref<i64> }};
 type @holder = {{ objref<i64> }};
+type @outer = {{ objref<@holder> }};
 func inline(never) private %keep(v0.objref<@holder>, v1.objref<@pair>) {{
 block0:
     v2.objref<objref<i64>> = obj.proj v0 0.i64;
@@ -588,18 +613,18 @@ block0:
     obj.store v4 v3;
     return;
 }}
-func inline(never) private %{name}(v0.objref<@pair>) -> @pair {{
+func inline(never) private %{name}(v0.objref<@pair>) -> i64 {{
 block0:
     v1.objref<i64> = obj.alloc i64;
     obj.store v1 5.i64;
     {body}
+    return 0.i64;
 }}
 func public %entry() -> i64 {{
 block0:
     v0.objref<@pair> = obj.alloc @pair;
-    v1.@pair = call %{name} v0;
-    v2.i64 = extract_value v1 0.i64;
-    return v2;
+    v1.i64 = call %{name} v0;
+    return v1;
 }}
 "#
         );
@@ -615,8 +640,9 @@ block0:
         };
         assert!(
             errors.iter().any(|error| {
-                let error = error.to_string();
-                error.contains(&format!("native reference lifetime in {name}: unproven"))
+                error.to_string().contains(&format!(
+                    "native reference lifetime in {name}: unproven escape of local object"
+                ))
             }),
             "{name}: {errors:?}"
         );
