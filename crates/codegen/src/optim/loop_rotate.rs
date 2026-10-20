@@ -179,11 +179,13 @@ fn plan(
             (false, true) => (z_dest, nz_dest, false),
             _ => return None,
         };
+    // The loop tree also counts unreachable blocks that branch into the loop
+    // as members; an exit edge from one has no body version of a header value.
     if body == header
         || cfg.preds_of(body).any(|&pred| pred != header)
-        || cfg
-            .preds_of(exit)
-            .any(|&pred| pred != header && !lpt.is_in_loop(pred, lp))
+        || cfg.preds_of(exit).any(|&pred| {
+            pred != header && !(lpt.is_in_loop(pred, lp) && domtree.dominates(body, pred))
+        })
     {
         return None;
     }

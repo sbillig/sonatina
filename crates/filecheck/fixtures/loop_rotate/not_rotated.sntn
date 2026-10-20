@@ -139,3 +139,32 @@ func public %bound(v0.i256) -> i256 {
     block0:
         return v0;
 }
+
+# check:  block1:
+# nextln:     v2.i256 = phi (0.i256 block0) (v4 block3);
+# nextln:     v3.i1 = lt v2 v0;
+# nextln:     br v3 block2 block4;
+func public %unreachable_exit_pred(v0.i256, v1.i1) -> i256 {
+    block0:
+        jump block1;
+
+    block1:
+        v2.i256 = phi (0.i256 block0) (v4 block3);
+        v3.i1 = lt v2 v0;
+        br v3 block2 block4;
+
+    block2:
+        jump block3;
+
+    block3:
+        v4.i256 = add v2 1.i256;
+        jump block1;
+
+    block5:
+        br v1 block4 block3;
+
+    block4:
+        v6.i256 = phi (v2 block1) (9.i256 block5);
+        v7.i256 = add v6 v2;
+        return v7;
+}
