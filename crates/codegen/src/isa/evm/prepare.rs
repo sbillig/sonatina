@@ -171,7 +171,9 @@ fn addr_len_overlaps_range(lhs_start: u32, lhs_len: u32, rhs_start: u32, rhs_end
 }
 
 fn addr_is_allocator_managed(prov: &Provenance) -> bool {
-    !prov.is_empty() && !prov.is_unknown_ptr() && !prov.has_any_arg()
+    // A heap object another function allocated lies above the heap floor just
+    // like a local one, so only unknown non-heap pointers and arguments escape.
+    !prov.is_empty() && !prov.may_reference_unknown_local() && !prov.has_any_arg()
 }
 
 fn memory_access_may_touch_range(
