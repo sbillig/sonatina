@@ -816,7 +816,6 @@ impl<'a, 'ctx: 'a> Planner<'a, 'ctx> {
                 consume_last_use,
                 cache_preserve,
             },
-            true,
             &cost,
             search_cfg,
         ) && self.apply_operand_prep_plan(&plan, args)

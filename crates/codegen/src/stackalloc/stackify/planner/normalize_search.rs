@@ -2065,7 +2065,6 @@ fn apply_operand_prep_swap(
 
 struct OperandPrepUpperBoundCtx<'a, C: CostModel> {
     problem: &'a OperandPrepProblem,
-    allow_copy_swap: bool,
     cost: &'a C,
     cfg: SearchCfg,
 }
@@ -2088,7 +2087,7 @@ fn apply_operand_prep_copy<C: CostModel>(
         ctx.cfg,
         kid,
     );
-    let source = if prepared == 0 && ctx.allow_copy_swap {
+    let source = if prepared == 0 {
         choices.best()
     } else {
         choices.best_direct_insert()
@@ -2135,7 +2134,6 @@ fn apply_operand_prep_copy<C: CostModel>(
 
 fn build_linear_operand_prep_upper_bound(
     problem: &OperandPrepProblem,
-    allow_copy_swap: bool,
     cost: &impl CostModel,
     cfg: SearchCfg,
 ) -> Option<(StepList, Cost)> {
@@ -2143,12 +2141,7 @@ fn build_linear_operand_prep_upper_bound(
         max_len: problem.max_len,
         ..cfg
     };
-    let ctx = OperandPrepUpperBoundCtx {
-        problem,
-        allow_copy_swap,
-        cost,
-        cfg,
-    };
+    let ctx = OperandPrepUpperBoundCtx { problem, cost, cfg };
     let mut state = problem.start_state;
     let mut steps = StepList::new();
     let mut total_cost = Cost::default();
@@ -2324,11 +2317,10 @@ fn build_star_swap_operand_prep_upper_bound(
 /// layout for the instructions that follow.
 fn build_operand_prep_incumbent(
     problem: &OperandPrepProblem,
-    allow_copy_swap: bool,
     cost: &impl CostModel,
     cfg: SearchCfg,
 ) -> Option<(StepList, Cost)> {
-    let linear = build_linear_operand_prep_upper_bound(problem, allow_copy_swap, cost, cfg);
+    let linear = build_linear_operand_prep_upper_bound(problem, cost, cfg);
     let swap = build_star_swap_operand_prep_upper_bound(problem, cfg.swap_max).map(|steps| {
         let swap_cost = cost_for_steps(&steps, &problem.key_infos, cost);
         (steps, swap_cost)
@@ -2366,7 +2358,6 @@ pub(super) fn solve_greedy_operand_prep_plan(
     stack: &SymStack,
     args: &[ValueId],
     constraints: OperandPrepConstraints<'_>,
-    allow_copy_swap: bool,
     cost: &impl CostModel,
     cfg: SearchCfg,
 ) -> Option<NormalizePlan> {
@@ -2375,7 +2366,7 @@ pub(super) fn solve_greedy_operand_prep_plan(
         max_len: problem.max_len,
         ..cfg
     };
-    let (steps, cost) = build_operand_prep_incumbent(&problem, allow_copy_swap, cost, cfg)?;
+    let (steps, cost) = build_operand_prep_incumbent(&problem, cost, cfg)?;
     Some(NormalizePlan {
         cost,
         steps,
@@ -2465,7 +2456,7 @@ pub(super) fn solve_optimal_operand_prep_plan(
     let push0_cost = push0_kid.map(|kid| prep_costs.materialize_cost(kid));
     let surplus_last_use_penalty = prep_costs.surplus_last_use_penalty;
     let Some((mut incumbent_steps, mut incumbent_cost)) =
-        build_operand_prep_incumbent(&problem, true, cost, cfg)
+        build_operand_prep_incumbent(&problem, cost, cfg)
     else {
         if debug {
             eprintln!("operand_prep_search: no constructive plan reached the goal");
@@ -5539,7 +5530,7 @@ func public %f() {
             )
             .expect("expected operand-prep problem");
             let (_, linear_cost) =
-                build_linear_operand_prep_upper_bound(&problem, true, &cost, search_cfg)
+                build_linear_operand_prep_upper_bound(&problem, &cost, search_cfg)
                     .expect("expected linear incumbent");
 
             let plan = solve_test_optimal_operand_prep_plan(
