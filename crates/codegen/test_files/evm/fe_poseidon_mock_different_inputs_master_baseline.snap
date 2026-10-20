@@ -6,8 +6,8 @@ input_file: test_files/evm/fe_poseidon_mock_different_inputs_master_baseline.snt
 evm.config: stack_reach=16 vcode=true bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false opt=2
 
 object: Contract
-  section runtime: 1967 bytes
-  total: 1967 bytes
+  section runtime: 1966 bytes
+  total: 1966 bytes
 
 functions:
   mem: global_dyn_base=0xa0 arena_base=0xa0 scratch_peak_words=0 stable_chain_peak_words=0
@@ -431,6 +431,12 @@ poseidon_mock:
     SWAP1
     SWAP2
     PUSH0
+    PUSH1 block2
+    JUMP
+  block17:
+    JUMPDEST
+    SWAP2  // jump block2;
+    SWAP1
   block2:
     JUMPDEST
     SWAP1  // v58.i256 = call %ark v4 v3;
@@ -482,6 +488,12 @@ poseidon_mock:
     PUSH0  // jump block6;
     SWAP2
     SWAP1
+    PUSH1 block6
+    JUMP
+  block19:
+    JUMPDEST
+    SWAP2  // jump block6;
+    SWAP1
   block6:
     JUMPDEST
     SWAP1  // v20.i256 = call %ark v25 v63;
@@ -526,18 +538,6 @@ poseidon_mock:
     PUSH1 0x40 (64)
     MSTORE
     SWAP1  // return v46;
-    JUMP
-  block19:
-    JUMPDEST
-    SWAP2  // jump block6;
-    SWAP1
-    PUSH1 block6
-    JUMP
-  block17:
-    JUMPDEST
-    SWAP2  // jump block2;
-    SWAP1
-    PUSH1 block2
     JUMP
 
 // func public %entry()

@@ -6,18 +6,18 @@ input_file: test_files/evm/array_iter_reverse.sntn
 evm.config: stack_reach=16 vcode=true bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false opt=2
 
 object: Contract
-  section runtime: 207 bytes
-  total: 207 bytes
+  section runtime: 201 bytes
+  total: 201 bytes
 
 functions:
   mem: global_dyn_base=0x60 arena_base=0x60 scratch_peak_words=0 stable_chain_peak_words=0
-  test_view_param_local_ref_take_reverse: ir_blocks=17 ir_insts=66 vcode_ops=162 fixups=10 imm_bytes=37
+  test_view_param_local_ref_take_reverse: ir_blocks=17 ir_insts=66 vcode_ops=159 fixups=8 imm_bytes=37
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
   assert: ir_blocks=3 ir_insts=3 vcode_ops=8 fixups=1 imm_bytes=0
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
 
 evm:
-  case ok: calldata_len=0 success reason=Return gas_used=21905 gas_refunded=0 logs=0 output=call len=0 tx_gas=21000 runtime_gas=905
+  case ok: calldata_len=0 success reason=Return gas_used=21863 gas_refunded=0 logs=0 output=call len=0 tx_gas=21000 runtime_gas=863
 
 
 --------------- DEBUG ---------------
@@ -99,6 +99,11 @@ test_view_param_local_ref_take_reverse:
     MSTORE
     PUSH0  // jump block2;
     PUSH0
+    PUSH1 block2
+    JUMP
+  block1:
+    JUMPDEST
+    SWAP1  // jump block2;
   block2:
     JUMPDEST
     DUP2  // v66.i256 = sub 7.i256 v3;
@@ -122,15 +127,9 @@ test_view_param_local_ref_take_reverse:
     POP  // v43.i256 = eq v38 26.i256;
     PUSH1 0x1a (26)
     EQ
-    PUSH1 block5  // br v43 block5 block4;
+    ISZERO
+    PUSH1 __evm_shared_tail_0  // br v43 block5 block4;
     JUMPI
-    PUSH1 __evm_shared_tail_0
-    JUMP
-  block1:
-    JUMPDEST
-    SWAP1  // jump block2;
-    PUSH1 block2
-    JUMP
   block5:
     JUMPDEST
     PUSH1 0x40 (64)  // v47.i256 = evm_mload v8;
@@ -155,6 +154,11 @@ test_view_param_local_ref_take_reverse:
     MSTORE
     PUSH0  // jump block7;
     PUSH0
+    PUSH1 block7
+    JUMP
+  block6:
+    JUMPDEST
+    SWAP1  // jump block7;
   block7:
     JUMPDEST
     DUP2  // v51.i256 = shl v34 v6;
@@ -178,17 +182,10 @@ test_view_param_local_ref_take_reverse:
     POP
     PUSH1 0xa (10)
     EQ
-    PUSH1 block10  // br v59 block10 block9;
+    ISZERO
+    PUSH1 __evm_shared_tail_0  // br v59 block10 block9;
     JUMPI
-    PUSH1 __evm_shared_tail_0
-    JUMP
-  block6:
-    JUMPDEST
-    SWAP1  // jump block7;
-    PUSH1 block7
-    JUMP
   block10:
-    JUMPDEST
     PUSH0  // evm_return 0.i256 0.i256;
     PUSH0
     RETURN

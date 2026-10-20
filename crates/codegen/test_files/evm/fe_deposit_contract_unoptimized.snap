@@ -24,7 +24,7 @@ evm:
   case supports_interface_erc165: calldata_len=36 success reason=Return gas_used=21469 gas_refunded=0 logs=0 output=call len=32 tx_gas=21240 runtime_gas=229
   case supports_interface_deposit: calldata_len=36 success reason=Return gas_used=21497 gas_refunded=0 logs=0 output=call len=32 tx_gas=21240 runtime_gas=257
   case supports_interface_unknown: calldata_len=36 success reason=Return gas_used=21484 gas_refunded=0 logs=0 output=call len=32 tx_gas=21240 runtime_gas=244
-  case get_deposit_root_empty: calldata_len=4 success reason=Return gas_used=102643 gas_refunded=0 logs=0 output=call len=32 tx_gas=21064 runtime_gas=81579
+  case get_deposit_root_empty: calldata_len=4 success reason=Return gas_used=102313 gas_refunded=0 logs=0 output=call len=32 tx_gas=21064 runtime_gas=81249
   case get_deposit_count_empty: calldata_len=4 success reason=Return gas_used=23577 gas_refunded=0 logs=0 output=call len=96 tx_gas=21064 runtime_gas=2513
   case deposit_rejects_zero_value: calldata_len=420 revert gas_used=26873 output_len=132 tx_gas=25296 runtime_gas=1577
 
@@ -1017,6 +1017,12 @@ contract_runtime_root_DepositContract:
     JUMPDEST
     PUSH0  // jump block98;
     SWAP2
+    PUSH1 block98
+    JUMP
+  block145:
+    JUMPDEST
+    SWAP2  // jump block98;
+    SWAP1
   block98:
     JUMPDEST
     DUP3  // v348.i256 = evm_sload v5;
@@ -1077,12 +1083,6 @@ contract_runtime_root_DepositContract:
     PUSH0  // evm_return 0.i256 0.i256;
     PUSH0
     RETURN
-  block145:
-    JUMPDEST
-    SWAP2  // jump block98;
-    SWAP1
-    PUSH1 block98
-    JUMP
   block99:
     JUMPDEST
     PUSH4 0x4e487b71 (1313373041)  // evm_mstore 256.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256;
@@ -1218,6 +1218,12 @@ contract_runtime_root_DepositContract:
     PUSH0  // jump block118;
     DUP2
     PUSH0
+    PUSH1 block118
+    JUMP
+  block147:
+    JUMPDEST
+    SWAP2  // jump block118;
+    SWAP1
   block118:
     JUMPDEST
     PUSH1 0x1 (1)  // v78.i256 = and v369 1.i256;
@@ -1375,12 +1381,6 @@ contract_runtime_root_DepositContract:
     PUSH1 0x20 (32)  // evm_return 0.i256 32.i256;
     PUSH0
     RETURN
-  block147:
-    JUMPDEST
-    SWAP2  // jump block118;
-    SWAP1
-    PUSH1 block118
-    JUMP
 
 // func private %core__lib__abi__copy_dynamic_payload_from_with_input_len__g72ab_e4d7(v0.i256, v1.i256, v2.i256) -> (i256, i256, i256)
 core__lib__abi__copy_dynamic_payload_from_with_input_len__g72ab_e4d7:
