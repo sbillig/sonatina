@@ -125,6 +125,9 @@ pub(crate) struct EvmFunctionPlan {
     pub(crate) mem_plan: MachineFuncPlan,
     pub(crate) frame_summary: FrameSummary,
     pub(crate) dyn_sp_plan: FuncDynSpPlan,
+    /// The free pointer this function stores on entry (the section entry
+    /// only), which lets heap mallocs skip their minimum-base clamps.
+    pub(crate) entry_free_ptr: Option<u32>,
     pub(crate) function_entry_jumpdest: bool,
     pub(crate) stackify_trace: Option<String>,
 }
@@ -1096,6 +1099,7 @@ fn prepare_machine_section_after_pipeline(
                         mem_plan: final_spills.mem_plan,
                         frame_summary,
                         dyn_sp_plan: FuncDynSpPlan::default(),
+                        entry_free_ptr: None,
                         function_entry_jumpdest: function_entry_jump_targets.contains(&func),
                         stackify_trace,
                     },
@@ -1138,6 +1142,12 @@ fn prepare_machine_section_after_pipeline(
                 .get_mut(&func)
                 .unwrap_or_else(|| panic!("missing function plan for {}", func.as_u32()))
                 .dyn_sp_plan = dyn_sp_plan;
+        }
+        if let Some(free_ptr) = placement.section_entry_free_ptr {
+            function_plans
+                .get_mut(&machine.work.entry())
+                .expect("missing section entry function plan")
+                .entry_free_ptr = Some(free_ptr);
         }
 
         let reserve_peak = backend_spills
