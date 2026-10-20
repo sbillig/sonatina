@@ -52,6 +52,9 @@ pub(crate) struct EvmMemoryPlacementPlan {
     pub(crate) scratch_peak_words: u32,
     pub(crate) stable_chain_peak_words: u32,
     pub(crate) has_heap_mallocs: bool,
+    /// The free pointer the section entry initializes, above every heap
+    /// malloc's minimum base, so no heap malloc needs to clamp it.
+    pub(crate) section_entry_free_ptr: Option<u32>,
     pub(crate) funcs: FxHashMap<FuncRef, EvmFuncPlacementPlan>,
 }
 
@@ -380,11 +383,25 @@ pub(crate) fn compute_semantic_memory_placement(
             (func, malloc_placements)
         })
         .collect();
+    // Starting the heap above every heap malloc's minimum base once, at the
+    // section entry, replaces a clamp at each malloc. Dynamic frames share
+    // the region above the global base, so sections with them keep clamping.
+    let section_entry_free_ptr = (has_heap_mallocs && !has_dynamic_frames).then(|| {
+        malloc_placements
+            .values()
+            .flat_map(FxHashMap::values)
+            .filter_map(|placement| match placement {
+                MallocPlacement::Heap { min_base, .. } => Some(*min_base),
+                MallocPlacement::Fixed { .. } => None,
+            })
+            .fold(semantic_plan.global_dyn_base, u32::max)
+    });
     let free_ptr_floor_before_malloc =
         compute_program_free_ptr_floor_before_malloc(ProgramFreePtrFloorInput {
             module,
             funcs,
             section_entry: section.entry,
+            section_entry_free_ptr,
             section_includes: section.includes,
             analyses,
             source_is: backend.isa.inst_set(),
@@ -422,6 +439,7 @@ pub(crate) fn compute_semantic_memory_placement(
         scratch_peak_words: semantic_plan.scratch_peak_words,
         stable_chain_peak_words: semantic_plan.stable_chain_peak_words,
         has_heap_mallocs,
+        section_entry_free_ptr,
         funcs: func_placements,
     }
 }

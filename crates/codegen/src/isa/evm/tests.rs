@@ -2218,7 +2218,8 @@ fn free_ptr_floor_meets_cfg_edges_and_initial_entry_state() {
             "block0:\n    evm_mstore 64.i256 512.i256;\n    jump block1;\nblock1:\n    call %clobber v1;",
             None,
         ),
-        ("block0:", None),
+        // The section entry stores the heap floor before calling `probe`.
+        ("block0:", Some(96)),
     ] {
         let exit = if body == "block0:" {
             "br v0 block0 block1;\nblock1:\n    return v3;"
