@@ -311,7 +311,7 @@ fn place_loop_back_edge_trampolines(
             // A block jumping to itself is an infinite loop, not a back edge
             // into another block.
             (header != block && loops.loop_header(lp) == header && loops.is_in_loop(block, lp))
-                .then_some((block, header))
+                .then_some((block, header, lp))
         })
         .collect();
 
@@ -320,22 +320,25 @@ fn place_loop_back_edge_trampolines(
     // first block cannot be fallen into at all.
     let mut placed_headers: FxHashSet<_> = trampolines
         .iter()
-        .filter(|&&(trampoline, header)| {
+        .filter(|&&(trampoline, header, _)| {
             position(emitted_block_order, header)
                 .is_none_or(|idx| idx == 0 || emitted_block_order[idx - 1] == trampoline)
         })
-        .map(|&(_, header)| header)
+        .map(|&(_, header, _)| header)
         .collect();
-    for (trampoline, header) in trampolines {
+    for (trampoline, header, lp) in trampolines {
         let trampoline_idx =
             position(emitted_block_order, trampoline).expect("trampoline is emitted");
         // Moving a trampoline its layout predecessor falls into along the
         // trampoline's own edge gains nothing, since the predecessor then
         // jumps to it instead: a jump, a default `br_table` edge, or a
         // branch's zero edge, unless the branch's nonzero target becomes its
-        // fallthrough. A trampoline on a branch's nonzero edge still moves:
-        // the branch jumps to it every iteration either way, and only the
-        // other edge, normally the loop exit, may gain a jump.
+        // fallthrough. A trampoline on a branch's nonzero edge moves when the
+        // zero edge leaves the loop: the branch jumps to the trampoline every
+        // iteration either way, and only the exit may gain a jump. A zero
+        // edge that stays in the loop would gain a jump every iteration, so
+        // then the trampoline stays unless the zero target becomes the
+        // fallthrough.
         let next = emitted_block_order.get(trampoline_idx + 1).copied();
         let canonical = |block| canonical_block_alias_target(aliases, block);
         let breaks_fallthrough = trampoline_idx.checked_sub(1).is_some_and(|prev_idx| {
@@ -346,8 +349,11 @@ fn place_loop_back_edge_trampolines(
                 .is_some_and(|branch| match branch.branch_kind() {
                     BranchKind::Jump(jump) => canonical(*jump.dest()) == trampoline,
                     BranchKind::Br(br) => {
-                        canonical(*br.z_dest()) == trampoline
-                            && Some(canonical(*br.nz_dest())) != next
+                        let (nz_dest, z_dest) = (canonical(*br.nz_dest()), canonical(*br.z_dest()));
+                        (z_dest == trampoline && Some(nz_dest) != next)
+                            || (nz_dest == trampoline
+                                && Some(z_dest) != next
+                                && loops.is_in_loop(z_dest, lp))
                     }
                     BranchKind::BrTable(table) => table
                         .default()

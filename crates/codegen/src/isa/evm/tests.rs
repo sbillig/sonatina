@@ -702,6 +702,49 @@ fn local_fallthrough_layout_moves_fallen_into_trampoline_when_other_target_follo
     assert_eq!(order, vec![0, 3, 1, 2, 4]);
 }
 
+const LATCH_STAYS_IN_LOOP_SRC: &str = r#"
+target = "evm-ethereum-osaka"
+
+func public %main(v0.i256, v1.i1, v2.i1) -> i256 {
+block0:
+    jump block1;
+
+block1:
+    v3.i256 = phi (0.i256 block0) (v4 block3) (v4 block5);
+    v4.i256 = add v3 1.i256;
+    br v1 block2 block4;
+
+block2:
+    br v2 block3 block5;
+
+block3:
+    jump block1;
+
+block4:
+    jump block5;
+
+block5:
+    v5.i1 = lt v4 v0;
+    br v5 block1 block6;
+
+block6:
+    return v4;
+}
+"#;
+
+#[test]
+fn local_fallthrough_layout_keeps_trampoline_whose_branch_stays_in_loop() {
+    // Moving block3 would leave block2's zero edge to block5, another path
+    // around the loop, without its fallthrough.
+    let order = rewrite_local_fallthrough_order_from_src(
+        LATCH_STAYS_IN_LOOP_SRC,
+        "main",
+        &[0, 1, 2, 3, 4, 5, 6],
+    );
+
+    assert_eq!(order, vec![0, 1, 2, 3, 4, 5, 6]);
+}
+
 #[test]
 fn local_fallthrough_layout_rewrites_non_loop_diamond() {
     let order = rewrite_local_fallthrough_order_from_src_with_profile(
