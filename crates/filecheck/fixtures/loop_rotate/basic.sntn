@@ -233,3 +233,51 @@ func public %nested(v0.i256) -> i256 {
     block5:
         return v1;
 }
+
+# A header entered from two blocks gets one preheader that merges their
+# values and holds the guard.
+# check:  block0:
+# nextln:     br v1 block1 block2;
+# nextln:
+# nextln: block1:
+# nextln:     jump block6;
+# nextln:
+# nextln: block2:
+# nextln:     jump block6;
+# nextln:
+# nextln: block6:
+# nextln:     v8.i256 = phi (0.i256 block1) (5.i256 block2);
+# nextln:     v10.i1 = lt v8 v0;
+# nextln:     br v10 block4 block5;
+# nextln:
+# nextln: block4:
+# nextln:     v9.i256 = phi (v8 block6) (v4 block4);
+# nextln:     v4.i256 = add v9 1.i256;
+# nextln:     v11.i1 = lt v4 v0;
+# nextln:     br v11 block4 block5;
+# nextln:
+# nextln: block5:
+# nextln:     v12.i256 = phi (v8 block6) (v4 block4);
+# nextln:     return v12;
+func public %two_entries(v0.i256, v1.i1) -> i256 {
+    block0:
+        br v1 block1 block2;
+
+    block1:
+        jump block3;
+
+    block2:
+        jump block3;
+
+    block3:
+        v2.i256 = phi (0.i256 block1) (5.i256 block2) (v4 block4);
+        v3.i1 = lt v2 v0;
+        br v3 block4 block5;
+
+    block4:
+        v4.i256 = add v2 1.i256;
+        jump block3;
+
+    block5:
+        return v2;
+}
