@@ -270,7 +270,7 @@ fn plan(
     // the exit from inside the loop. Its latch-side input is the next header's
     // value: a header phi's input from the latch, which is a body phi in turn
     // if it is itself a header value.
-    let is_header_value = |value: ValueId| values.contains(&value);
+    let is_header_value = |value: ValueId| defined_in(func, value, header);
     let exit_entered_from_loop = cfg.preds_of(exit).count() > 1;
     let mut exit_set = FxHashSet::default();
     let mut body_set = FxHashSet::default();
