@@ -329,9 +329,13 @@ fn place_loop_back_edge_trampolines(
     for (trampoline, header) in trampolines {
         let trampoline_idx =
             position(emitted_block_order, trampoline).expect("trampoline is emitted");
-        // Moving a trampoline its layout predecessor already falls into costs
-        // that predecessor a jump, unless its other branch target then
-        // becomes its fallthrough.
+        // Moving a trampoline its layout predecessor falls into along the
+        // trampoline's own edge gains nothing, since the predecessor then
+        // jumps to it instead: a jump, a default `br_table` edge, or a
+        // branch's zero edge, unless the branch's nonzero target becomes its
+        // fallthrough. A trampoline on a branch's nonzero edge still moves:
+        // the branch jumps to it every iteration either way, and only the
+        // other edge, normally the loop exit, may gain a jump.
         let next = emitted_block_order.get(trampoline_idx + 1).copied();
         let canonical = |block| canonical_block_alias_target(aliases, block);
         let breaks_fallthrough = trampoline_idx.checked_sub(1).is_some_and(|prev_idx| {
