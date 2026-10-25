@@ -23,7 +23,7 @@ static NATIVE_ADDRESS_SPACES: [AddressSpaceDesc; 1] = [AddressSpaceDesc {
     immutable: false,
 }];
 
-struct NativeAddressSpaces;
+pub(super) struct NativeAddressSpaces;
 
 impl AddressSpaceInfo for NativeAddressSpaces {
     fn default_space(&self) -> AddressSpaceId {
@@ -68,7 +68,8 @@ impl Isa for Native {
     }
 
     fn type_layout(&self) -> &'static dyn TypeLayout {
-        &NATIVE_TYPE_LAYOUT
+        const LAYOUT: NativeTypeLayout = NativeTypeLayout { pointer_size: 8 };
+        &LAYOUT
     }
 
     fn address_spaces(&self) -> &'static dyn AddressSpaceInfo {
@@ -81,9 +82,11 @@ impl Isa for Native {
     }
 }
 
-struct NativeTypeLayout;
-
-const NATIVE_TYPE_LAYOUT: NativeTypeLayout = NativeTypeLayout;
+/// Little-endian layout with naturally aligned scalars and unpacked structs.
+/// Pointers and references take `pointer_size` bytes.
+pub(super) struct NativeTypeLayout {
+    pub(super) pointer_size: usize,
+}
 
 pub fn inst_set() -> &'static NativeInstSet {
     static INST_SET: LazyLock<NativeInstSet> = LazyLock::new(NativeInstSet::new);
@@ -91,12 +94,12 @@ pub fn inst_set() -> &'static NativeInstSet {
 }
 
 impl NativeTypeLayout {
-    fn size(ty: Type, store: &TypeStore) -> Result<usize, TypeLayoutError> {
+    fn size(&self, ty: Type, store: &TypeStore) -> Result<usize, TypeLayoutError> {
         let Type::Compound(compound) = ty else {
             return Self::scalar_layout(ty).map(|(size, _)| size);
         };
         let size = match store.resolve_compound(compound) {
-            CompoundType::Array { elem, len } => Self::size(*elem, store)? * len,
+            CompoundType::Array { elem, len } => self.size(*elem, store)? * len,
             CompoundType::Struct(data) => {
                 if data.packed {
                     return Err(TypeLayoutError::UnsupportedType(ty));
@@ -104,14 +107,16 @@ impl NativeTypeLayout {
                 let mut size = 0usize;
                 let mut struct_align = 1usize;
                 for &field in &data.fields {
-                    let align = Self::align(field, store)?;
+                    let align = self.align(field, store)?;
                     size = size.next_multiple_of(align);
-                    size += Self::size(field, store)?;
+                    size += self.size(field, store)?;
                     struct_align = struct_align.max(align);
                 }
                 size.next_multiple_of(struct_align)
             }
-            CompoundType::Ptr(_) | CompoundType::ObjRef(_) | CompoundType::ConstRef(_) => 8,
+            CompoundType::Ptr(_) | CompoundType::ObjRef(_) | CompoundType::ConstRef(_) => {
+                self.pointer_size
+            }
             CompoundType::Enum(_) | CompoundType::Func { .. } => {
                 return Err(TypeLayoutError::UnrepresentableType(ty));
             }
@@ -119,23 +124,25 @@ impl NativeTypeLayout {
         Ok(size)
     }
 
-    fn align(ty: Type, store: &TypeStore) -> Result<usize, TypeLayoutError> {
+    fn align(&self, ty: Type, store: &TypeStore) -> Result<usize, TypeLayoutError> {
         let Type::Compound(compound) = ty else {
             return Self::scalar_layout(ty).map(|(_, align)| align);
         };
         let align = match store.resolve_compound(compound) {
-            CompoundType::Array { elem, .. } => Self::align(*elem, store)?,
+            CompoundType::Array { elem, .. } => self.align(*elem, store)?,
             CompoundType::Struct(data) => {
                 if data.packed {
                     return Err(TypeLayoutError::UnsupportedType(ty));
                 }
                 let mut align = 1usize;
                 for &field in &data.fields {
-                    align = align.max(Self::align(field, store)?);
+                    align = align.max(self.align(field, store)?);
                 }
                 align
             }
-            CompoundType::Ptr(_) | CompoundType::ObjRef(_) | CompoundType::ConstRef(_) => 8,
+            CompoundType::Ptr(_) | CompoundType::ObjRef(_) | CompoundType::ConstRef(_) => {
+                self.pointer_size
+            }
             CompoundType::Enum(_) | CompoundType::Func { .. } => {
                 return Err(TypeLayoutError::UnrepresentableType(ty));
             }
@@ -161,7 +168,7 @@ impl NativeTypeLayout {
 impl TypeLayout for NativeTypeLayout {
     fn size_of(&self, ty: Type, ctx: &ModuleCtx) -> Result<usize, TypeLayoutError> {
         if matches!(ty, Type::Compound(_)) {
-            ctx.with_ty_store(|store| Self::size(ty, store))
+            ctx.with_ty_store(|store| self.size(ty, store))
         } else {
             Self::scalar_layout(ty).map(|(size, _)| size)
         }
@@ -169,14 +176,18 @@ impl TypeLayout for NativeTypeLayout {
 
     fn align_of(&self, ty: Type, ctx: &ModuleCtx) -> Result<usize, TypeLayoutError> {
         if matches!(ty, Type::Compound(_)) {
-            ctx.with_ty_store(|store| Self::align(ty, store))
+            ctx.with_ty_store(|store| self.align(ty, store))
         } else {
             Self::scalar_layout(ty).map(|(_, align)| align)
         }
     }
 
     fn pointer_repl(&self) -> Type {
-        Type::I64
+        if self.pointer_size == 4 {
+            Type::I32
+        } else {
+            Type::I64
+        }
     }
 
     fn endian(&self) -> Endian {

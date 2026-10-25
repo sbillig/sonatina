@@ -19,6 +19,12 @@ impl TargetTriple {
         OperatingSystem::ZkvmElf,
     );
 
+    pub const WASM32: Self = Self::new(
+        Architecture::Wasm32,
+        Vendor::Unknown,
+        OperatingSystem::Unknown,
+    );
+
     pub const fn new(
         architecture: Architecture,
         vendor: Vendor,
@@ -71,6 +77,7 @@ pub enum Architecture {
     X86_64,
     Aarch64,
     Riscv64im,
+    Wasm32,
 }
 
 impl Architecture {
@@ -80,6 +87,7 @@ impl Architecture {
             "x86_64" => Ok(Self::X86_64),
             "aarch64" => Ok(Self::Aarch64),
             "riscv64im" => Ok(Self::Riscv64im),
+            "wasm32" => Ok(Self::Wasm32),
             _ => Err(InvalidTriple::ArchitectureNotSupported),
         }
     }
@@ -92,6 +100,7 @@ impl Display for Architecture {
             Self::X86_64 => write!(f, "x86_64"),
             Self::Aarch64 => write!(f, "aarch64"),
             Self::Riscv64im => write!(f, "riscv64im"),
+            Self::Wasm32 => write!(f, "wasm32"),
         }
     }
 }
@@ -129,6 +138,7 @@ pub enum OperatingSystem {
     Evm(EvmVersion),
     Native,
     ZkvmElf,
+    Unknown,
 }
 
 impl OperatingSystem {
@@ -159,6 +169,10 @@ impl OperatingSystem {
                 "zkvm-elf" => Ok(Self::ZkvmElf),
                 _ => Err(InvalidTriple::OsNotSupported),
             },
+            (Architecture::Wasm32, Vendor::Unknown) => match s {
+                "unknown" => Ok(Self::Unknown),
+                _ => Err(InvalidTriple::OsNotSupported),
+            },
             _ => Err(InvalidTriple::InvalidCombination),
         }
     }
@@ -170,6 +184,7 @@ impl Display for OperatingSystem {
             Self::Evm(evm_version) => write!(f, "{evm_version}"),
             Self::Native => write!(f, "native"),
             Self::ZkvmElf => write!(f, "zkvm-elf"),
+            Self::Unknown => write!(f, "unknown"),
         }
     }
 }
@@ -284,6 +299,21 @@ mod tests {
             "riscv64im-succinct-zkvm-elf-extra",
             "x86_64-succinct-zkvm-elf",
             "evm-ethereum-osaka-extra",
+        ] {
+            assert!(TargetTriple::parse(target).is_err(), "accepted {target}");
+        }
+    }
+
+    #[test]
+    fn wasm32_triple_round_trips_and_rejects_other_systems() {
+        let target = "wasm32-unknown-unknown";
+        assert_eq!(TargetTriple::parse(target).unwrap(), TargetTriple::WASM32);
+        assert_eq!(TargetTriple::WASM32.to_string(), target);
+        for target in [
+            "wasm32-unknown-native",
+            "wasm32-ethereum-osaka",
+            "wasm64-unknown-unknown",
+            "x86_64-unknown-unknown",
         ] {
             assert!(TargetTriple::parse(target).is_err(), "accepted {target}");
         }
