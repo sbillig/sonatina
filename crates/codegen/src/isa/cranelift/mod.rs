@@ -92,6 +92,16 @@ impl CraneliftObjectBackend {
                     "false"
                 },
             ),
+            // O0 favors compile time: the single-pass allocator is several
+            // times faster than the backtracking one, at the cost of spills.
+            (
+                "regalloc_algorithm",
+                if options.opt_level == OptLevel::O0 {
+                    "single_pass"
+                } else {
+                    "backtracking"
+                },
+            ),
         ] {
             builder
                 .set(name, value)
@@ -288,7 +298,7 @@ fn host_architecture() -> Option<Architecture> {
 
 #[cfg(test)]
 mod tests {
-    use cranelift_codegen::settings::Flags;
+    use cranelift_codegen::settings::{Flags, RegallocAlgorithm};
 
     use super::{CraneliftObjectBackend, cranelift_opt_level};
     use crate::{backend::BackendOptions, compile::OptLevel};
@@ -313,6 +323,21 @@ mod tests {
                 CraneliftObjectBackend::flag_builder(&BackendOptions { opt_level }, true).unwrap(),
             );
             assert_eq!(flags.enable_verifier(), cfg!(debug_assertions));
+        }
+    }
+
+    #[test]
+    fn o0_uses_the_single_pass_register_allocator() {
+        for (opt_level, algorithm) in [
+            (OptLevel::O0, RegallocAlgorithm::SinglePass),
+            (OptLevel::O1, RegallocAlgorithm::Backtracking),
+            (OptLevel::Os, RegallocAlgorithm::Backtracking),
+            (OptLevel::O2, RegallocAlgorithm::Backtracking),
+        ] {
+            let flags = Flags::new(
+                CraneliftObjectBackend::flag_builder(&BackendOptions { opt_level }, true).unwrap(),
+            );
+            assert_eq!(flags.regalloc_algorithm(), algorithm);
         }
     }
 
