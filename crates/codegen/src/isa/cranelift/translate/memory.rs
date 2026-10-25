@@ -7,8 +7,9 @@ use cranelift_frontend::FunctionBuilder;
 use sonatina_ir::{Function, Type, ValueId, module::ModuleCtx, types::CompoundType};
 
 use super::{
-    copy_bytes, create_stack_slot_for_type, load_i256_limb, resize_int_value, resolve_value,
-    signed_scalar, sonatina_type_to_clif_or_err, uses_indirect_value_representation,
+    aggregate_elem_offset, constant_value_index, copy_bytes, create_stack_slot_for_type,
+    load_i256_limb, resize_int_value, resolve_value, signed_scalar, sonatina_type_to_clif_or_err,
+    uses_indirect_value_representation, value_storage_alignment, value_storage_size,
 };
 
 pub(super) fn translate_bitcast(
@@ -164,25 +165,6 @@ pub(super) fn resolve_index(
     Ok(resize_int_value(value, clif::types::I64, signed, builder))
 }
 
-pub(super) fn value_storage_size(ty: Type, ctx: &ModuleCtx) -> Result<u32, String> {
-    let size = ctx
-        .size_of(ty)
-        .map_err(|error| format!("cannot lay out type {ty:?}: {error:?}"))?;
-    u32::try_from(size).map_err(|_| format!("type {ty:?} is too large for Cranelift"))
-}
-
-pub(super) fn value_storage_alignment(ty: Type, ctx: &ModuleCtx) -> Result<u64, String> {
-    let alignment = ctx
-        .align_of(ty)
-        .map_err(|error| format!("cannot align type {ty:?}: {error:?}"))?;
-    if !alignment.is_power_of_two() {
-        return Err(format!(
-            "type {ty:?} has non-power-of-two alignment {alignment}"
-        ));
-    }
-    Ok(alignment as u64)
-}
-
 pub(super) fn stack_slot_data(ty: Type, ctx: &ModuleCtx) -> Result<StackSlotData, String> {
     let alignment = value_storage_alignment(ty, ctx)?;
     let align_shift = u8::try_from(alignment.trailing_zeros())
@@ -192,52 +174,4 @@ pub(super) fn stack_slot_data(ty: Type, ctx: &ModuleCtx) -> Result<StackSlotData
         value_storage_size(ty, ctx)?.max(1),
         align_shift,
     ))
-}
-
-pub(super) fn aggregate_elem_offset(
-    ctx: &ModuleCtx,
-    aggregate_ty: Type,
-    idx: usize,
-) -> Result<(i32, Type), String> {
-    if let Some((offset, ty)) = ctx.aggregate_elem_offset(aggregate_ty, idx) {
-        return Ok((
-            i32::try_from(offset)
-                .map_err(|_| format!("aggregate offset {offset} overflows i32"))?,
-            ty,
-        ));
-    }
-    if let Some(
-        sonatina_ir::types::CompoundType::ObjRef(inner)
-        | sonatina_ir::types::CompoundType::ConstRef(inner),
-    ) = aggregate_ty.resolve_compound(ctx)
-    {
-        return aggregate_elem_offset(ctx, inner, idx);
-    }
-    Err(format!(
-        "cannot compute aggregate element offset for {aggregate_ty:?}[{idx}]"
-    ))
-}
-
-pub(super) fn constant_value_index(
-    function: &Function,
-    value_id: ValueId,
-    inst_name: &str,
-) -> Result<usize, String> {
-    function
-        .dfg
-        .value_imm(value_id)
-        .and_then(|imm| imm.to_nonnegative_usize())
-        .ok_or_else(|| format!("{inst_name} index must be a nonnegative constant"))
-}
-
-pub(super) fn compute_element_size(obj_ty: Type, ctx: &ModuleCtx) -> Result<usize, String> {
-    match obj_ty.resolve_compound(ctx) {
-        Some(CompoundType::Array { elem, .. }) => ctx
-            .size_of(elem)
-            .map_err(|error| format!("cannot lay out array element {elem:?}: {error:?}")),
-        Some(CompoundType::ObjRef(inner) | CompoundType::ConstRef(inner)) => {
-            compute_element_size(inner, ctx)
-        }
-        _ => Err(format!("cannot index non-array value of type {obj_ty:?}")),
-    }
 }

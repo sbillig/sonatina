@@ -3,14 +3,10 @@ use std::collections::HashMap;
 use cranelift_codegen::ir::{self as clif, InstBuilder};
 use cranelift_frontend::FunctionBuilder;
 use cranelift_module::{DataDescription, DataId, Module as ClifModule};
-use sonatina_ir::{
-    GlobalVariableRef, Immediate, Type, global_variable::GvInitializer, module::ModuleCtx,
-    types::CompoundType,
-};
+use sonatina_ir::{GlobalVariableRef, module::ModuleCtx};
 
-use super::{
-    aggregate_elem_offset, translate_linkage, value_storage_alignment, value_storage_size,
-};
+use super::{translate_linkage, value_storage_alignment, value_storage_size};
+use crate::isa::native_layout::serialize_initializer;
 
 pub(super) type GlobalDataMap = HashMap<GlobalVariableRef, DataId>;
 
@@ -74,63 +70,4 @@ pub(super) fn global_address(
     Ok(builder
         .ins()
         .symbol_value(module.target_config().pointer_type(), reference))
-}
-
-fn serialize_initializer(
-    init: &GvInitializer,
-    ty: Type,
-    bytes: &mut [u8],
-    ctx: &ModuleCtx,
-) -> Result<(), String> {
-    match init {
-        GvInitializer::Immediate(imm) => {
-            if matches!(imm, Immediate::EnumTag { .. }) {
-                return Err("enum-tag initializer survived legalization".into());
-            }
-            if imm.ty() != ty && !(ty.is_pointer(ctx) && imm.ty() == ctx.type_layout.pointer_repl())
-            {
-                return Err(format!(
-                    "initializer type mismatch: expected {ty:?}, found {:?}",
-                    imm.ty()
-                ));
-            }
-            let words = imm.zext(Type::I256).as_i256().to_u256().to_little_endian();
-            bytes.copy_from_slice(&words[..bytes.len()]);
-        }
-        GvInitializer::Array(elements) => {
-            let Some(CompoundType::Array { elem, len }) = ty.resolve_compound(ctx) else {
-                return Err(format!("array initializer used for {ty:?}"));
-            };
-            if elements.len() != len {
-                return Err(format!(
-                    "array initializer length mismatch: expected {len}, found {}",
-                    elements.len()
-                ));
-            }
-            let size = value_storage_size(elem, ctx)? as usize;
-            for (index, init) in elements.iter().enumerate() {
-                let start = index * size;
-                serialize_initializer(init, elem, &mut bytes[start..start + size], ctx)?;
-            }
-        }
-        GvInitializer::Struct(fields) => {
-            let Some(CompoundType::Struct(data)) = ty.resolve_compound(ctx) else {
-                return Err(format!("struct initializer used for {ty:?}"));
-            };
-            if fields.len() != data.fields.len() {
-                return Err(format!(
-                    "struct initializer field count mismatch: expected {}, found {}",
-                    data.fields.len(),
-                    fields.len()
-                ));
-            }
-            for (index, (init, field)) in fields.iter().zip(data.fields).enumerate() {
-                let (offset, _) = aggregate_elem_offset(ctx, ty, index)?;
-                let start = offset as usize;
-                let size = value_storage_size(field, ctx)? as usize;
-                serialize_initializer(init, field, &mut bytes[start..start + size], ctx)?;
-            }
-        }
-    }
-    Ok(())
 }

@@ -21,8 +21,12 @@ use sonatina_ir::{
 };
 use sonatina_triple::TargetTriple;
 
-use crate::transform::aggregate::{
-    compute_object_effect_summaries, object_abi::native_heap_object_roots,
+use crate::{
+    isa::native_layout::{
+        aggregate_elem_offset, compute_element_size, constant_value_index, value_storage_alignment,
+        value_storage_size,
+    },
+    transform::aggregate::{compute_object_effect_summaries, object_abi::native_heap_object_roots},
 };
 
 use self::{abi::*, globals::*, i256::*, memory::*, scalar::*};

@@ -95,6 +95,18 @@ jobs:
       - name: Test host-native JIT and object backends
         run: cargo test -p sonatina-codegen --features cranelift-jit --test cranelift_object --test cranelift_jit
 
+  wasm:
+    name: Wasm
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - run: cargo test -p sonatina-codegen --features wasm --test wasm
+
   cranelift_windows_check:
     name: Cranelift Windows compile check
     runs-on: windows-latest
