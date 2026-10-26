@@ -73,8 +73,10 @@ impl ObjectReachability {
             let value = root.value();
             this.references[value].roots.insert(root);
             if !this.aliases.is_fresh(root) {
-                this.exposed.insert(root);
                 this.contents.entry(root).or_default().external = true;
+                if !this.aliases.is_exclusive(root) {
+                    this.exposed.insert(root);
+                }
             }
         }
         // Whether a value can carry a reference depends only on its type.
@@ -141,7 +143,9 @@ impl ObjectReachability {
     }
 
     pub(crate) fn exposed(&self, root: RootValue) -> bool {
-        self.unknown_published || !self.aliases.is_fresh(root) || self.exposed.contains(&root)
+        self.unknown_published
+            || !(self.aliases.is_fresh(root) || self.aliases.is_exclusive(root))
+            || self.exposed.contains(&root)
     }
 
     fn expose(&mut self, references: &References) -> bool {
