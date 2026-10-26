@@ -403,6 +403,22 @@ pub(crate) fn compute_object_effect_summaries(module: &Module) -> ObjectEffectSu
     for scc in object_effect_scc_order(module) {
         update_object_effect_scc(module, &scc, &mut summaries, &mut layout_cache);
     }
+    if let Ok(names) = std::env::var("TRACE_EFFECTS") {
+        for (func, summary) in &summaries {
+            let name = module.ctx.func_sig(*func, |sig| sig.name().to_string());
+            if names.split(',').any(|part| name.contains(part)) {
+                for (idx, effect) in summary.arg_effects.iter().enumerate() {
+                    eprintln!(
+                        "effects {name} arg{idx}: local_only={} escapes={} writes_empty={} mat_stack={}",
+                        effect.local_only,
+                        effect.escapes,
+                        effect.writes.is_empty(),
+                        effect.materializes_stack
+                    );
+                }
+            }
+        }
+    }
     summaries
 }
 

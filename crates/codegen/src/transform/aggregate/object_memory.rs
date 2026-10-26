@@ -363,7 +363,11 @@ impl ObjectMemoryAnalysis {
         lp: Loop,
         inst: InstId,
     ) -> bool {
+        let trace = std::env::var("TRACE_LICM_NOALIAS").is_ok()
+            && func.dfg.downcast::<&sonatina_ir::inst::data::ObjLoad>(inst).is_some()
+            && func.arg_values.iter().any(|&arg| func.is_noalias_arg(arg));
         let Some(read) = self.read_state(inst) else {
+            if trace { eprintln!("licm {inst:?}: no read state"); }
             return false;
         };
         // Facts established inside the loop cannot justify a preheader read.
@@ -376,6 +380,7 @@ impl ObjectMemoryAnalysis {
             )
             .defined(func.ctx())
         {
+            if trace { let root = read.read_slice().root; eprintln!("licm undef={} arg={:?} noalias={} nargs={}", read.may_be_undef(), func.arg_values.iter().position(|&a| a == root), func.is_noalias_arg(root), func.arg_values.len()); }
             return false;
         }
 
@@ -385,6 +390,7 @@ impl ObjectMemoryAnalysis {
                     continue;
                 }
                 if self.inst_clobbers_slice(loop_inst, read.read_slice()) {
+                    if trace { eprintln!("licm {inst:?}: root {:?} clobbered by {loop_inst:?} {}", read.read_slice().root, if func.dfg.is_call(loop_inst) { "call" } else if func.dfg.downcast::<&sonatina_ir::inst::data::ObjStore>(loop_inst).is_some() { "obj.store" } else if func.dfg.downcast::<&sonatina_ir::inst::data::Mstore>(loop_inst).is_some() { "mstore" } else { "other" }); }
                     return false;
                 }
             }
@@ -743,6 +749,11 @@ fn transfer_inst(
         for &access in &invalidated {
             if !ctx.accesses.may_overlap(access, root_slice) {
                 continue;
+            }
+            if std::env::var("TRACE_LICM_NOALIAS").is_ok() && ctx.func.is_noalias_arg(root) {
+                let kind = if ctx.func.dfg.is_call(inst) { "call" } else if ctx.func.dfg.downcast::<&data::ObjStore>(inst).is_some() { "obj.store" } else if ctx.func.dfg.downcast::<&data::Mstore>(inst).is_some() { "mstore" } else { "other" };
+                let access_kind = match access { ObjectAccess::Exact(p) => if p.root_value.value() == root { "exact-self" } else { "exact-other" }, ObjectAccess::Root(r) => if r.value() == root { "root-self" } else { "root-other" }, ObjectAccess::External => "external", ObjectAccess::Unknown => "unknown" };
+                eprintln!("invalidate arg{:?} by {kind} {access_kind}", ctx.func.arg_values.iter().position(|&a| a == root));
             }
             if let ObjectAccess::Exact(projection) = access
                 && projection.root_value.value() == root

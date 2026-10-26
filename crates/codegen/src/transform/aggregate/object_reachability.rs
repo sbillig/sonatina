@@ -187,6 +187,10 @@ impl ObjectReachability {
         let data = func.dfg.inst(inst);
         let is = func.inst_set();
         let mut changed = false;
+        let was_published = self.unknown_published;
+        let trace = std::env::var("TRACE_PUBLISH").is_ok()
+            && func.arg_values.iter().any(|&arg| func.is_noalias_arg(arg));
+        let kind = if downcast::<&data::ObjStore>(is, data).is_some() { "obj.store" } else if downcast::<&data::Mstore>(is, data).is_some() { "mstore" } else if downcast::<&control_flow::Call>(is, data).is_some() { "call" } else if downcast::<&control_flow::Return>(is, data).is_some() { "return" } else { "other-write" };
         if let Some(store) = downcast::<&data::ObjStore>(is, data) {
             changed |=
                 self.store_references(*store.object(), &self.references[*store.value()].clone());
@@ -325,6 +329,9 @@ impl ObjectReachability {
                 next.unknown = true;
             }
             changed |= self.references[result].union_with(&next);
+        }
+        if trace && !was_published && self.unknown_published {
+            eprintln!("publish-unknown by {kind}");
         }
         changed
     }
