@@ -1181,6 +1181,11 @@ impl State for CellState<'_, '_> {
         panic!("call instuctuion must not be Interpreted")
     }
 
+    // An undef here may be a cell not evaluated yet, not a known undef.
+    fn freeze(&mut self, value: EvalValue, _ty: Type) -> EvalValue {
+        value
+    }
+
     fn set_action(&mut self, action: Action) {
         if action != Action::Continue {
             panic!("instruction with side effect must not be interpreted")

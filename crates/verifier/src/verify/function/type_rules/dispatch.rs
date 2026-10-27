@@ -44,8 +44,13 @@ impl_unary_integral_same_rule!(
     arith::Neg => "neg",
     logic::Not => "not",
     data::BlackBox => "black_box",
-    data::Freeze => "freeze",
 );
+
+impl VerifyInst for data::Freeze {
+    fn verify_inst(&self, verifier: &mut FunctionVerifier<'_>, inst_id: InstId) {
+        verifier.verify_freeze(inst_id, *self.arg());
+    }
+}
 
 impl VerifyInst for logic::Bswap {
     fn verify_inst(&self, verifier: &mut FunctionVerifier<'_>, inst_id: InstId) {

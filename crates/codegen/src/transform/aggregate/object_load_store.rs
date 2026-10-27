@@ -11,6 +11,8 @@ use sonatina_ir::{
     types::CompoundType,
 };
 
+use crate::analysis::definedness::UndefTaint;
+
 use super::{
     LocalObjectArgInfo, LocalObjectArgMap, ObjectEffectSummaryMap,
     cleanup::DeadPureInstCleanup,
@@ -375,6 +377,7 @@ pub struct ObjectLoadStore {
     changed: bool,
     layout_cache: shape::AggregateLayoutCache,
     dead_pure_cleanup: DeadPureInstCleanup,
+    taint: UndefTaint,
 }
 
 impl ObjectLoadStore {
@@ -457,6 +460,7 @@ impl ObjectLoadStore {
     ) -> bool {
         let mut cfg = ControlFlowGraph::new();
         cfg.compute(func);
+        self.taint = UndefTaint::new(func);
         let reachable = cfg.reachable_blocks();
         let order: Vec<_> = cfg
             .post_order()
@@ -569,8 +573,10 @@ impl ObjectLoadStore {
         } else {
             None
         };
+        // A read is never undef, so a scalar that may be stays unforwarded.
         if let Some(slice) = read
             && let Some(replacement) = self.replacement_for_load(func, inst, slice, available)
+            && !self.taint.scalar_may_be_undef(func, replacement)
             && let Some(result) = func.dfg.inst_result(inst)
         {
             func.dfg.change_to_alias(result, replacement);

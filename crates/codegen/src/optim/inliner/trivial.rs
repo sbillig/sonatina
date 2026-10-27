@@ -10,6 +10,7 @@ use sonatina_ir::{
 };
 
 use crate::{
+    analysis::definedness::{freeze_before, scalar_may_be_undef},
     cfg_edit::{CfgEditor, CleanupMode},
     optim::call_purity::is_nonmutating_returning_call,
 };
@@ -436,6 +437,22 @@ pub(super) fn apply_plan(
     let (call_args, original_callee) =
         <&control_flow::Call as InstDowncast>::downcast(is, caller.dfg.inst(call_inst_id))
             .map(|call_inst| (call_inst.args().clone(), *call_inst.callee()))?;
+    // A parameter is never undef, so a body taken out of the call sees frozen
+    // arguments; a rewritten call keeps the boundary.
+    let call_args: SmallVec<[ValueId; 8]> = if matches!(plan, InlinePlan::RewriteCall { .. }) {
+        call_args.into_iter().collect()
+    } else {
+        call_args
+            .iter()
+            .map(|&arg| {
+                if scalar_may_be_undef(caller, arg) {
+                    freeze_before(caller, call_inst_id, arg)
+                } else {
+                    arg
+                }
+            })
+            .collect()
+    };
     let call_results: ReturnedValues = caller
         .dfg
         .inst_results(call_inst_id)
@@ -481,6 +498,7 @@ pub(super) fn apply_plan(
 
             for (&call_res, tpl) in call_results.iter().zip(returned.iter()) {
                 let alias = materialize(tpl, caller, &call_args)?;
+                let alias = frozen_result(caller, call_inst_id, alias);
                 debug_assert_alias_type_match(caller, call_res, alias);
                 caller.dfg.change_to_alias(call_res, alias);
             }
@@ -587,6 +605,7 @@ fn apply_splice_single_block(
         let new_ret = *value_map
             .get(&old_ret)
             .expect("validated splice return value must be mapped");
+        let new_ret = frozen_result(caller, call_inst_id, new_ret);
         debug_assert_alias_type_match(caller, call_res, new_ret);
         caller.dfg.change_to_alias(call_res, new_ret);
     }
@@ -663,6 +682,16 @@ fn apply_splice_single_block_terminator(
 
     stats.calls_spliced += 1;
     true
+}
+
+/// A call result is never undef, so a returned value that may be is frozen
+/// in the call's place.
+fn frozen_result(caller: &mut Function, call_inst: InstId, value: ValueId) -> ValueId {
+    if scalar_may_be_undef(caller, value) {
+        freeze_before(caller, call_inst, value)
+    } else {
+        value
+    }
 }
 
 fn build_splice_value_map(

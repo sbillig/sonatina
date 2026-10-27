@@ -171,6 +171,37 @@ fn low_mask_bits(func: &Function, value: ValueId) -> Option<u16> {
         .find(|&bits| ones == low_mask(bits))
 }
 
+/// EVM values are concrete words: a frozen value is its argument, and
+/// `freeze undef` is zero.
+fn frozen_value(func: &mut Function, arg: ValueId) -> ValueId {
+    match func.dfg.value(arg) {
+        Value::Undef { ty } => {
+            let zero = Immediate::zero(*ty);
+            func.dfg.make_imm_value(zero)
+        }
+        _ => arg,
+    }
+}
+
+/// Lowers the freezes passes insert after legalization, such as scalarizing a
+/// slot read before its first store, which machine lowering cannot take.
+pub(crate) fn lower_late_freezes(func: &mut Function) {
+    let freezes: Vec<_> = func
+        .layout
+        .iter_block()
+        .flat_map(|block| func.layout.iter_inst(block))
+        .filter(|&inst| func.dfg.downcast::<&Freeze>(inst).is_some())
+        .collect();
+    for inst in freezes {
+        let arg = func.dfg.inst(inst).collect_values()[0];
+        let result = func.dfg.inst_result(inst).expect("freeze has a result");
+        let replacement = frozen_value(func, arg);
+        func.dfg.change_to_alias(result, replacement);
+        func.layout.remove_inst(inst);
+        func.erase_inst(inst);
+    }
+}
+
 pub(crate) fn legalize_evm_section(module: &Module, funcs: &[FuncRef]) {
     assert!(
         matches!(module.ctx.triple.architecture, Architecture::Evm),
@@ -2141,13 +2172,7 @@ impl<'a> FunctionLegalizer<'a> {
     /// No later pass chooses a value per use, so a frozen value is its
     /// argument, and a frozen `undef` one fixed value.
     fn rewrite_freeze(&mut self, inst: InstId, arg: ValueId) {
-        let replacement = match self.func.dfg.value(arg) {
-            Value::Undef { ty } => {
-                let zero = Immediate::zero(*ty);
-                self.func.dfg.make_imm_value(zero)
-            }
-            _ => arg,
-        };
+        let replacement = frozen_value(self.func, arg);
         self.replace_with_aliases(inst, &[replacement]);
     }
 

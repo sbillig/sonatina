@@ -26,6 +26,7 @@ use super::{
     scalarize::enum_variant_tag_imm,
     shape,
 };
+use crate::analysis::definedness::{is_scalar, value_may_be_undef};
 
 mod value_facts;
 
@@ -271,6 +272,9 @@ impl AggregateCombine {
                 && let Some(value) =
                     enum_payload_value(&state.facts, object, *projection.variant(), field)
                 && self.payload_is_readable(func, value)
+                // A read is never undef, so a scalar that may be stays a read.
+                && !(is_scalar(func, func.dfg.value_ty(value))
+                    && value_may_be_undef(func, value, &mut FxHashMap::default(), |_| None))
                 && func
                     .dfg
                     .inst_result(inst)
