@@ -40,6 +40,7 @@ use crate::{
         },
     },
     post_domtree::PostDomTree,
+    range_analysis::use_frozen_values,
 };
 
 ///  An initial class that assigned to all values.
@@ -424,7 +425,9 @@ impl GvnSolver {
 
         // Remove redundant insn and unreachable block.
         let mut remover = RedundantCodeRemover::new(self);
-        remover.remove_redundant_code(func, cfg, domtree, object_memory)
+        let changed = remover.remove_redundant_code(func, cfg, domtree, object_memory);
+        // A reload aliased to a frozen load is a new use of the unfrozen load.
+        use_frozen_values(func, domtree) || changed
     }
 
     /// Clear all internal data of the solver.
