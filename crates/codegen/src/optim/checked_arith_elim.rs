@@ -10,7 +10,7 @@ use sonatina_ir::{
 use crate::{
     domtree::DomTree,
     loop_analysis::LoopTree,
-    range_analysis::{RangeAnalysis, RangeEnv, checked_value_fact},
+    range_analysis::{RangeAnalysis, RangeEnv, checked_value_fact, freeze_subtraction_guards},
 };
 
 pub struct CheckedArithElim {
@@ -47,8 +47,9 @@ impl CheckedArithElim {
         dom: &DomTree,
         lpt: &LoopTree,
     ) -> bool {
+        let frozen = freeze_subtraction_guards(func, cfg, dom);
         if !has_supported_checked_arith(func) {
-            return false;
+            return frozen;
         }
 
         self.plans.clear();
@@ -76,7 +77,7 @@ impl CheckedArithElim {
         }
 
         if self.plans.is_empty() {
-            return false;
+            return frozen;
         }
 
         for plan in self.plans.drain(..) {
@@ -376,7 +377,7 @@ func public %test() -> i1 {
     }
 
     #[test]
-    fn guarded_subtraction_rejects_undef_dependent_relations() {
+    fn guarded_subtraction_freezes_undef_dependent_relations() {
         let text = optimized(
             r#"
 target = "evm-ethereum-osaka"
@@ -395,10 +396,12 @@ func public %test() -> i1 {
 }
 "#,
         );
-        assert!(text.contains("usubo"), "{text}");
+        // Frozen, `v1` is one value for both the comparison and the
+        // subtraction, so the comparison proves the subtraction safe.
+        assert!(text.contains("freeze") && !text.contains("usubo"), "{text}");
     }
     #[test]
-    fn guarded_subtraction_checks_intrinsic_definedness() {
+    fn guarded_subtraction_freezes_intrinsically_undefined_operands() {
         for operation in [
             "udiv", "sdiv", "umod", "smod", "evm_udiv", "evm_sdiv", "evm_umod", "evm_smod",
         ] {
@@ -422,9 +425,10 @@ func public %test() -> i1 {{
 "#
                 ));
                 let defined = operation.starts_with("evm_") || divisor == "7.i256";
+                assert!(!text.contains("usubo"), "{operation} {divisor}: {text}");
                 assert_eq!(
-                    !text.contains("usubo"),
-                    defined,
+                    text.contains("freeze"),
+                    !defined,
                     "{operation} {divisor}: {text}"
                 );
             }
@@ -432,7 +436,7 @@ func public %test() -> i1 {{
     }
 
     #[test]
-    fn guarded_subtraction_requires_defined_parameters() {
+    fn guarded_subtraction_freezes_parameters() {
         for linkage in ["private", "public"] {
             for (args, rhs) in [("undef.i256 7.i256", "v1"), ("7.i256 undef.i256", "v2")] {
                 let text = optimized(&format!(
@@ -456,13 +460,16 @@ func public %caller() -> i1 {{
 }}
 "#
                 ));
-                assert!(text.contains("usubo"), "{linkage}, {args}: {text}");
+                assert!(
+                    text.contains("freeze") && !text.contains("usubo"),
+                    "{linkage}, {args}: {text}"
+                );
             }
         }
     }
 
     #[test]
-    fn guarded_subtraction_requires_defined_call_and_read_results() {
+    fn guarded_subtraction_freezes_call_and_read_results() {
         for producer in [
             "v2.i256 = call %source;",
             "v7.objref<i256> = obj.alloc i256;\n  v2.i256 = obj.load v7;",
@@ -490,7 +497,10 @@ func private %source() -> i256 {{
 }}
 "#
             ));
-            assert!(text.contains("usubo"), "{producer}: {text}");
+            assert!(
+                text.contains("freeze") && !text.contains("usubo"),
+                "{producer}: {text}"
+            );
         }
     }
 

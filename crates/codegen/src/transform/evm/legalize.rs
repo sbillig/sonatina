@@ -13,7 +13,7 @@ use sonatina_ir::{
         },
         cast::{self, Bitcast, IntToPtr, PtrToInt},
         cmp::{self, Eq, IsZero, Ne, Sgt, Slt},
-        data::{Alloca, MemAllocDynamic, Mload, Mstore},
+        data::{Alloca, Freeze, MemAllocDynamic, Mload, Mstore},
         downcast,
         evm::{
             EvmCodeLoad, EvmExp, EvmMalloc, EvmSaddsat, EvmSdiv, EvmSdivo, EvmSmod, EvmSmodo,
@@ -556,6 +556,10 @@ impl<'a> FunctionLegalizer<'a> {
             downcast::<&logic::Bswap>(is, self.func.dfg.inst(inst)).map(|i| *i.arg())
         {
             self.rewrite_bswap(inst, arg);
+        } else if let Some(arg) =
+            downcast::<&Freeze>(is, self.func.dfg.inst(inst)).map(|i| *i.arg())
+        {
+            self.rewrite_freeze(inst, arg);
         } else if let Some((lhs, rhs)) =
             downcast::<&cmp::Slt>(is, self.func.dfg.inst(inst)).map(|i| (*i.lhs(), *i.rhs()))
         {
@@ -2134,6 +2138,19 @@ impl<'a> FunctionLegalizer<'a> {
     /// The EVM has no byte swap. Each round swaps the halves of every lane,
     /// from the whole value down to byte pairs; a canonical narrow value stays
     /// within its width throughout.
+    /// No later pass chooses a value per use, so a frozen value is its
+    /// argument, and a frozen `undef` one fixed value.
+    fn rewrite_freeze(&mut self, inst: InstId, arg: ValueId) {
+        let replacement = match self.func.dfg.value(arg) {
+            Value::Undef { ty } => {
+                let zero = Immediate::zero(*ty);
+                self.func.dfg.make_imm_value(zero)
+            }
+            _ => arg,
+        };
+        self.replace_with_aliases(inst, &[replacement]);
+    }
+
     fn rewrite_bswap(&mut self, inst: InstId, arg: ValueId) {
         let width = self
             .single_result_width(inst)

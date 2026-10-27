@@ -1,4 +1,4 @@
-use std::collections::VecDeque;
+use std::{collections::VecDeque, iter};
 
 use cranelift_entity::SecondaryMap;
 use rustc_hash::{FxHashMap, FxHashSet};
@@ -9,6 +9,7 @@ use sonatina_ir::{
     inst::{
         BinaryInstKind, CastInstKind, InstClassKind, UnaryInstKind,
         control_flow::BranchKind,
+        data::Freeze,
         evm::{
             EvmCalldataSize, EvmCodeSize, EvmExtCodeSize, EvmMalloc, EvmMsize, EvmReturnDataSize,
         },
@@ -273,61 +274,198 @@ fn edge_guard_relations(
     dom: &DomTree,
     child: BlockId,
     definedness: &mut FxHashMap<ValueId, bool>,
-) -> SmallVec<[(ValueId, ValueId); 2]> {
-    let Some(parent) = dom.idom_of(child) else {
-        return SmallVec::new();
-    };
-    let mut predecessors = cfg.preds_of(child).copied();
-    if predecessors.next() != Some(parent) || predecessors.next().is_some() {
-        return SmallVec::new();
-    }
-    let Some(branch) = func
-        .layout
-        .last_inst_of(parent)
-        .and_then(|term| func.dfg.branch_info(term))
-    else {
-        return SmallVec::new();
-    };
-    let BranchKind::Br(br) = branch.branch_kind() else {
-        return SmallVec::new();
-    };
-    if br.nz_dest() == br.z_dest() {
-        return SmallVec::new();
-    }
-    let condition = *br.cond();
-    let Some(inst) = func.dfg.value_inst(condition) else {
-        return SmallVec::new();
-    };
-    let InstClassKind::Binary(kind) = func.dfg.inst(inst).kind() else {
-        return SmallVec::new();
-    };
-    let args = func.dfg.inst(inst).collect_values();
-    let [a, b] = args.as_slice() else {
+) -> EdgeRelations {
+    let Some((compare, relations)) = edge_relations(func, cfg, dom, child) else {
         return SmallVec::new();
     };
     // An undef choice cannot establish a reusable relation. Include intrinsic
     // undef producers (such as generic division by a possibly zero divisor),
     // transitive dependencies, and cyclic phis via the shared definedness analysis.
-    // Parameters, calls, and reads need evidence this edge-local proof does not have.
-    if value_may_be_undef(func, condition, definedness, |value| {
-        match func.dfg.value(value) {
-            Value::Arg { .. } => Some(true),
-            Value::Inst { inst, .. } => requires_definedness_evidence(func, *inst).then_some(true),
-            _ => None,
-        }
-    }) {
+    // Parameters, calls, and reads need evidence this edge-local proof does not
+    // have; `freeze_subtraction_guards` freezes such operands.
+    let condition = func
+        .dfg
+        .inst_result(compare)
+        .expect("a comparison has a result");
+    if may_be_undef_without_evidence(func, condition, definedness) {
         return SmallVec::new();
     }
+    relations
+}
+
+/// `lhs >= rhs` pairs a branch edge proves.
+type EdgeRelations = SmallVec<[(ValueId, ValueId); 2]>;
+
+/// The comparison a single-predecessor dominator child's entering branch
+/// tests, and the `lhs >= rhs` pairs its edge proves.
+fn edge_relations(
+    func: &Function,
+    cfg: &ControlFlowGraph,
+    dom: &DomTree,
+    child: BlockId,
+) -> Option<(InstId, EdgeRelations)> {
+    let parent = dom.idom_of(child)?;
+    let mut predecessors = cfg.preds_of(child).copied();
+    if predecessors.next() != Some(parent) || predecessors.next().is_some() {
+        return None;
+    }
+    let branch = func
+        .layout
+        .last_inst_of(parent)
+        .and_then(|term| func.dfg.branch_info(term))?;
+    let BranchKind::Br(br) = branch.branch_kind() else {
+        return None;
+    };
+    if br.nz_dest() == br.z_dest() {
+        return None;
+    }
+    let inst = func.dfg.value_inst(*br.cond())?;
+    let InstClassKind::Binary(kind) = func.dfg.inst(inst).kind() else {
+        return None;
+    };
+    let args = func.dfg.inst(inst).collect_values();
+    let [a, b] = args.as_slice() else {
+        return None;
+    };
     // Deliberately unsigned and pairwise, with exact SSA operand identity.
     // No transitivity, signed reinterpretation or changed loop operands.
-    match (kind, *br.nz_dest() == child) {
+    let relations = match (kind, *br.nz_dest() == child) {
         (BinaryInstKind::Lt | BinaryInstKind::Le, true)
         | (BinaryInstKind::Gt | BinaryInstKind::Ge, false) => smallvec![(*b, *a)],
         (BinaryInstKind::Lt | BinaryInstKind::Le, false)
         | (BinaryInstKind::Gt | BinaryInstKind::Ge, true) => smallvec![(*a, *b)],
         (BinaryInstKind::Eq, true) | (BinaryInstKind::Ne, false) => smallvec![(*a, *b), (*b, *a)],
-        _ => SmallVec::new(),
+        _ => return None,
+    };
+    Some((inst, relations))
+}
+
+/// Rewrites every use of `value` that `freeze` dominates, starting with the
+/// comparison it precedes, to `frozen`, so later reasoning sees one value.
+fn use_frozen_below(
+    func: &mut Function,
+    dom: &DomTree,
+    value: ValueId,
+    freeze: InstId,
+    frozen: ValueId,
+) {
+    let block = func.layout.inst_block(freeze);
+    let after: FxHashSet<InstId> = iter::successors(func.layout.next_inst_of(freeze), |&inst| {
+        func.layout.next_inst_of(inst)
+    })
+    .collect();
+    let users: Vec<_> = func
+        .dfg
+        .users(value)
+        .copied()
+        .filter(|&user| user != freeze && func.layout.is_inst_inserted(user))
+        .collect();
+    for user in users {
+        if func.dfg.is_phi(user) {
+            func.dfg.edit_phi(user, |phi| {
+                for (input, from) in phi.args_mut() {
+                    if *input == value && dom.dominates(block, *from) {
+                        *input = frozen;
+                    }
+                }
+            });
+            continue;
+        }
+        let user_block = func.layout.inst_block(user);
+        if user_block == block && !after.contains(&user)
+            || user_block != block && !dom.dominates(block, user_block)
+        {
+            continue;
+        }
+        let mut data = func.dfg.clone_inst(user);
+        data.for_each_value_mut(&mut |operand| {
+            if *operand == value {
+                *operand = frozen;
+            }
+        });
+        func.dfg.replace_inst(user, data);
     }
+}
+
+/// Whether `value` may be undef without evidence for its parameters, calls
+/// and memory reads, which a guard cannot take on trust.
+fn may_be_undef_without_evidence(
+    func: &Function,
+    value: ValueId,
+    definedness: &mut FxHashMap<ValueId, bool>,
+) -> bool {
+    value_may_be_undef(func, value, definedness, |value| {
+        match func.dfg.value(value) {
+            Value::Arg { .. } => Some(true),
+            Value::Inst { inst, .. } => requires_definedness_evidence(func, *inst).then_some(true),
+            _ => None,
+        }
+    })
+}
+
+/// Freezes the possibly undefined operands of each comparison whose branch
+/// guards a `sub` or `usubo` of the same values, and has every use the
+/// freeze dominates use the frozen value, so the relation the branch proves
+/// holds for the comparison and the subtractions even if a later pass makes
+/// an operand undef.
+pub(crate) fn freeze_subtraction_guards(
+    func: &mut Function,
+    cfg: &ControlFlowGraph,
+    dom: &DomTree,
+) -> bool {
+    let mut compares = Vec::new();
+    let mut definedness = FxHashMap::default();
+    for child in func.layout.iter_block() {
+        let Some((compare, relations)) = edge_relations(func, cfg, dom, child) else {
+            continue;
+        };
+        if compares.contains(&compare)
+            || !func
+                .dfg
+                .inst(compare)
+                .collect_values()
+                .iter()
+                .any(|&operand| may_be_undef_without_evidence(func, operand, &mut definedness))
+        {
+            continue;
+        }
+        let guards_subtraction = func
+            .layout
+            .iter_block()
+            .filter(|&block| dom.dominates(child, block))
+            .flat_map(|block| func.layout.iter_inst(block))
+            .any(|inst| {
+                is_sub(func, inst)
+                    && matches!(func.dfg.inst(inst).collect_values().as_slice(),
+                        [lhs, rhs] if relations.contains(&(*lhs, *rhs)))
+            });
+        if guards_subtraction {
+            compares.push(compare);
+        }
+    }
+
+    for &compare in &compares {
+        for operand in func.dfg.inst(compare).collect_values() {
+            if !may_be_undef_without_evidence(func, operand, &mut definedness) {
+                continue;
+            }
+            let freeze = func
+                .dfg
+                .make_inst(Freeze::new_unchecked(func.inst_set(), operand));
+            let frozen = func.dfg.make_value(Value::Inst {
+                inst: freeze,
+                result_idx: 0,
+                ty: func.dfg.value_ty(operand),
+            });
+            func.dfg.attach_result(freeze, frozen);
+            func.layout.insert_inst_before(freeze, compare);
+            func.propagate_inst_attribution(freeze, compare);
+            use_frozen_below(func, dom, operand, freeze, frozen);
+            // Rewritten users may now be defined.
+            definedness.clear();
+        }
+    }
+    !compares.is_empty()
 }
 
 impl RangeFact {
@@ -494,6 +632,13 @@ fn transfer_inst(
         }
         InstClassKind::Binary(kind) => {
             transfer_binary_inst(func, env, inst, kind, guarded_subs.contains(&inst))
+        }
+        // A frozen value is one of its argument's.
+        _ if let Some(freeze) = func.dfg.downcast::<&Freeze>(inst)
+            && let Some(result) = func.dfg.inst_result(inst) =>
+        {
+            let fact = fact_for_value(func, env, *freeze.arg());
+            set_env_fact(func, env, result, fact);
         }
         _ => match evm_byte_len_fact(func, inst) {
             Some((result, fact)) => set_env_fact(func, env, result, fact),

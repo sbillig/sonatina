@@ -38,7 +38,9 @@ pub(crate) fn value_may_be_undef(
             continue;
         }
         stack.push((value, true));
-        if let Value::Inst { inst, .. } = func.dfg.value(value) {
+        if let Value::Inst { inst, .. } = func.dfg.value(value)
+            && !is_freeze(func, *inst)
+        {
             for used in func.dfg.inst(*inst).collect_values().into_iter().rev() {
                 if cache.contains_key(&used) {
                     continue;
@@ -54,11 +56,18 @@ pub(crate) fn value_may_be_undef(
     cache.get(&value).copied().unwrap_or(true)
 }
 
+fn is_freeze(func: &Function, inst: InstId) -> bool {
+    func.dfg.downcast::<&data::Freeze>(inst).is_some()
+}
+
 fn inst_result_may_be_undef(
     func: &Function,
     inst: InstId,
     cache: &FxHashMap<ValueId, bool>,
 ) -> bool {
+    if is_freeze(func, inst) {
+        return false;
+    }
     let inst_data = func.dfg.inst(inst);
     let values = inst_data.collect_values();
     if values
