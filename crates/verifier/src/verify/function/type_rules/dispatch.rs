@@ -44,6 +44,7 @@ impl_unary_integral_same_rule!(
     arith::Neg => "neg",
     logic::Not => "not",
     data::BlackBox => "black_box",
+    data::Freeze => "freeze",
 );
 
 impl VerifyInst for logic::Bswap {
