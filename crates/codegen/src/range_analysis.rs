@@ -340,15 +340,33 @@ fn edge_relations(
     Some((inst, relations))
 }
 
-/// Rewrites every use of `value` that `freeze` dominates, starting with the
-/// comparison it precedes, to `frozen`, so later reasoning sees one value.
-fn use_frozen_below(
-    func: &mut Function,
-    dom: &DomTree,
-    value: ValueId,
-    freeze: InstId,
-    frozen: ValueId,
-) {
+/// Has every use of each `freeze`'s operand that the freeze dominates use its
+/// result instead. Passes that merge values, such as GVN replacing a reload
+/// with the load a guard froze, add uses of the unfrozen operand below the
+/// freeze, which separate the values a guard's relation names.
+pub(crate) fn use_frozen_values(func: &mut Function, dom: &DomTree) -> bool {
+    let freezes: Vec<_> = func
+        .layout
+        .iter_block()
+        .flat_map(|block| func.layout.iter_inst(block))
+        .filter(|&inst| func.dfg.downcast::<&Freeze>(inst).is_some())
+        .collect();
+    let mut changed = false;
+    for freeze in freezes {
+        changed |= use_frozen_below(func, dom, freeze);
+    }
+    changed
+}
+
+/// Rewrites every use of `freeze`'s operand that `freeze` dominates to its
+/// result, so later reasoning sees one value.
+fn use_frozen_below(func: &mut Function, dom: &DomTree, freeze: InstId) -> bool {
+    let value = *func
+        .dfg
+        .downcast::<&Freeze>(freeze)
+        .expect("a freeze")
+        .arg();
+    let frozen = func.dfg.inst_result(freeze).expect("a freeze has a result");
     let block = func.layout.inst_block(freeze);
     let after: FxHashSet<InstId> = iter::successors(func.layout.next_inst_of(freeze), |&inst| {
         func.layout.next_inst_of(inst)
@@ -360,14 +378,18 @@ fn use_frozen_below(
         .copied()
         .filter(|&user| user != freeze && func.layout.is_inst_inserted(user))
         .collect();
+    let mut changed = false;
     for user in users {
         if func.dfg.is_phi(user) {
-            func.dfg.edit_phi(user, |phi| {
+            changed |= func.dfg.edit_phi(user, |phi| {
+                let mut edited = false;
                 for (input, from) in phi.args_mut() {
                     if *input == value && dom.dominates(block, *from) {
                         *input = frozen;
+                        edited = true;
                     }
                 }
+                edited
             });
             continue;
         }
@@ -384,7 +406,9 @@ fn use_frozen_below(
             }
         });
         func.dfg.replace_inst(user, data);
+        changed = true;
     }
+    changed
 }
 
 /// Whether `value` may be undef without evidence for its parameters, calls
@@ -407,12 +431,13 @@ fn may_be_undef_without_evidence(
 /// guards a `sub` or `usubo` of the same values, and has every use the
 /// freeze dominates use the frozen value, so the relation the branch proves
 /// holds for the comparison and the subtractions even if a later pass makes
-/// an operand undef.
+/// an operand undef. Uses added below earlier freezes move to them first.
 pub(crate) fn freeze_subtraction_guards(
     func: &mut Function,
     cfg: &ControlFlowGraph,
     dom: &DomTree,
 ) -> bool {
+    let refrozen = use_frozen_values(func, dom);
     let mut compares = Vec::new();
     let mut definedness = FxHashMap::default();
     for child in func.layout.iter_block() {
@@ -460,12 +485,12 @@ pub(crate) fn freeze_subtraction_guards(
             func.dfg.attach_result(freeze, frozen);
             func.layout.insert_inst_before(freeze, compare);
             func.propagate_inst_attribution(freeze, compare);
-            use_frozen_below(func, dom, operand, freeze, frozen);
+            use_frozen_below(func, dom, freeze);
             // Rewritten users may now be defined.
             definedness.clear();
         }
     }
-    !compares.is_empty()
+    refrozen || !compares.is_empty()
 }
 
 impl RangeFact {
