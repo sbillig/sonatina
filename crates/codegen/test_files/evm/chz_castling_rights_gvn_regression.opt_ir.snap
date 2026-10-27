@@ -30,30 +30,30 @@ func private %main_root() {
         v149.*i8 = alloca i8;
         mstore v149 7.i8 i8;
         v151.i256 = ptr_to_int v149 i256;
-        jump block32;
+        jump block30;
 
     block30:
+        v152.i8 = mload v149 i8;
+        v154.i1 = gt v152 1.i8;
+        br v154 block31 block40;
+
+    block31:
         v155.i256 = mload v151 i256;
         v156.i8 = trunc v155 i8;
         (v157.i8, v158.i1) = usubo v156 1.i8;
-        br v158 block31 block33;
+        br v158 block32 block33;
 
-    block31:
+    block32:
         mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
         mstore 4.i256 17.i256 i256;
         evm_revert 0.i256 36.i256;
-
-    block32:
-        v152.i8 = mload v149 i8;
-        v154.i1 = gt v152 1.i8;
-        br v154 block30 block40;
 
     block33:
         v159.i256 = zext v157 i256;
         mstore v151 v159 i256;
         v160.i8 = mload v149 i8;
         (v161.i8, v162.i1) = umulo v160 8.i8;
-        br v162 block31 block35;
+        br v162 block32 block35;
 
     block35:
         v168.i256 = zext v161 i256;
@@ -62,7 +62,7 @@ func private %main_root() {
         v171.i256 = and v170 15.i256;
         v172.i8 = trunc v171 i8;
         v173.i1 = is_zero v172;
-        br v173 block32 block84;
+        br v173 block30 block84;
 
     block40:
         v195.objref<@layout_1> = obj.alloc @layout_1;
@@ -156,10 +156,13 @@ func private %main_root() {
         v290.i1 = extract_value v229 3.i256;
         br v290 block75 block76;
 
+    block74:
+        jump block75;
+
     block75:
-        v427.i256 = phi (0.i256 block73) (0.i256 block76) (512.i256 block92);
+        v438.i256 = phi (0.i256 block73) (512.i256 block74) (0.i256 block76);
         v309.i256 = and v289 -130561.i256;
-        v313.i256 = or v309 v427;
+        v313.i256 = or v309 v438;
         v314.i256 = and v313 -8589803521.i256;
         v317.i256 = or v314 262144.i256;
         v320.i256 = and v317 -2.i256;
@@ -172,7 +175,7 @@ func private %main_root() {
 
     block76:
         v291.i1 = extract_value v229 2.i256;
-        br v291 block75 block92;
+        br v291 block75 block74;
 
     block83:
         v223.@layout_2 = obj.load v8;
@@ -184,9 +187,6 @@ func private %main_root() {
         v177.objref<@layout_0> = enum.proj v8 #Err 0.i256;
         enum.set_tag v177 #BlockedPath;
         jump block83;
-
-    block92:
-        jump block75;
 
     block2:
         v330.@layout_5 = phi (v228 block52) (v326 block75);
