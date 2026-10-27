@@ -11,9 +11,11 @@
 //! backend legalizes `usubo` back into a subtraction and a comparison, so this
 //! pass belongs in native pipelines.
 //!
-//! A difference used in one block stays apart: Cranelift computes it once
-//! there and branches on the comparison's flags, where `usub_overflow`'s
-//! borrow would take a `setb` and a `test` before the branch.
+//! A difference used in only a few blocks stays apart: Cranelift computes it
+//! in each and branches on the comparison's flags, where `usub_overflow`'s
+//! borrow would take a `setb` and a `test` before the branch. A guard that
+//! exits a loop, for example, uses its difference on the back edge and on
+//! the exit.
 
 use std::iter;
 
@@ -24,6 +26,10 @@ use sonatina_ir::{
 };
 
 use crate::domtree::DomTree;
+
+/// The fewest blocks using a difference for which one `usubo` is cheaper
+/// than a subtraction in each.
+const MIN_USE_BLOCKS: usize = 4;
 
 #[derive(Default)]
 pub struct CompareSubFusion;
@@ -71,7 +77,7 @@ impl CompareSubFusion {
                     use_blocks(func, result)
                 })
                 .collect();
-            if use_blocks.len() < 2 {
+            if use_blocks.len() < MIN_USE_BLOCKS {
                 continue;
             }
 
