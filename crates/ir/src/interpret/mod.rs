@@ -81,6 +81,7 @@ pub trait Interpret {
         inst::data::Mload,
         inst::data::Mstore,
         inst::data::BlackBox,
+        inst::data::Freeze,
         inst::data::Gep,
         inst::data::GetFunctionPtr,
         inst::data::Alloca,
