@@ -133,8 +133,9 @@ pub struct BlackBox {
 }
 
 /// Returns `arg` with one fixed value: where `arg` is undefined, every use of
-/// the result still sees the same, arbitrary value. Code that relies on two
-/// uses agreeing, such as a comparison guarding a subtraction, freezes them.
+/// the result still sees the same, arbitrary value. Memory reads, call results
+/// and parameters are never undefined, so a transform that replaces one with
+/// a value that may be undefined freezes that value.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
 pub struct Freeze {
     arg: ValueId,
