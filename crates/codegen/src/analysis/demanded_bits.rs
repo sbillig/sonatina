@@ -164,27 +164,26 @@ impl<'a> DemandedBitsQuery<'a> {
             }
             BinaryInstKind::Shl => {
                 self.add_demand(*lhs, type_mask_or_zero(self.func, *lhs), worklist, queued);
-                if let Some(shift) = constant_shift(self.func, *lhs) {
-                    self.add_demand(*rhs, demand >> shift.as_usize(), worklist, queued);
+                if let Some(shift) = shift_amount(self.func, *lhs, *rhs) {
+                    self.add_demand(*rhs, demand >> shift, worklist, queued);
                 } else {
                     self.add_demand(*rhs, type_mask_or_zero(self.func, *rhs), worklist, queued);
                 }
             }
             BinaryInstKind::Shr => {
                 self.add_demand(*lhs, type_mask_or_zero(self.func, *lhs), worklist, queued);
-                if let Some(shift) = constant_shift(self.func, *lhs) {
-                    self.add_demand(*rhs, demand << shift.as_usize(), worklist, queued);
+                if let Some(shift) = shift_amount(self.func, *lhs, *rhs) {
+                    self.add_demand(*rhs, demand << shift, worklist, queued);
                 } else {
                     self.add_demand(*rhs, type_mask_or_zero(self.func, *rhs), worklist, queued);
                 }
             }
             BinaryInstKind::Sar => {
                 self.add_demand(*lhs, type_mask_or_zero(self.func, *lhs), worklist, queued);
-                if let Some(shift) = constant_shift(self.func, *lhs) {
+                if let Some(shift) = shift_amount(self.func, *lhs, *rhs) {
                     let rhs_ty = self.func.dfg.value_ty(*rhs);
                     let rhs_mask = type_mask_or_zero(self.func, *rhs);
                     let rhs_bits = type_bits(rhs_ty);
-                    let shift = shift.as_usize();
                     let shifted = (demand << shift) & rhs_mask;
                     self.add_demand(*rhs, shifted, worklist, queued);
                     let fill_mask = rhs_mask & !low_mask(rhs_bits.saturating_sub(shift as u16));
@@ -330,6 +329,18 @@ fn constant_shift(func: &Function, value: ValueId) -> Option<U256> {
     Some(func.dfg.value_imm(value)?.as_i256().to_u256())
 }
 
+/// A constant shift of `value`, clamped to its width: shifting by the width
+/// or more already shifts every bit out.
+fn shift_amount(func: &Function, shift: ValueId, value: ValueId) -> Option<usize> {
+    let ty = func.dfg.value_ty(value);
+    let width = supports_known_bits(ty).then(|| type_bits(ty))?;
+    Some(
+        constant_shift(func, shift)?
+            .min(U256::from(width))
+            .as_usize(),
+    )
+}
+
 fn type_mask_or_zero(func: &Function, value: ValueId) -> U256 {
     let ty = func.dfg.value_ty(value);
     if supports_known_bits(ty) {
@@ -345,7 +356,7 @@ mod tests {
         Function, I256, Type,
         builder::test_util::*,
         inst::{
-            arith::Shr,
+            arith::{Sar, Shl, Shr},
             cast::{Trunc, Zext},
             control_flow::Return,
             evm::EvmSignExtend,
@@ -423,5 +434,28 @@ mod tests {
     fn only_func(mb: &sonatina_ir::builder::ModuleBuilder) -> Function {
         let func_ref = mb.func_store.funcs()[0];
         mb.func_store.view(func_ref, |func| func.clone())
+    }
+    #[test]
+    fn shifts_by_more_than_u64_demand_only_the_sign_fill() {
+        let mb = test_module_builder();
+        let (evm, mut builder) = test_func_builder(&mb, &[Type::I256], Type::I256);
+        let is = evm.inst_set();
+        let block = builder.append_block();
+        builder.switch_to_block(block);
+        let arg = builder.args()[0];
+        let shift = builder.make_imm_value(sonatina_ir::Immediate::from_i256(
+            I256::from(U256::one() << 64usize),
+            Type::I256,
+        ));
+        let shl = builder.insert_inst_with(|| Shl::new(is, shift, arg), Type::I256);
+        let sar = builder.insert_inst_with(|| Sar::new(is, shift, shl), Type::I256);
+        builder.insert_inst_no_result_with(|| Return::new_single(is, sar));
+        builder.seal_all();
+        builder.finish();
+
+        let func = only_func(&mb);
+        let query = DemandedBitsQuery::new(&func);
+        assert_eq!(query.for_value(shl), U256::one() << 255usize);
+        assert_eq!(query.for_value(arg), U256::zero());
     }
 }

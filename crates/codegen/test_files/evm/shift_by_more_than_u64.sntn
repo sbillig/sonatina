@@ -1,0 +1,24 @@
+#! evm.config: { opt: 1 }
+#! evm.case: shifted_out
+#!   calldata: u256(7)
+#!   expect: return u256(0) u256(0)
+
+target = "evm-ethereum-osaka"
+
+# Demanded-bits analysis ran on these constant shift amounts above u64::MAX
+# at O1 and panicked converting them.
+func public %main() {
+block0:
+    v0.i256 = evm_calldata_load 0.i256;
+    v1.i256 = shl 0x10000000000000000.i256 v0;
+    v2.i256 = sar 0x10000000000000000.i256 v0;
+    mstore 0.i256 v1 i256;
+    mstore 32.i256 v2 i256;
+    evm_return 0.i256 64.i256;
+}
+
+object @Contract {
+    section runtime {
+        entry %main;
+    }
+}
