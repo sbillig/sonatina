@@ -1,0 +1,17 @@
+#! Constant shift amounts wider than 64 bits shift out every bit; demanded-bits analysis saturates them.
+
+target = "evm-ethereum-osaka"
+
+# sameln: func public %wide_shifts(v0.i256) -> i256 {
+# check: v1.i256 = shl 18446744073709551616.i256 v0;
+# check: v6.i256 = and v5 255.i256;
+func public %wide_shifts(v0.i256) -> i256 {
+block0:
+    v1.i256 = shl 0x10000000000000000.i256 v0;
+    v2.i256 = shr 0x8000000000000000000000000000000000000000000000000000000000000000.i256 v0;
+    v3.i256 = sar 0x10000000000000000.i256 v0;
+    v4.i256 = or v1 v2;
+    v5.i256 = or v4 v3;
+    v6.i256 = and v5 255.i256;
+    return v6;
+}

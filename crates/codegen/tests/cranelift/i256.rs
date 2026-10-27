@@ -359,15 +359,8 @@ fn i256_shifts_match_reference_for_variable_and_constant_amounts() {
             |[value, amount, _]| (shifted(op, value, amount), false),
         );
         for &amount in &amounts {
-            // The optimizer's demanded-bits analysis panics on constant
-            // shift amounts above `u64::MAX`, so those run unoptimized.
-            let levels: &[OptLevel] = if amount > U256::from(u64::MAX) {
-                &[OptLevel::O0]
-            } else {
-                LEVELS
-            };
             check_at(
-                levels,
+                LEVELS,
                 &apply_source(&format!(
                     "    v7.i256 = {op} 0x{amount:x}.i256 v4;\n    mstore v3 v7 i256;\n    return 0.i8;"
                 )),

@@ -326,8 +326,16 @@ impl<'a> DemandedBitsQuery<'a> {
     }
 }
 
+/// A constant shift amount or byte index, saturated at 256: larger amounts
+/// shift out every bit of any value, so they demand the same bits.
 fn constant_shift(func: &Function, value: ValueId) -> Option<U256> {
-    Some(func.dfg.value_imm(value)?.as_i256().to_u256())
+    Some(
+        func.dfg
+            .value_imm(value)?
+            .as_i256()
+            .to_u256()
+            .min(U256::from(256)),
+    )
 }
 
 fn type_mask_or_zero(func: &Function, value: ValueId) -> U256 {
