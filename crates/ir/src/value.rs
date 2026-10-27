@@ -74,7 +74,8 @@ pub enum Value {
     Global { gv: GlobalVariableRef, ty: Type },
 
     /// Any value of `ty`, chosen separately at each use; `freeze` fixes one
-    /// choice for every use of its result.
+    /// choice for every use of its result. Undef never crosses memory or a
+    /// call: storing, passing or returning it gives one arbitrary value.
     Undef { ty: Type },
 }
 

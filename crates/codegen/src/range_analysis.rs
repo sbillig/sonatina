@@ -1,4 +1,4 @@
-use std::{collections::VecDeque, iter};
+use std::collections::VecDeque;
 
 use cranelift_entity::SecondaryMap;
 use rustc_hash::{FxHashMap, FxHashSet};
@@ -17,7 +17,7 @@ use sonatina_ir::{
 };
 
 use crate::{
-    analysis::definedness::{requires_definedness_evidence, value_may_be_undef},
+    analysis::definedness::maybe_undef_values,
     domtree::{DomTree, DominatorTreeTraversable},
     loop_analysis::LoopTree,
 };
@@ -39,6 +39,7 @@ pub struct RangeAnalysis {
     reachable: SecondaryMap<BlockId, bool>,
     initialized: SecondaryMap<BlockId, bool>,
     guarded_subs: FxHashSet<InstId>,
+    maybe_undef: FxHashSet<ValueId>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -71,7 +72,8 @@ impl RangeAnalysis {
         self.exit_envs.clear();
         self.reachable.clear();
         self.initialized.clear();
-        self.guarded_subs = guarded_subtractions(func, cfg, dom);
+        self.maybe_undef = maybe_undef_values(func);
+        self.guarded_subs = guarded_subtractions(func, cfg, dom, &self.maybe_undef);
 
         let Some(entry) = cfg.entry() else {
             return;
@@ -99,9 +101,15 @@ impl RangeAnalysis {
             let old_reachable = self.reachable[block];
             let old_initialized = self.initialized[block];
 
-            let Some(mut new_entry) =
-                compute_block_entry(func, cfg, block, entry, &self.exit_envs, &self.reachable)
-            else {
+            let Some(mut new_entry) = compute_block_entry(
+                func,
+                cfg,
+                block,
+                entry,
+                &self.exit_envs,
+                &self.reachable,
+                &self.maybe_undef,
+            ) else {
                 if old_reachable || old_initialized {
                     self.reachable[block] = false;
                     self.initialized[block] = false;
@@ -130,7 +138,13 @@ impl RangeAnalysis {
             self.reachable[block] = true;
             self.initialized[block] = true;
 
-            let new_exit = simulate_block_from_entry(func, block, &new_entry, &self.guarded_subs);
+            let new_exit = simulate_block_from_entry(
+                func,
+                block,
+                &new_entry,
+                &self.guarded_subs,
+                &self.maybe_undef,
+            );
             let exit_changed = new_exit != self.exit_envs[block];
             if exit_changed {
                 self.exit_envs[block] = new_exit;
@@ -154,9 +168,15 @@ impl RangeAnalysis {
                 if !self.reachable[block] {
                     continue;
                 }
-                let Some(new_entry) =
-                    compute_block_entry(func, cfg, block, entry, &self.exit_envs, &self.reachable)
-                else {
+                let Some(new_entry) = compute_block_entry(
+                    func,
+                    cfg,
+                    block,
+                    entry,
+                    &self.exit_envs,
+                    &self.reachable,
+                    &self.maybe_undef,
+                ) else {
                     self.reachable[block] = false;
                     self.initialized[block] = false;
                     self.entry_envs[block].clear();
@@ -167,8 +187,13 @@ impl RangeAnalysis {
                 if new_entry == self.entry_envs[block] {
                     continue;
                 }
-                self.exit_envs[block] =
-                    simulate_block_from_entry(func, block, &new_entry, &self.guarded_subs);
+                self.exit_envs[block] = simulate_block_from_entry(
+                    func,
+                    block,
+                    &new_entry,
+                    &self.guarded_subs,
+                    &self.maybe_undef,
+                );
                 self.entry_envs[block] = new_entry;
                 changed = true;
             }
@@ -196,8 +221,13 @@ impl RangeAnalysis {
         self.guarded_subs.contains(&inst)
     }
 
+    /// Values that may be undef, whose uses no branch constrains together.
+    pub(crate) fn maybe_undef(&self) -> &FxHashSet<ValueId> {
+        &self.maybe_undef
+    }
+
     pub(crate) fn transfer_inst(&self, func: &Function, env: &mut RangeEnv, inst: InstId) {
-        transfer_inst(func, env, inst, &self.guarded_subs);
+        transfer_inst(func, env, inst, &self.guarded_subs, &self.maybe_undef);
     }
 }
 
@@ -208,6 +238,7 @@ fn guarded_subtractions(
     func: &Function,
     cfg: &ControlFlowGraph,
     dom: &DomTree,
+    maybe_undef: &FxHashSet<ValueId>,
 ) -> FxHashSet<InstId> {
     let mut guarded = FxHashSet::default();
     let Some(entry) = func.layout.entry_block() else {
@@ -223,7 +254,6 @@ fn guarded_subtractions(
 
     let mut tree = DominatorTreeTraversable::default();
     tree.compute(dom);
-    let mut definedness = FxHashMap::default();
     let mut guards = FxHashMap::<(ValueId, ValueId), usize>::default();
     let mut pending = vec![(entry, None)];
     while let Some((block, exiting)) = pending.pop() {
@@ -237,7 +267,7 @@ fn guarded_subtractions(
             }
             continue;
         }
-        let relations = edge_guard_relations(func, cfg, dom, block, &mut definedness);
+        let relations = edge_guard_relations(func, cfg, dom, block, maybe_undef);
         for &relation in &relations {
             *guards.entry(relation).or_default() += 1;
         }
@@ -273,21 +303,17 @@ fn edge_guard_relations(
     cfg: &ControlFlowGraph,
     dom: &DomTree,
     child: BlockId,
-    definedness: &mut FxHashMap<ValueId, bool>,
+    maybe_undef: &FxHashSet<ValueId>,
 ) -> EdgeRelations {
     let Some((compare, relations)) = edge_relations(func, cfg, dom, child) else {
         return SmallVec::new();
     };
-    // An undef choice cannot establish a reusable relation. Include intrinsic
-    // undef producers (such as generic division by a possibly zero divisor),
-    // transitive dependencies, and cyclic phis via the shared definedness analysis.
-    // Parameters, calls, and reads need evidence this edge-local proof does not
-    // have; `freeze_subtraction_guards` freezes such operands.
+    // An undef choice cannot establish a reusable relation.
     let condition = func
         .dfg
         .inst_result(compare)
         .expect("a comparison has a result");
-    if may_be_undef_without_evidence(func, condition, definedness) {
+    if maybe_undef.contains(&condition) {
         return SmallVec::new();
     }
     relations
@@ -338,159 +364,6 @@ fn edge_relations(
         _ => return None,
     };
     Some((inst, relations))
-}
-
-/// Has every use of each `freeze`'s operand that the freeze dominates use its
-/// result instead. Passes that merge values, such as GVN replacing a reload
-/// with the load a guard froze, add uses of the unfrozen operand below the
-/// freeze, which separate the values a guard's relation names.
-pub(crate) fn use_frozen_values(func: &mut Function, dom: &DomTree) -> bool {
-    let freezes: Vec<_> = func
-        .layout
-        .iter_block()
-        .flat_map(|block| func.layout.iter_inst(block))
-        .filter(|&inst| func.dfg.downcast::<&Freeze>(inst).is_some())
-        .collect();
-    let mut changed = false;
-    for freeze in freezes {
-        changed |= use_frozen_below(func, dom, freeze);
-    }
-    changed
-}
-
-/// Rewrites every use of `freeze`'s operand that `freeze` dominates to its
-/// result, so later reasoning sees one value.
-fn use_frozen_below(func: &mut Function, dom: &DomTree, freeze: InstId) -> bool {
-    let value = *func
-        .dfg
-        .downcast::<&Freeze>(freeze)
-        .expect("a freeze")
-        .arg();
-    let frozen = func.dfg.inst_result(freeze).expect("a freeze has a result");
-    let block = func.layout.inst_block(freeze);
-    let after: FxHashSet<InstId> = iter::successors(func.layout.next_inst_of(freeze), |&inst| {
-        func.layout.next_inst_of(inst)
-    })
-    .collect();
-    let users: Vec<_> = func
-        .dfg
-        .users(value)
-        .copied()
-        .filter(|&user| user != freeze && func.layout.is_inst_inserted(user))
-        .collect();
-    let mut changed = false;
-    for user in users {
-        if func.dfg.is_phi(user) {
-            changed |= func.dfg.edit_phi(user, |phi| {
-                let mut edited = false;
-                for (input, from) in phi.args_mut() {
-                    if *input == value && dom.dominates(block, *from) {
-                        *input = frozen;
-                        edited = true;
-                    }
-                }
-                edited
-            });
-            continue;
-        }
-        let user_block = func.layout.inst_block(user);
-        if user_block == block && !after.contains(&user)
-            || user_block != block && !dom.dominates(block, user_block)
-        {
-            continue;
-        }
-        let mut data = func.dfg.clone_inst(user);
-        data.for_each_value_mut(&mut |operand| {
-            if *operand == value {
-                *operand = frozen;
-            }
-        });
-        func.dfg.replace_inst(user, data);
-        changed = true;
-    }
-    changed
-}
-
-/// Whether `value` may be undef without evidence for its parameters, calls
-/// and memory reads, which a guard cannot take on trust.
-fn may_be_undef_without_evidence(
-    func: &Function,
-    value: ValueId,
-    definedness: &mut FxHashMap<ValueId, bool>,
-) -> bool {
-    value_may_be_undef(func, value, definedness, |value| {
-        match func.dfg.value(value) {
-            Value::Arg { .. } => Some(true),
-            Value::Inst { inst, .. } => requires_definedness_evidence(func, *inst).then_some(true),
-            _ => None,
-        }
-    })
-}
-
-/// Freezes the possibly undefined operands of each comparison whose branch
-/// guards a `sub` or `usubo` of the same values, and has every use the
-/// freeze dominates use the frozen value, so the relation the branch proves
-/// holds for the comparison and the subtractions even if a later pass makes
-/// an operand undef. Uses added below earlier freezes move to them first.
-pub(crate) fn freeze_subtraction_guards(
-    func: &mut Function,
-    cfg: &ControlFlowGraph,
-    dom: &DomTree,
-) -> bool {
-    let refrozen = use_frozen_values(func, dom);
-    let mut compares = Vec::new();
-    let mut definedness = FxHashMap::default();
-    for child in func.layout.iter_block() {
-        let Some((compare, relations)) = edge_relations(func, cfg, dom, child) else {
-            continue;
-        };
-        if compares.contains(&compare)
-            || !func
-                .dfg
-                .inst(compare)
-                .collect_values()
-                .iter()
-                .any(|&operand| may_be_undef_without_evidence(func, operand, &mut definedness))
-        {
-            continue;
-        }
-        let guards_subtraction = func
-            .layout
-            .iter_block()
-            .filter(|&block| dom.dominates(child, block))
-            .flat_map(|block| func.layout.iter_inst(block))
-            .any(|inst| {
-                is_sub(func, inst)
-                    && matches!(func.dfg.inst(inst).collect_values().as_slice(),
-                        [lhs, rhs] if relations.contains(&(*lhs, *rhs)))
-            });
-        if guards_subtraction {
-            compares.push(compare);
-        }
-    }
-
-    for &compare in &compares {
-        for operand in func.dfg.inst(compare).collect_values() {
-            if !may_be_undef_without_evidence(func, operand, &mut definedness) {
-                continue;
-            }
-            let freeze = func
-                .dfg
-                .make_inst(Freeze::new_unchecked(func.inst_set(), operand));
-            let frozen = func.dfg.make_value(Value::Inst {
-                inst: freeze,
-                result_idx: 0,
-                ty: func.dfg.value_ty(operand),
-            });
-            func.dfg.attach_result(freeze, frozen);
-            func.layout.insert_inst_before(freeze, compare);
-            func.propagate_inst_attribution(freeze, compare);
-            use_frozen_below(func, dom, freeze);
-            // Rewritten users may now be defined.
-            definedness.clear();
-        }
-    }
-    refrozen || !compares.is_empty()
 }
 
 impl RangeFact {
@@ -631,13 +504,14 @@ fn simulate_block_from_entry(
     block: BlockId,
     entry: &RangeEnv,
     guarded_subs: &FxHashSet<InstId>,
+    maybe_undef: &FxHashSet<ValueId>,
 ) -> RangeEnv {
     let mut env = entry.clone();
     for inst in func.layout.iter_inst(block) {
         if func.dfg.is_phi(inst) {
             continue;
         }
-        transfer_inst(func, &mut env, inst, guarded_subs);
+        transfer_inst(func, &mut env, inst, guarded_subs, maybe_undef);
     }
     env
 }
@@ -647,6 +521,7 @@ fn transfer_inst(
     env: &mut RangeEnv,
     inst: InstId,
     guarded_subs: &FxHashSet<InstId>,
+    maybe_undef: &FxHashSet<ValueId>,
 ) {
     let kind = func.dfg.inst(inst).kind();
     match kind {
@@ -655,12 +530,18 @@ fn transfer_inst(
         InstClassKind::Unary(UnaryInstKind::Not | UnaryInstKind::IsZero) => {
             transfer_bool_unary_inst(func, env, inst, kind)
         }
-        InstClassKind::Binary(kind) => {
-            transfer_binary_inst(func, env, inst, kind, guarded_subs.contains(&inst))
-        }
+        InstClassKind::Binary(kind) => transfer_binary_inst(
+            func,
+            env,
+            inst,
+            kind,
+            guarded_subs.contains(&inst),
+            maybe_undef,
+        ),
         // A frozen value is one of its argument's.
         _ if let Some(freeze) = func.dfg.downcast::<&Freeze>(inst)
-            && let Some(result) = func.dfg.inst_result(inst) =>
+            && let Some(result) = func.dfg.inst_result(inst)
+            && supports_range_facts(func.dfg.value_ty(result)) =>
         {
             let fact = fact_for_value(func, env, *freeze.arg());
             set_env_fact(func, env, result, fact);
@@ -738,6 +619,7 @@ pub(crate) fn condition_truth_in_env(
     func: &Function,
     env: &RangeEnv,
     cond: ValueId,
+    maybe_undef: &FxHashSet<ValueId>,
 ) -> Option<bool> {
     match normalize_condition(func, env, cond) {
         NormalizedCond::Constant(value) => Some(value),
@@ -746,7 +628,9 @@ pub(crate) fn condition_truth_in_env(
             lhs,
             rhs,
             invert,
-        } => compare_truth_in_env(func, env, kind, lhs, rhs).map(|truth| truth ^ invert),
+        } => {
+            compare_truth_in_env(func, env, kind, lhs, rhs, maybe_undef).map(|truth| truth ^ invert)
+        }
         NormalizedCond::ZeroTest { value, invert } => {
             zero_test_truth_in_env(func, env, value).map(|truth| truth ^ invert)
         }
@@ -817,6 +701,7 @@ fn compute_block_entry(
     entry: BlockId,
     exit_envs: &SecondaryMap<BlockId, RangeEnv>,
     reachable: &SecondaryMap<BlockId, bool>,
+    maybe_undef: &FxHashSet<ValueId>,
 ) -> Option<RangeEnv> {
     // Every invocation reaches entry without traversing a CFG predecessor.
     // Joining that unconstrained edge with any backedges leaves no entry facts.
@@ -830,9 +715,18 @@ fn compute_block_entry(
         if !reachable[pred] {
             continue;
         }
-        let Some(refined) = refine_edge(func, pred, block, &exit_envs[pred]) else {
+        let Some(mut refined) = refine_edge(func, pred, block, &exit_envs[pred], maybe_undef)
+        else {
             continue;
         };
+        // A branch constrains the choice its comparison saw, not the other
+        // uses of a value that may be undef.
+        for &value in maybe_undef {
+            match exit_envs[pred].get(&value) {
+                Some(&fact) => refined.insert(value, fact),
+                None => refined.remove(&value),
+            };
+        }
         edge_envs.push((pred, refined));
     }
     let pred_env_index: FxHashMap<_, _> = edge_envs
@@ -907,13 +801,21 @@ fn apply_phi_entry_facts(
     }
 }
 
-fn refine_edge(func: &Function, pred: BlockId, succ: BlockId, env: &RangeEnv) -> Option<RangeEnv> {
+fn refine_edge(
+    func: &Function,
+    pred: BlockId,
+    succ: BlockId,
+    env: &RangeEnv,
+    maybe_undef: &FxHashSet<ValueId>,
+) -> Option<RangeEnv> {
     let term = func.layout.last_inst_of(pred)?;
     let branch = func.dfg.branch_info(term)?;
 
     match branch.branch_kind() {
         BranchKind::Jump(jump) => ((*jump.dest() == succ) as u8 == 1).then(|| env.clone()),
-        BranchKind::Br(br) => refine_br_edge(func, env, *br.cond(), succ == *br.nz_dest()),
+        BranchKind::Br(br) => {
+            refine_br_edge(func, env, *br.cond(), succ == *br.nz_dest(), maybe_undef)
+        }
         BranchKind::BrTable(_) => Some(env.clone()),
     }
 }
@@ -923,6 +825,7 @@ fn refine_br_edge(
     env: &RangeEnv,
     cond: ValueId,
     take_true_edge: bool,
+    maybe_undef: &FxHashSet<ValueId>,
 ) -> Option<RangeEnv> {
     match normalize_condition(func, env, cond) {
         NormalizedCond::Constant(value) => (value == take_true_edge).then(|| env.clone()),
@@ -948,7 +851,15 @@ fn refine_br_edge(
             lhs,
             rhs,
             invert,
-        } => refine_compare_edge(func, env, kind, lhs, rhs, take_true_edge ^ invert),
+        } => refine_compare_edge(
+            func,
+            env,
+            kind,
+            lhs,
+            rhs,
+            take_true_edge ^ invert,
+            maybe_undef,
+        ),
         NormalizedCond::ZeroTest { value, invert } => {
             refine_zero_test_edge(func, env, value, take_true_edge ^ invert)
         }
@@ -1144,20 +1055,21 @@ fn refine_compare_edge(
     lhs: ValueId,
     rhs: ValueId,
     compare_truth: bool,
+    maybe_undef: &FxHashSet<ValueId>,
 ) -> Option<RangeEnv> {
     if !compare_truth {
         return match kind {
             BinaryInstKind::Eq => {
-                refine_compare_edge(func, env, BinaryInstKind::Ne, lhs, rhs, true)
+                refine_compare_edge(func, env, BinaryInstKind::Ne, lhs, rhs, true, maybe_undef)
             }
             BinaryInstKind::Ne => {
-                refine_compare_edge(func, env, BinaryInstKind::Eq, lhs, rhs, true)
+                refine_compare_edge(func, env, BinaryInstKind::Eq, lhs, rhs, true, maybe_undef)
             }
-            _ => refine_compare_edge_impl(func, env, kind, lhs, rhs, compare_truth),
+            _ => refine_compare_edge_impl(func, env, kind, lhs, rhs, compare_truth, maybe_undef),
         };
     }
 
-    refine_compare_edge_impl(func, env, kind, lhs, rhs, compare_truth)
+    refine_compare_edge_impl(func, env, kind, lhs, rhs, compare_truth, maybe_undef)
 }
 
 fn refine_compare_edge_impl(
@@ -1167,8 +1079,9 @@ fn refine_compare_edge_impl(
     lhs: ValueId,
     rhs: ValueId,
     compare_truth: bool,
+    maybe_undef: &FxHashSet<ValueId>,
 ) -> Option<RangeEnv> {
-    if let Some(value) = compare_truth_in_env(func, env, kind, lhs, rhs) {
+    if let Some(value) = compare_truth_in_env(func, env, kind, lhs, rhs, maybe_undef) {
         return (value == compare_truth).then(|| env.clone());
     }
 
@@ -1429,6 +1342,7 @@ fn compare_truth_in_env(
     kind: BinaryInstKind,
     lhs: ValueId,
     rhs: ValueId,
+    maybe_undef: &FxHashSet<ValueId>,
 ) -> Option<bool> {
     let ty = func.dfg.value_ty(lhs);
     if !supports_range_facts(ty) || func.dfg.value_ty(rhs) != ty {
@@ -1436,10 +1350,10 @@ fn compare_truth_in_env(
     }
 
     // Offsets of one base that cannot wrap order the values themselves, as
-    // `len - 1 < len` once `len >= 1`.
+    // `len - 1 < len` once `len >= 1`, if both uses see the same base.
     let (lhs_base, lhs_offset) = unsigned_base_offset(func, env, lhs);
     let (rhs_base, rhs_offset) = unsigned_base_offset(func, env, rhs);
-    if lhs_base == rhs_base {
+    if lhs_base == rhs_base && !maybe_undef.contains(&lhs_base) {
         match kind {
             BinaryInstKind::Lt => return Some(lhs_offset < rhs_offset),
             BinaryInstKind::Le => return Some(lhs_offset <= rhs_offset),
@@ -1505,7 +1419,7 @@ fn compare_truth_in_env(
             }
         }
         BinaryInstKind::Ne => {
-            compare_truth_in_env(func, env, BinaryInstKind::Eq, lhs, rhs).map(|v| !v)
+            compare_truth_in_env(func, env, BinaryInstKind::Eq, lhs, rhs, maybe_undef).map(|v| !v)
         }
         _ => None,
     }
@@ -1686,6 +1600,7 @@ fn transfer_binary_inst(
     inst: InstId,
     kind: BinaryInstKind,
     guarded_sub: bool,
+    maybe_undef: &FxHashSet<ValueId>,
 ) {
     match kind {
         BinaryInstKind::Add => transfer_plain_binary(func, env, inst, plain_add_fact),
@@ -1704,7 +1619,7 @@ fn transfer_binary_inst(
         | BinaryInstKind::EvmUmodo
         | BinaryInstKind::EvmSdivo
         | BinaryInstKind::EvmSmodo => transfer_checked_binary(func, env, inst, kind, guarded_sub),
-        kind if is_compare(kind) => transfer_compare_inst(func, env, inst, kind),
+        kind if is_compare(kind) => transfer_compare_inst(func, env, inst, kind, maybe_undef),
         _ => clear_inst_results(func, env, inst),
     }
 }
@@ -1773,7 +1688,13 @@ fn transfer_checked_binary(
     }
 }
 
-fn transfer_compare_inst(func: &Function, env: &mut RangeEnv, inst: InstId, kind: BinaryInstKind) {
+fn transfer_compare_inst(
+    func: &Function,
+    env: &mut RangeEnv,
+    inst: InstId,
+    kind: BinaryInstKind,
+    maybe_undef: &FxHashSet<ValueId>,
+) {
     let Some(result) = func.dfg.inst_result(inst) else {
         return;
     };
@@ -1782,7 +1703,7 @@ fn transfer_compare_inst(func: &Function, env: &mut RangeEnv, inst: InstId, kind
         return;
     };
 
-    if let Some(value) = compare_truth_in_env(func, env, kind, *lhs, *rhs) {
+    if let Some(value) = compare_truth_in_env(func, env, kind, *lhs, *rhs, maybe_undef) {
         set_env_fact(
             func,
             env,
