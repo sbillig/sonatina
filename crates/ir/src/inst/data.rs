@@ -132,6 +132,14 @@ pub struct BlackBox {
     arg: ValueId,
 }
 
+/// Returns `arg` with one fixed value: where `arg` is undefined, every use of
+/// the result still sees the same, arbitrary value. Code that relies on two
+/// uses agreeing, such as a comparison guarding a subtraction, freezes them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
+pub struct Freeze {
+    arg: ValueId,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Inst)]
 #[inst(arity(at_least(2)))]
 pub struct Gep {

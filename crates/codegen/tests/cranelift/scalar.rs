@@ -309,6 +309,17 @@ block0:
     v6.i64 = xor v3 v4;
     v7.i64 = xor v6 v5;
     return v7;
+fn freeze_passes_values_through_and_fixes_undef() {
+    let source = r#"func public %frozen(v0.i64, v1.*i256, v2.*i256) -> i64 {
+block0:
+    v3.i64 = freeze v0;
+    v4.i256 = mload v1 i256;
+    v5.i256 = freeze v4;
+    mstore v2 v5 i256;
+    v6.i64 = freeze undef.i64;
+    v7.i64 = sub v6 v6;
+    v8.i64 = add v3 v7;
+    return v8;
 }
 "#;
     for level in [OptLevel::O0, OptLevel::O2] {
@@ -334,6 +345,12 @@ block0:
                 );
             }
         }
+        let frozen: unsafe extern "C" fn(i64, *const u64, *mut u64) -> i64 =
+            unsafe { std::mem::transmute(artifact.function_address("frozen").unwrap()) };
+        let input = [1u64, 2, 3, u64::MAX];
+        let mut output = [0u64; 4];
+        let result = unsafe { frozen(-7, input.as_ptr(), output.as_mut_ptr()) };
+        assert_eq!((result, output), (-7, input), "{level:?}");
     }
 }
 
