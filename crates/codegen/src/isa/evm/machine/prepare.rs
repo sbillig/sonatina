@@ -4,6 +4,7 @@ use std::sync::Mutex;
 use tracing::{debug_span, trace_span};
 
 use crate::{
+    cfg_edit::{CfgEditor, CleanupMode},
     domtree::DomTree,
     liveness::{InstLiveness, Liveness},
     module_analysis::CallGraphSchedule,
@@ -177,6 +178,17 @@ fn prepare_machine_stackify_analysis(
     let _span = trace_span!("sonatina.codegen.evm.machine.prepare_stackify_func").entered();
     let mut cfg = ControlFlowGraph::new();
     cfg.compute(function);
+
+    // The prologue (frame entry, DYN_SP initialization and argument spills)
+    // is emitted at the top of the entry block, so a back edge to it would
+    // run the prologue again. Give such a function a fresh entry block.
+    if let Some(entry) = function.layout.entry_block()
+        && cfg.pred_num_of(entry) > 0
+    {
+        let mut editor = CfgEditor::new(function, CleanupMode::Strict);
+        editor.create_or_reuse_loop_preheader(entry, &[]);
+        cfg.clone_from(editor.cfg());
+    }
 
     // `StackifyEdgeSplitter` subsumes critical-edge splitting and additionally splits in-cycle
     // multiway edges, establishing stackify's edge preconditions (see `stackalloc::stackify`).
