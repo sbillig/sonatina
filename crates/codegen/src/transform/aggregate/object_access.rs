@@ -753,6 +753,61 @@ block0:
     }
 
     #[test]
+    fn raw_pointers_entering_objects_or_aggregates_publish_their_roots() {
+        for publish in [
+            "v2.objref<*i256> = obj.alloc *i256;\n    obj.store v2 v1;",
+            "v2.@Holder = insert_value undef.@Holder 0.i256 v1;",
+        ] {
+            check(
+                &format!(
+                    r#"
+target = "evm-ethereum-osaka"
+type @Holder = {{ *i256 }};
+func private %f() {{
+block0:
+    v0.objref<i256> = obj.alloc i256;
+    v1.*i256 = alloca i256;
+    {publish}
+    return;
+}}
+"#
+                ),
+                |_, facts, _| {
+                    assert!(
+                        facts.exposed(RootValue::new(ValueId::from_u32(1))),
+                        "{publish}"
+                    );
+                    assert!(
+                        !facts.exposed(RootValue::new(ValueId::from_u32(0))),
+                        "{publish}"
+                    );
+                },
+            );
+        }
+    }
+
+    #[test]
+    fn raw_pointers_loaded_from_objects_are_external() {
+        check(
+            r#"
+target = "evm-ethereum-osaka"
+func private %f() {
+block0:
+    v0.objref<*i256> = obj.alloc *i256;
+    v1.objref<i256> = obj.alloc i256;
+    v2.*i256 = obj.load v0;
+    return;
+}
+"#,
+            |_, facts, _| {
+                let pointer = &facts.reachability.references[ValueId::from_u32(2)];
+                assert!(pointer.external && !pointer.unknown && pointer.roots.is_empty());
+                assert!(!facts.exposed(RootValue::new(ValueId::from_u32(1))));
+            },
+        );
+    }
+
+    #[test]
     fn integer_pointers_reach_materialized_roots() {
         check(
             r#"

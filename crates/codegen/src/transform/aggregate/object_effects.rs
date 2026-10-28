@@ -2150,6 +2150,33 @@ block0:
     }
 
     #[test]
+    fn raw_pointer_fields_keep_their_holder_local() {
+        let module = parse_test_module(
+            r#"
+target = "evm-ethereum-osaka"
+type @Buffer = { *i8, i256 };
+declare external %release(*i8);
+func private %grow(v0.objref<@Buffer>) {
+block0:
+    v1.objref<*i8> = obj.proj v0 0.i256;
+    v2.*i8 = obj.load v1;
+    call %release v2;
+    v3.*i8 = mem.alloc_dynamic 64.i256;
+    obj.store v1 v3;
+    return;
+}
+"#,
+        );
+        let summaries = compute_object_effect_summaries(&module);
+        let summary = &summaries[&lookup_func(&module, "grow")];
+        // Neither the old buffer passed on nor the new one stored carries a
+        // reference to the holder's contents.
+        assert!(summary.captures.is_empty(), "{:?}", summary.captures);
+        assert!(!summary.arg_effects[0].escapes);
+        assert!(summary.arg_effects[0].local_only);
+    }
+
+    #[test]
     fn aggregate_return_reference_is_not_local_only() {
         let module = parse_test_module(
             r#"
