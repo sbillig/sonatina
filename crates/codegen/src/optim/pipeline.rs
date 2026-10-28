@@ -38,6 +38,7 @@ use super::{
     branch_canonicalize::BranchCanonicalize,
     cfg_cleanup::CfgCleanup,
     checked_arith_elim::{CheckedArithElim, has_supported_checked_arith},
+    compare_sub_fusion::CompareSubFusion,
     code_sink::CodeSink,
     dead_arg::{DeadArgElimConfig, run_dead_arg_elim},
     dead_func::{DeadFuncElimConfig, collect_object_roots, run_dead_func_elim},
@@ -103,6 +104,9 @@ pub enum Pass {
     /// Turn trees of branches on comparisons of one integer with constants into
     /// a `br_table` (native pipelines only).
     SwitchFormation,
+    /// Fuse an unsigned comparison with the subtractions of its operands it
+    /// dominates into `usubo` (native pipelines only).
+    CompareSubFusion,
     /// Recompute `dfg.users` from layout-inserted instructions only.
     ///
     /// Use after passes that can leave stale user entries
@@ -219,6 +223,11 @@ impl Pass {
                 name: "switch_formation",
                 needs_func_behavior: false,
                 invalidates_func_behavior: true,
+            },
+            Pass::CompareSubFusion => PassInfo {
+                name: "compare_sub_fusion",
+                needs_func_behavior: false,
+                invalidates_func_behavior: false,
             },
             Pass::RebuildUsers => PassInfo {
                 name: "rebuild_users",
@@ -531,7 +540,8 @@ impl Pipeline {
     ///
     /// O2 runs the speed schedule with an inliner tuned for native code. O1
     /// stops that schedule after its second of four inline rounds, for
-    /// quicker builds. Both end by forming switches from comparison trees.
+    /// quicker builds. Both end by forming switches from comparison trees and
+    /// fusing comparisons with the subtractions they guard.
     /// Os is the size pipeline.
     pub fn native(level: OptLevel) -> Self {
         let mut pipeline = match level {
@@ -540,7 +550,10 @@ impl Pipeline {
             OptLevel::Os => return Self::size(),
             OptLevel::O2 => Self::optimized(native_inliner_config(), true, true),
         };
-        pipeline.add_step(Step::FuncPasses(vec![Pass::SwitchFormation]));
+        pipeline.add_step(Step::FuncPasses(vec![
+            Pass::SwitchFormation,
+            Pass::CompareSubFusion,
+        ]));
         pipeline
     }
 
@@ -920,6 +933,12 @@ fn run_pass(
             let _span = trace_span!("sonatina.optim.pipeline.pass.switch_formation").entered();
             SwitchFormation::new().run(func)
         }
+        Pass::CompareSubFusion => {
+            let _span = trace_span!("sonatina.optim.pipeline.pass.compare_sub_fusion").entered();
+            ctx.cfg.compute(func);
+            ctx.domtree.compute(&ctx.cfg);
+            CompareSubFusion::new().run(func, &ctx.domtree)
+        }
         Pass::RangeBranchSimplify => {
             let _span = trace_span!("sonatina.optim.pipeline.pass.range_branch_simplify").entered();
             if !has_conditional_branch(func) {
@@ -1087,6 +1106,60 @@ fn run_pass(
             false
         }
     };
+    if let Ok(target) = std::env::var("SONA_FREEZE_TRACE")
+        && let Some(func_ref) = func_ref
+        && func.dfg.ctx.func_sig(func_ref, |sig| sig.name().contains(&target))
+    {
+        let mut trace_cfg = ControlFlowGraph::default();
+        trace_cfg.compute(func);
+        let mut trace_dom = crate::domtree::DomTree::default();
+        trace_dom.compute(&trace_cfg);
+        let mut freezes = 0;
+        let mut unfrozen = 0;
+        let mut compares = 0;
+        for block in func.layout.iter_block() {
+            for inst in func.layout.iter_inst(block) {
+                if matches!(
+                    func.dfg.inst(inst).kind(),
+                    sonatina_ir::inst::InstClassKind::Binary(
+                        sonatina_ir::inst::BinaryInstKind::Lt
+                            | sonatina_ir::inst::BinaryInstKind::Gt
+                            | sonatina_ir::inst::BinaryInstKind::Le
+                            | sonatina_ir::inst::BinaryInstKind::Ge
+                    )
+                ) {
+                    compares += 1;
+                }
+                if let Some(freeze) = func.dfg.downcast::<&sonatina_ir::inst::data::Freeze>(inst) {
+                    freezes += 1;
+                    let arg = func.dfg.inst(inst).collect_values()[0];
+                    let _ = freeze;
+                    unfrozen += func
+                        .dfg
+                        .users(arg)
+                        .filter(|&&user| {
+                            user != inst
+                                && func.layout.is_inst_inserted(user)
+                                && !func.dfg.is_phi(user)
+                                && {
+                                    let fb = func.layout.inst_block(inst);
+                                    let ub = func.layout.inst_block(user);
+                                    ub != fb && trace_dom.dominates(fb, ub)
+                                }
+                                && func.dfg.downcast::<&sonatina_ir::inst::data::Freeze>(user).is_none()
+                        })
+                        .count();
+                }
+            }
+        }
+        if let Ok(dir) = std::env::var("SONA_FREEZE_DUMP") {
+            static STEP: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+            let step = STEP.fetch_add(1, Ordering::Relaxed);
+            let text = sonatina_ir::ir_writer::FuncWriter::new(func_ref, func).dump_string();
+            std::fs::write(format!("{dir}/{step:03}-{}.sona", pass.as_str()), text).unwrap();
+        }
+        eprintln!("FREEZE_TRACE {} changed={changed} freezes={freezes} unfrozen_uses={unfrozen} compares={compares}", pass.as_str());
+    }
     PassResult::new(pass, changed)
 }
 
@@ -2675,7 +2748,10 @@ func private %entry(v0.i32, v1.i32) -> i32 {
                 .collect()
         };
         // Both end by forming switches.
-        let switches = format!("{:?}", Step::FuncPasses(vec![Pass::SwitchFormation]));
+        let switches = format!(
+            "{:?}",
+            Step::FuncPasses(vec![Pass::SwitchFormation, Pass::CompareSubFusion])
+        );
         let mut o1 = steps(&Pipeline::native(OptLevel::O1));
         let mut o2 = steps(&Pipeline::native(OptLevel::O2));
         assert_eq!(o1.pop(), Some(switches.clone()));

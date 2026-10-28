@@ -340,6 +340,80 @@ fn edge_relations(
     Some((inst, relations))
 }
 
+/// Has every use of each `freeze`'s operand that the freeze dominates use its
+/// result instead. Passes that merge values, such as GVN replacing a reload
+/// with the load a guard froze, add uses of the unfrozen operand below the
+/// freeze, which separate the values a guard's relation names.
+pub(crate) fn use_frozen_values(func: &mut Function, dom: &DomTree) -> bool {
+    let freezes: Vec<_> = func
+        .layout
+        .iter_block()
+        .flat_map(|block| func.layout.iter_inst(block))
+        .filter(|&inst| func.dfg.downcast::<&Freeze>(inst).is_some())
+        .collect();
+    let mut changed = false;
+    for freeze in freezes {
+        changed |= use_frozen_below(func, dom, freeze);
+    }
+    changed
+}
+
+/// Rewrites every use of `freeze`'s operand that `freeze` dominates to its
+/// result, so later reasoning sees one value.
+fn use_frozen_below(func: &mut Function, dom: &DomTree, freeze: InstId) -> bool {
+    let value = *func
+        .dfg
+        .downcast::<&Freeze>(freeze)
+        .expect("a freeze")
+        .arg();
+    let frozen = func
+        .dfg
+        .inst_result(freeze)
+        .expect("a freeze has a result");
+    let block = func.layout.inst_block(freeze);
+    let after: FxHashSet<InstId> = iter::successors(func.layout.next_inst_of(freeze), |&inst| {
+        func.layout.next_inst_of(inst)
+    })
+    .collect();
+    let users: Vec<_> = func
+        .dfg
+        .users(value)
+        .copied()
+        .filter(|&user| user != freeze && func.layout.is_inst_inserted(user))
+        .collect();
+    let mut changed = false;
+    for user in users {
+        if func.dfg.is_phi(user) {
+            changed |= func.dfg.edit_phi(user, |phi| {
+                let mut edited = false;
+                for (input, from) in phi.args_mut() {
+                    if *input == value && dom.dominates(block, *from) {
+                        *input = frozen;
+                        edited = true;
+                    }
+                }
+                edited
+            });
+            continue;
+        }
+        let user_block = func.layout.inst_block(user);
+        if user_block == block && !after.contains(&user)
+            || user_block != block && !dom.dominates(block, user_block)
+        {
+            continue;
+        }
+        let mut data = func.dfg.clone_inst(user);
+        data.for_each_value_mut(&mut |operand| {
+            if *operand == value {
+                *operand = frozen;
+            }
+        });
+        func.dfg.replace_inst(user, data);
+        changed = true;
+    }
+    changed
+}
+
 /// Whether `value` may be undef without evidence for its parameters, calls
 /// and memory reads, which a guard cannot take on trust.
 fn may_be_undef_without_evidence(
@@ -357,78 +431,69 @@ fn may_be_undef_without_evidence(
 }
 
 /// Freezes the possibly undefined operands of each comparison whose branch
-/// guards a `sub` or `usubo` of the same values, and has the comparison and
-/// those subtractions use the frozen values, so the relation the branch
-/// proves holds for both even if a later pass makes an operand undef.
+/// guards a `sub` or `usubo` of the same values, and has every use the
+/// freeze dominates use the frozen value, so the relation the branch proves
+/// holds for the comparison and the subtractions even if a later pass makes
+/// an operand undef. Uses added below earlier freezes move to them first.
 pub(crate) fn freeze_subtraction_guards(
     func: &mut Function,
     cfg: &ControlFlowGraph,
     dom: &DomTree,
 ) -> bool {
-    let mut guards = FxHashMap::<InstId, SmallVec<[InstId; 2]>>::default();
+    let refrozen = use_frozen_values(func, dom);
+    let mut compares = Vec::new();
     let mut definedness = FxHashMap::default();
     for child in func.layout.iter_block() {
         let Some((compare, relations)) = edge_relations(func, cfg, dom, child) else {
             continue;
         };
-        let operands = func.dfg.inst(compare).collect_values();
-        if !operands
-            .iter()
-            .any(|&operand| may_be_undef_without_evidence(func, operand, &mut definedness))
+        if compares.contains(&compare)
+            || !func
+                .dfg
+                .inst(compare)
+                .collect_values()
+                .iter()
+                .any(|&operand| may_be_undef_without_evidence(func, operand, &mut definedness))
         {
             continue;
         }
-        for block in func.layout.iter_block() {
-            if !dom.dominates(child, block) {
-                continue;
-            }
-            for inst in func.layout.iter_inst(block) {
-                if is_sub(func, inst)
-                    && let [lhs, rhs] = func.dfg.inst(inst).collect_values().as_slice()
-                    && relations.contains(&(*lhs, *rhs))
-                {
-                    let subs = guards.entry(compare).or_default();
-                    if !subs.contains(&inst) {
-                        subs.push(inst);
-                    }
-                }
-            }
+        let guards_subtraction = func
+            .layout
+            .iter_block()
+            .filter(|&block| dom.dominates(child, block))
+            .flat_map(|block| func.layout.iter_inst(block))
+            .any(|inst| {
+                is_sub(func, inst)
+                    && matches!(func.dfg.inst(inst).collect_values().as_slice(),
+                        [lhs, rhs] if relations.contains(&(*lhs, *rhs)))
+            });
+        if guards_subtraction {
+            compares.push(compare);
         }
     }
 
-    for (&compare, subs) in &guards {
-        let operands = func.dfg.inst(compare).collect_values();
-        let mut frozen = FxHashMap::default();
-        for operand in operands {
-            if frozen.contains_key(&operand)
-                || !may_be_undef_without_evidence(func, operand, &mut definedness)
-            {
+    for &compare in &compares {
+        for operand in func.dfg.inst(compare).collect_values() {
+            if !may_be_undef_without_evidence(func, operand, &mut definedness) {
                 continue;
             }
             let freeze = func
                 .dfg
                 .make_inst(Freeze::new_unchecked(func.inst_set(), operand));
-            let value = func.dfg.make_value(Value::Inst {
+            let frozen = func.dfg.make_value(Value::Inst {
                 inst: freeze,
                 result_idx: 0,
                 ty: func.dfg.value_ty(operand),
             });
-            func.dfg.attach_result(freeze, value);
+            func.dfg.attach_result(freeze, frozen);
             func.layout.insert_inst_before(freeze, compare);
             func.propagate_inst_attribution(freeze, compare);
-            frozen.insert(operand, value);
-        }
-        for &inst in iter::once(&compare).chain(subs) {
-            let mut data = func.dfg.clone_inst(inst);
-            data.for_each_value_mut(&mut |value| {
-                if let Some(&frozen) = frozen.get(value) {
-                    *value = frozen;
-                }
-            });
-            func.dfg.replace_inst(inst, data);
+            use_frozen_below(func, dom, freeze);
+            // Rewritten users may now be defined.
+            definedness.clear();
         }
     }
-    !guards.is_empty()
+    refrozen || !compares.is_empty()
 }
 
 impl RangeFact {
