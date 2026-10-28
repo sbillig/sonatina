@@ -60,6 +60,17 @@ pub(super) fn translate_module(
             let clif_sig = sonatina_sig_to_clif(&module.ctx, sig, clif_module);
             Ok((name, clif_sig))
         })?;
+        let mut sig = sig;
+        if std::env::var_os("SONA_PRESERVE_ALL").is_some()
+            && module.ctx.func_linkage(func_ref).is_private()
+            && sig.returns.len() <= 1
+            && !sig
+                .params
+                .iter()
+                .any(|p| p.purpose != cranelift_codegen::ir::ArgumentPurpose::Normal)
+        {
+            sig.call_conv = cranelift_codegen::isa::CallConv::PreserveAll;
+        }
 
         let linkage = translate_linkage(module.ctx.func_linkage(func_ref));
         let func_id = clif_module
@@ -204,6 +215,17 @@ fn translate_function(
         validate_cranelift_signature(&module.ctx, sig)?;
         Ok(sonatina_sig_to_clif(&module.ctx, sig, clif_module))
     })?;
+    let mut sig = sig;
+    if std::env::var_os("SONA_PRESERVE_ALL").is_some()
+        && module.ctx.func_linkage(func_ref).is_private()
+        && sig.returns.len() <= 1
+        && !sig
+            .params
+            .iter()
+            .any(|p| p.purpose != cranelift_codegen::ir::ArgumentPurpose::Normal)
+    {
+        sig.call_conv = cranelift_codegen::isa::CallConv::PreserveAll;
+    }
     ctx.func.signature = sig;
 
     let mut builder_ctx = FunctionBuilderContext::new();
@@ -1688,6 +1710,17 @@ fn translate_function(
     builder.seal_all_blocks();
     builder.finalize(clif_module.target_config());
 
+    if let Some(pin) = std::env::var_os("SONA_PIN_FN") {
+        let name = module.ctx.func_sig(func_ref, |sig| sig.name().to_string());
+        if name.contains(pin.to_str().unwrap()) {
+            let idx = std::env::var("SONA_PIN_PARAM")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(0);
+            pin_header_param(&mut ctx.func, idx);
+        }
+    }
+
     if module.ctx.triple == TargetTriple::SP1 {
         // SP1 objects are statically linked within PC-relative relocation range.
         // Far RV64 references embed address literals in executable text, which
@@ -1981,3 +2014,126 @@ block0:
         });
     }
 }
+
+/// Probe: keeps parameter `idx` of the block with the most predecessors in
+/// Cranelift's pinned register instead of an allocated one.
+fn pin_header_param(func: &mut clif::Function, idx: usize) {
+    use cranelift_codegen::{
+        cursor::{Cursor, FuncCursor},
+        flowgraph::ControlFlowGraph as ClifCfg,
+        ir::{BlockArg, Opcode},
+    };
+    let cfg = ClifCfg::with_function(func);
+    let header = func
+        .layout
+        .blocks()
+        .filter(|&block| func.dfg.block_params(block).len() > idx)
+        .max_by_key(|&block| {
+            let term = func.layout.last_inst(block).unwrap();
+            match func.dfg.insts[term] {
+                clif::InstructionData::BranchTable { table, .. } => {
+                    func.dfg.jump_tables[table].all_branches().len()
+                }
+                _ => 0,
+            }
+        })
+        .unwrap();
+    let Some(&param) = func.dfg.block_params(header).get(idx) else {
+        eprintln!("[pin] {header} has no parameter {idx}; not pinning");
+        return;
+    };
+    let ty = func.dfg.value_type(param);
+    let mut preds: Vec<_> = cfg.pred_iter(header).map(|pred| pred.inst).collect();
+    preds.sort();
+    preds.dedup();
+    eprintln!("[pin] pinning {param} of {header} ({} preds)", preds.len());
+
+    // Split each conditional edge into the header so the pinned register is
+    // written only on that edge.
+    for &inst in &preds {
+        if func.dfg.insts[inst].opcode() == Opcode::Jump {
+            continue;
+        }
+        let mut edges = Vec::new();
+        {
+            let dfg = &mut func.dfg;
+            for (i, call) in dfg.insts[inst]
+                .branch_destination_mut(&mut dfg.jump_tables, &mut dfg.exception_tables)
+                .iter()
+                .enumerate()
+            {
+                if call.block(&dfg.value_lists) == header {
+                    edges.push((i, call.args(&dfg.value_lists).collect::<Vec<_>>()));
+                }
+            }
+        }
+        let pred_block = func.layout.inst_block(inst).unwrap();
+        for (i, args) in edges {
+            let split = func.dfg.make_block();
+            func.layout.insert_block_after(split, pred_block);
+            let mut pos = FuncCursor::new(func).at_bottom(split);
+            pos.ins().jump(header, &args);
+            let dfg = &mut func.dfg;
+            let call = clif::BlockCall::new(split, [], &mut dfg.value_lists);
+            dfg.insts[inst].branch_destination_mut(&mut dfg.jump_tables, &mut dfg.exception_tables)
+                [i] = call;
+        }
+    }
+    let cfg = ClifCfg::with_function(func);
+    let preds: Vec<_> = cfg.pred_iter(header).map(|pred| pred.inst).collect();
+    assert!(
+        preds
+            .iter()
+            .all(|&inst| func.dfg.insts[inst].opcode() == Opcode::Jump)
+    );
+
+    // The function's caller expects the pinned register back.
+    let entry = func.layout.entry_block().unwrap();
+    let mut pos = FuncCursor::new(func).at_first_insertion_point(entry);
+    let saved = pos.ins().get_pinned_reg(ty);
+    let returns: Vec<_> = func
+        .layout
+        .blocks()
+        .flat_map(|block| func.layout.block_insts(block))
+        .filter(|&inst| func.dfg.insts[inst].opcode() == Opcode::Return)
+        .collect();
+    for inst in returns {
+        let mut pos = FuncCursor::new(func).at_inst(inst);
+        pos.ins().set_pinned_reg(saved);
+    }
+
+    for inst in preds {
+        let mut args = Vec::new();
+        let dfg = &mut func.dfg;
+        for call in dfg.insts[inst]
+            .branch_destination_mut(&mut dfg.jump_tables, &mut dfg.exception_tables)
+        {
+            if call.block(&dfg.value_lists) == header {
+                args.push(call.args(&dfg.value_lists).nth(idx).unwrap());
+                call.remove(idx, &mut dfg.value_lists);
+            }
+        }
+        let mut pos = FuncCursor::new(func).at_inst(inst);
+        for arg in args {
+            let BlockArg::Value(value) = arg else {
+                panic!("pinned argument is not a value");
+            };
+            pos.ins().set_pinned_reg(value);
+        }
+    }
+
+    let users: Vec<_> = func
+        .layout
+        .blocks()
+        .flat_map(|block| func.layout.block_insts(block))
+        .filter(|&inst| func.dfg.inst_values(inst).any(|value| value == param))
+        .collect();
+    for inst in users {
+        let mut pos = FuncCursor::new(func).at_inst(inst);
+        let read = pos.ins().get_pinned_reg(ty);
+        func.dfg
+            .map_inst_values(inst, |value| if value == param { read } else { value });
+    }
+    func.dfg.remove_block_param(param);
+}
+

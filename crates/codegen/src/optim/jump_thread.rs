@@ -21,7 +21,9 @@
 //!
 //! `B`'s values reach the rest of the function through its successors' phis.
 //! A use below a successor entered only from `B` gets such a phi first, so
-//! threading can supply each path's value.
+//! threading can supply each path's value. A join below several such
+//! successors, such as the exits of an inlined boolean check share,
+//! takes the value from each successor's phi.
 //!
 //! A loop header is never threaded: retargeting an entry edge into the
 //! loop's body would give the loop a second entry.
@@ -174,7 +176,9 @@ fn candidate(editor: &CfgEditor<'_>, domtree: &DomTree, block: BlockId) -> Optio
     // What the block defines reaches its own instructions and its
     // successors' phis on the edges from it, so a threaded path needs only
     // the successors' phi inputs. A use below a successor entered only from
-    // the block can be given such a phi.
+    // the block can be given such a phi. A phi reads each input at the end of
+    // that input's predecessor, so a join below both successors, such as a
+    // shared exit, can take the value from each through its own phi.
     let mut escapes = SmallVec::new();
     for inst in func.layout.iter_inst(block) {
         for &result in func.dfg.inst_results(inst) {
@@ -186,21 +190,30 @@ fn candidate(editor: &CfgEditor<'_>, domtree: &DomTree, block: BlockId) -> Optio
                 if user_block == block {
                     continue;
                 }
-                let via_edge_from_block = dests.contains(&user_block)
-                    && func.dfg.cast_phi(user).is_some_and(|phi| {
-                        phi.args()
-                            .iter()
-                            .all(|(value, from)| *value != result || *from == block)
-                    });
-                if via_edge_from_block {
-                    continue;
-                }
-                let succ = dests.iter().copied().find(|&dest| {
-                    editor.cfg().preds_of(dest).eq([&block])
-                        && use_dominated_by(func, domtree, user, result, dest)
-                })?;
-                if !escapes.contains(&(result, succ)) {
-                    escapes.push((result, succ));
+                let use_blocks: SmallVec<[BlockId; 2]> = match func.dfg.cast_phi(user) {
+                    Some(phi) => phi
+                        .args()
+                        .iter()
+                        .filter(|(value, from)| *value == result && *from != block)
+                        .map(|(_, from)| *from)
+                        .collect(),
+                    None => smallvec![user_block],
+                };
+                let mut first_succ = None;
+                for use_block in use_blocks {
+                    let succ = dests.iter().copied().find(|&dest| {
+                        editor.cfg().preds_of(dest).eq([&block])
+                            && domtree.dominates(dest, use_block)
+                    })?;
+                    if std::env::var_os("SONA_JT_STRICT").is_some()
+                        && first_succ.is_some_and(|first| first != succ)
+                    {
+                        return None;
+                    }
+                    first_succ = Some(succ);
+                    if !escapes.contains(&(result, succ)) {
+                        escapes.push((result, succ));
+                    }
                 }
             }
         }
@@ -214,24 +227,6 @@ fn candidate(editor: &CfgEditor<'_>, domtree: &DomTree, block: BlockId) -> Optio
         body,
         escapes,
     })
-}
-
-/// Whether `user`'s uses of `value` all lie in blocks `dest` dominates: a
-/// phi's at the ends of its predecessors, any other's in its own block.
-fn use_dominated_by(
-    func: &Function,
-    domtree: &DomTree,
-    user: InstId,
-    value: ValueId,
-    dest: BlockId,
-) -> bool {
-    match func.dfg.cast_phi(user) {
-        Some(phi) => phi
-            .args()
-            .iter()
-            .all(|(input, from)| *input != value || domtree.dominates(dest, *from)),
-        None => domtree.dominates(dest, func.layout.inst_block(user)),
-    }
 }
 
 /// Gives `dest`, entered only from `block`, a phi for `value`, and moves the

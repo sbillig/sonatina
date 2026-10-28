@@ -17,6 +17,7 @@ pub struct LicmSolver {
 #[derive(Clone, Copy)]
 struct LoopInvariantCtx<'a> {
     cfg: &'a ControlFlowGraph,
+    domtree: &'a DomTree,
     lpt: &'a LoopTree,
     lp: Loop,
     object_memory: Option<&'a ObjectMemoryAnalysis>,
@@ -63,6 +64,7 @@ impl LicmSolver {
                 func,
                 LoopInvariantCtx {
                     cfg,
+                    domtree: &domtree,
                     lpt,
                     lp,
                     object_memory,
@@ -87,10 +89,23 @@ impl LicmSolver {
             ctx.lpt.iter_blocks_post_order(ctx.cfg, ctx.lp).collect();
         block_in_loop_rpo.reverse();
 
+        let header = ctx.lpt.loop_header(ctx.lp);
+        let latches: Vec<_> = ctx
+            .cfg
+            .preds_of(header)
+            .copied()
+            .filter(|pred| ctx.lpt.is_in_loop(*pred, ctx.lp))
+            .collect();
+        let guaranteed_only = std::env::var_os("SONA_LICM_GUARANTEED").is_some();
         let mut loop_var = FxHashSet::default();
         for block in block_in_loop_rpo {
+            let every_iteration = latches
+                .iter()
+                .all(|latch| ctx.domtree.dominates(block, *latch));
             for inst in func.layout.iter_inst(block) {
-                if self.is_invariant(func, ctx, &loop_var, inst) {
+                if (every_iteration || !guaranteed_only)
+                    && self.is_invariant(func, ctx, &loop_var, inst)
+                {
                     self.invariants.push(inst);
                 } else {
                     loop_var.extend(func.dfg.inst_results(inst).iter().copied());

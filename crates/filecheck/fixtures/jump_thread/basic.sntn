@@ -234,3 +234,47 @@ block5:
 block6:
     return 3.i256;
 }
+
+# A value of the threaded block reaches a join below both successors, as an
+# inlined gas check's remaining gas reaches a shared exit. Each successor gets
+# a phi for it, and each threaded path supplies its own value.
+# sameln: func public %escaping_value_reaches_join_of_successors(v0.i64) -> i64 {
+# check:   block1:
+# nextln:      v3.i64 = sub v0 2.i64;
+# nextln:      jump block4;
+# check:   block2:
+# nextln:      jump block5;
+# not:     block3:
+# check:   block4:
+# nextln:      v6.i64 = add v3 1.i64;
+# check:   block6:
+# nextln:      v7.i64 = phi (v3 block4) (v0 block5);
+func public %escaping_value_reaches_join_of_successors(v0.i64) -> i64 {
+block0:
+    v1.i1 = gt 2.i64 v0;
+    br v1 block2 block1;
+
+block1:
+    v3.i64 = sub v0 2.i64;
+    jump block3;
+
+block2:
+    jump block3;
+
+block3:
+    v4.i64 = phi (v3 block1) (v0 block2);
+    v5.i1 = phi (1.i1 block1) (0.i1 block2);
+    br v5 block4 block5;
+
+block4:
+    v6.i64 = add v4 1.i64;
+    mstore 0.i64 v6 i64;
+    jump block6;
+
+block5:
+    jump block6;
+
+block6:
+    v7.i64 = phi (v4 block4) (v4 block5);
+    return v7;
+}

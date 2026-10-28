@@ -98,6 +98,11 @@ impl CraneliftObjectBackend {
                 .set(name, value)
                 .map_err(|error| CraneliftError::Compilation(error.to_string()))?;
         }
+        if std::env::var_os("SONA_PIN_FN").is_some() {
+            builder
+                .set("enable_pinned_reg", "true")
+                .map_err(|error| CraneliftError::Compilation(error.to_string()))?;
+        }
         Ok(builder)
     }
 
