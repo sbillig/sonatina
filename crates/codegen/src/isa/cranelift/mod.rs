@@ -260,6 +260,9 @@ fn legalize_module(module: &Module) -> Result<(), String> {
 }
 
 fn cranelift_opt_level(level: OptLevel) -> &'static str {
+    if let Ok(value) = std::env::var("SONA_CLIF_OPT") {
+        return Box::leak(value.into_boxed_str());
+    }
     match level {
         OptLevel::O0 => "none",
         OptLevel::O1 | OptLevel::O2 => "speed",

@@ -6,7 +6,7 @@ use sonatina_ir::{
     module::{FuncRef, Module},
 };
 
-use crate::analysis::definedness::{freeze_before, scalar_may_be_undef};
+use crate::analysis::definedness::{UndefTaint, freeze_before};
 
 use super::{
     dead_func::collect_object_roots,
@@ -220,6 +220,7 @@ fn collect_plans(module: &Module, config: ForwardedRetElimConfig) -> FxHashMap<F
 fn rewrite_calls(function: &mut Function, plans: &FxHashMap<FuncRef, FuncPlan>) -> (usize, usize) {
     let mut rewritten_calls = 0;
     let mut replaced_results = 0;
+    let taint = UndefTaint::new(function);
     let blocks = function.layout.iter_block().collect::<Vec<_>>();
     for block in blocks {
         let insts = function.layout.iter_inst(block).collect::<Vec<_>>();
@@ -244,7 +245,7 @@ fn rewrite_calls(function: &mut Function, plans: &FxHashMap<FuncRef, FuncPlan>) 
                 let mut replacement = call_args[*arg_idx];
                 // A call result is never undef: freeze the argument for both
                 // the callee and the result, so they see one value.
-                if scalar_may_be_undef(function, replacement) {
+                if taint.scalar_may_be_undef(function, replacement) {
                     let frozen = freeze_before(function, inst, replacement);
                     let mut data = function.dfg.clone_inst(inst);
                     data.for_each_value_mut(&mut |operand| {

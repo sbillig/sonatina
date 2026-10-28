@@ -32,7 +32,7 @@ use crate::analysis::known_bits::KnownBitsQuery;
 
 use self::{
     abi::*,
-    division::{Divider, DividerCall, addmod, div_rem, div_rem_i128, mulmod},
+    division::{Divider, DividerCall, Numerator, addmod, div_rem, div_rem_i128, mulmod},
     frame::FrameSlots,
     globals::*,
     i256::*,
@@ -109,6 +109,7 @@ pub(super) fn translate_module(
     translated.extend(
         divider
             .finish(clif_module)
+            .into_iter()
             .map(|(func_id, ctx)| ("the divider".to_string(), func_id, ctx)),
     );
 
@@ -328,7 +329,13 @@ fn translate_function(
 
         for inst_id in function.layout.iter_inst(block) {
             let inst_data = function.dfg.inst(inst_id);
-            let i256_op = translate_i256_op(function, inst_id, &mut value_map, &mut builder)?;
+            let i256_op = translate_i256_op(
+                function,
+                inst_id,
+                &mut value_map,
+                &mut builder,
+                &mut known_bits,
+            )?;
 
             match native_inst_set().resolve_inst(inst_data) {
                 _ if i256_op => {}
@@ -1760,13 +1767,13 @@ fn translate_div_rem(
         Type::I256 => {
             let lhs = resolve_i256(function, lhs, value_map, builder)?;
             let rhs = resolve_i256(function, rhs, value_map, builder)?;
-            let call = divider.call(clif_module, builder)?;
+            let call = divider.call(clif_module, builder, Numerator::Word)?;
             value_map.insert_limbs(result, div_rem(kind, lhs, rhs, call, builder));
         }
         Type::I128 => {
             let lhs = resolve_value(function, lhs, value_map, builder)?;
             let rhs = resolve_value(function, rhs, value_map, builder)?;
-            let call = divider.call(clif_module, builder)?;
+            let call = divider.call(clif_module, builder, Numerator::Word)?;
             value_map.insert(result, div_rem_i128(kind, lhs, rhs, call, builder));
         }
         ty => {
@@ -1810,7 +1817,7 @@ fn translate_modular(
     let lhs = operand(lhs, builder)?;
     let rhs = operand(rhs, builder)?;
     let modulus = operand(modulus, builder)?;
-    let call = divider.call(clif_module, builder)?;
+    let call = divider.call(clif_module, builder, Numerator::Double)?;
     let limbs = op(lhs, rhs, modulus, call, builder);
     if ty == Type::I256 {
         value_map.insert_limbs(result, limbs);

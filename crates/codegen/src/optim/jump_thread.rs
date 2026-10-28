@@ -122,6 +122,9 @@ fn candidate(editor: &CfgEditor<'_>, domtree: &DomTree, block: BlockId) -> Optio
                     Some(*br.nz_dest()),
                 )
             }
+            BranchKind::BrTable(_) if std::env::var("SONA_NO_BR_TABLE_THREAD").is_ok() => {
+                return None;
+            }
             BranchKind::BrTable(table) => (
                 *table.scrutinee(),
                 table

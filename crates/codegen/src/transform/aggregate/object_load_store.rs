@@ -1,6 +1,6 @@
 use std::{collections::BTreeMap, ops::Bound::Excluded};
 
-use cranelift_entity::SecondaryMap;
+use cranelift_entity::{EntityRef, SecondaryMap};
 use rustc_hash::FxHashMap;
 use smallvec::SmallVec;
 use sonatina_ir::{
@@ -372,6 +372,26 @@ fn narrow_store(
     true
 }
 
+/// Removes the instructions a rejected rebuild inserted: `value` and the
+/// operands it alone used, back to values numbered before `first_new`.
+fn remove_unused_rebuild(func: &mut Function, value: ValueId, first_new: usize) {
+    let mut pending = vec![value];
+    while let Some(value) = pending.pop() {
+        if value.index() < first_new || func.dfg.users_num(value) != 0 {
+            continue;
+        }
+        let Some(inst) = func.dfg.value_inst(value) else {
+            continue;
+        };
+        if !func.layout.is_inst_inserted(inst) {
+            continue;
+        }
+        pending.extend(func.dfg.inst(inst).collect_values());
+        func.layout.remove_inst(inst);
+        func.erase_inst(inst);
+    }
+}
+
 #[derive(Default)]
 pub struct ObjectLoadStore {
     changed: bool,
@@ -573,15 +593,20 @@ impl ObjectLoadStore {
         } else {
             None
         };
-        // A read is never undef, so a scalar that may be stays unforwarded.
+        let first_new = func.dfg.num_values();
         if let Some(slice) = read
             && let Some(replacement) = self.replacement_for_load(func, inst, slice, available)
-            && !self.taint.scalar_may_be_undef(func, replacement)
             && let Some(result) = func.dfg.inst_result(inst)
         {
-            func.dfg.change_to_alias(result, replacement);
-            InstInserter::at_location(CursorLocation::At(inst)).remove_inst(func);
-            return true;
+            // A read is never undef, so a scalar that may be stays unforwarded,
+            // without the rebuild that would change the function each round.
+            if self.taint.scalar_may_be_undef(func, replacement) {
+                remove_unused_rebuild(func, replacement, first_new);
+            } else {
+                func.dfg.change_to_alias(result, replacement);
+                InstInserter::at_location(CursorLocation::At(inst)).remove_inst(func);
+                return true;
+            }
         }
 
         let mut written = Vec::new();

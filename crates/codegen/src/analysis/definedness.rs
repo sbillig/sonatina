@@ -6,7 +6,7 @@
 //! `undef` itself and from operations with undefined results, and spreads
 //! through the instructions that use it.
 
-use std::cell::{Cell, RefCell};
+use std::cell::RefCell;
 
 use cranelift_entity::EntityRef;
 use rustc_hash::{FxHashMap, FxHashSet};
@@ -107,14 +107,6 @@ pub(crate) fn is_scalar(func: &Function, ty: Type) -> bool {
     ty.is_integral() || ty.is_enum_tag() || ty.is_pointer(func.ctx())
 }
 
-/// Whether a scalar `value` may be undef: the operand walk settles most
-/// values, and a cycle, which it takes as undef, falls to [`maybe_undef_values`].
-pub(crate) fn scalar_may_be_undef(func: &Function, value: ValueId) -> bool {
-    is_scalar(func, func.dfg.value_ty(value))
-        && value_may_be_undef(func, value, &mut FxHashMap::default(), |_| None)
-        && maybe_undef_values(func).contains(&value)
-}
-
 /// Freezes `value` just before `inst`, for a transform that puts it where a
 /// read, call result or parameter was.
 pub(crate) fn freeze_before(func: &mut Function, inst: InstId, value: ValueId) -> ValueId {
@@ -137,36 +129,53 @@ pub(crate) fn freeze_before(func: &mut Function, inst: InstId, value: ValueId) -
     frozen
 }
 
-/// Undef taint while a pass changes a function: [`maybe_undef_values`],
-/// recomputed when a value created since cannot be cleared by walking its
-/// operands, which takes a cycle of new phis as undef.
+/// Undef taint while a pass changes a function: [`maybe_undef_values`] for
+/// the values that existed when it was made, and a search of the operands of
+/// the values created since. A pass that keeps it must give every value it
+/// replaces a defined replacement, as forwarding and inlining here do.
 #[derive(Default)]
 pub(crate) struct UndefTaint {
-    maybe_undef: RefCell<FxHashSet<ValueId>>,
-    known: Cell<usize>,
+    maybe_undef: FxHashSet<ValueId>,
+    known: usize,
+    new_undef: RefCell<FxHashSet<ValueId>>,
 }
 
 impl UndefTaint {
     pub(crate) fn new(func: &Function) -> Self {
         Self {
-            maybe_undef: RefCell::new(maybe_undef_values(func)),
-            known: Cell::new(func.dfg.num_values()),
+            maybe_undef: maybe_undef_values(func),
+            known: func.dfg.num_values(),
+            new_undef: RefCell::default(),
         }
     }
 
     pub(crate) fn may_be_undef(&self, func: &Function, value: ValueId) -> bool {
-        if value.index() >= self.known.get() {
-            let known = self.known.get();
-            let walked = value_may_be_undef(func, value, &mut FxHashMap::default(), |value| {
-                (value.index() < known).then(|| self.maybe_undef.borrow().contains(&value))
-            });
-            if !walked {
-                return false;
-            }
-            *self.maybe_undef.borrow_mut() = maybe_undef_values(func);
-            self.known.set(func.dfg.num_values());
+        self.search(func, value, &RefCell::default())
+    }
+
+    /// Whether an `undef` or an operation with an undefined result reaches
+    /// `value`. Each value is searched once; a cycle adds no undef.
+    fn search(&self, func: &Function, value: ValueId, seen: &RefCell<FxHashSet<ValueId>>) -> bool {
+        if value.index() < self.known {
+            return self.maybe_undef.contains(&value);
         }
-        self.maybe_undef.borrow().contains(&value)
+        if self.new_undef.borrow().contains(&value) {
+            return true;
+        }
+        if !seen.borrow_mut().insert(value) {
+            return false;
+        }
+        let undef = match func.dfg.value(value) {
+            Value::Undef { .. } => true,
+            Value::Inst { inst, .. } => {
+                inst_result_may_be_undef(func, *inst, |used| self.search(func, used, seen))
+            }
+            _ => false,
+        };
+        if undef {
+            self.new_undef.borrow_mut().insert(value);
+        }
+        undef
     }
 
     /// Whether a scalar `value` may be undef, so it cannot replace a read,

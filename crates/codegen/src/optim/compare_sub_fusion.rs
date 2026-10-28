@@ -10,16 +10,26 @@
 //! CodeGenPrepare forms `usub.with.overflow` for the same reason. The EVM
 //! backend legalizes `usubo` back into a subtraction and a comparison, so this
 //! pass belongs in native pipelines.
+//!
+//! A difference used in only a few blocks stays apart: Cranelift computes it
+//! in each and branches on the comparison's flags, where `usub_overflow`'s
+//! borrow would take a `setb` and a `test` before the branch. A guard that
+//! exits a loop, for example, uses its difference on the back edge and on
+//! the exit.
 
 use std::iter;
 
-use rustc_hash::FxHashMap;
+use rustc_hash::{FxHashMap, FxHashSet};
 use sonatina_ir::{
-    Function, InstId, Type, Value, ValueId,
+    BlockId, Function, InstId, Type, Value, ValueId,
     inst::{BinaryInstKind, InstClassKind, arith::Usubo},
 };
 
 use crate::domtree::DomTree;
+
+/// The fewest blocks using a difference for which one `usubo` is cheaper
+/// than a subtraction in each.
+const MIN_USE_BLOCKS: usize = 4;
 
 #[derive(Default)]
 pub struct CompareSubFusion;
@@ -60,7 +70,14 @@ impl CompareSubFusion {
                     func.layout.is_inst_inserted(sub) && dominates(func, dom, compare, sub)
                 })
                 .collect();
-            if fused.is_empty() {
+            let use_blocks: FxHashSet<_> = fused
+                .iter()
+                .flat_map(|&sub| {
+                    let result = func.dfg.inst_result(sub).expect("a sub has a result");
+                    use_blocks(func, result)
+                })
+                .collect();
+            if use_blocks.len() < MIN_USE_BLOCKS {
                 continue;
             }
 
@@ -98,6 +115,23 @@ impl CompareSubFusion {
         }
         changed
     }
+}
+
+/// The blocks that use `value`, counting a phi argument as a use in its
+/// incoming block, which passes it on the edge.
+fn use_blocks(func: &Function, value: ValueId) -> Vec<BlockId> {
+    func.dfg
+        .users(value)
+        .flat_map(|&user| match func.dfg.cast_phi(user) {
+            Some(phi) => phi
+                .args()
+                .iter()
+                .filter(|(arg, _)| *arg == value)
+                .map(|&(_, block)| block)
+                .collect(),
+            None => vec![func.layout.inst_block(user)],
+        })
+        .collect()
 }
 
 /// Whether `inst` comes before `user` in its block or `inst`'s block
