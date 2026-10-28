@@ -1,0 +1,42 @@
+#! probe
+
+target = "evm-ethereum-osaka"
+
+# check: func public %mask_mul
+# not: umulo
+func public %mask_mul(v0.i64) -> i64 {
+block0:
+    v1.i64 = and v0 7.i64;
+    (v2.i64, v3.i1) = umulo v1 8.i64;
+    br v3 block1 block2;
+
+block1:
+    return 999.i64;
+
+block2:
+    return v2;
+}
+
+# check: func public %loop_index
+# not: lt v5 25.i64
+func public %loop_index() -> i64 {
+block0:
+    jump block1;
+
+block1:
+    v0.i64 = phi (0.i64 block0) (v6 block3);
+    v5.i64 = shr 3.i64 v0;
+    v7.i1 = lt v5 25.i64;
+    br v7 block3 block2;
+
+block2:
+    return 999.i64;
+
+block3:
+    v6.i64 = add v0 1.i64;
+    v8.i1 = lt v6 32.i64;
+    br v8 block1 block4;
+
+block4:
+    return v0;
+}
