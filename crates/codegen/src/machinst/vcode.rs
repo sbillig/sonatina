@@ -71,6 +71,11 @@ pub struct VCode<Op> {
     pub blocks: SecondaryMap<BlockId, EntityList<VCodeInst>>,
 
     pub insts_pool: ListPool<VCodeInst>,
+
+    /// Each label payload `rewrite_labels` replaced, as `(old, new)`, in order
+    /// and without repeats: where the late merges moved the code a label
+    /// named.
+    pub redirects: Vec<(Label, Label)>,
 }
 
 impl<Op> VCode<Op> {
@@ -100,6 +105,9 @@ impl<Op> VCode<Op> {
         for label in self.labels.values_mut() {
             let new_label = rewrite(*label);
             if new_label != *label {
+                if !self.redirects.contains(&(*label, new_label)) {
+                    self.redirects.push((*label, new_label));
+                }
                 *label = new_label;
                 changed = true;
             }
@@ -212,6 +220,7 @@ impl<Op> Default for VCode<Op> {
             labels: PrimaryMap::default(),
             blocks: Default::default(),
             insts_pool: Default::default(),
+            redirects: Vec::new(),
         }
     }
 }
