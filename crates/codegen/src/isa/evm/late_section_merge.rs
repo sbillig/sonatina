@@ -1065,6 +1065,10 @@ fn apply_unlock_to_section_helper(
     replace_block_insts(vcode, unlock.pred, &rebuilt);
 
     rewrite_block_labels_to_section_unit(vcode, unlock.fallthrough, helper_id);
+    vcode.record_redirect(
+        Label::Block(unlock.fallthrough),
+        Label::SectionCodeUnit(helper_id),
+    );
     let removed = block_order.remove(unlock.order_idx);
     debug_assert_eq!(removed, unlock.fallthrough);
 }
