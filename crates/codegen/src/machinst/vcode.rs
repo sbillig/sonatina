@@ -99,20 +99,28 @@ impl<Op> VCode<Op> {
         }
     }
 
+    /// Records that the code `old` named is now at `new`, for code that moves
+    /// without a label naming it, as a block reached by fallthrough does.
+    pub fn record_redirect(&mut self, old: Label, new: Label) {
+        if !self.redirects.contains(&(old, new)) {
+            self.redirects.push((old, new));
+        }
+    }
+
     /// Rewrites each label payload in place and returns whether any label changed.
     pub fn rewrite_labels(&mut self, mut rewrite: impl FnMut(Label) -> Label) -> bool {
-        let mut changed = false;
+        let mut rewritten = Vec::new();
         for label in self.labels.values_mut() {
             let new_label = rewrite(*label);
             if new_label != *label {
-                if !self.redirects.contains(&(*label, new_label)) {
-                    self.redirects.push((*label, new_label));
-                }
+                rewritten.push((*label, new_label));
                 *label = new_label;
-                changed = true;
             }
         }
-        changed
+        for &(old, new) in &rewritten {
+            self.record_redirect(old, new);
+        }
+        !rewritten.is_empty()
     }
 
     // pub fn emit(self, alloc: &sonatina_stackalloc::Output)
