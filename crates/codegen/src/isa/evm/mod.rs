@@ -11,6 +11,7 @@ mod immediate;
 mod late_block_merge;
 mod late_section_merge;
 mod local_malloc;
+mod lowering_record;
 mod machine;
 mod malloc_plan;
 mod memory_plan;
@@ -31,6 +32,8 @@ pub use backend::{
     SwitchLoweringStrategy,
 };
 pub use prepare::EvmPreparedSection;
+
+pub(crate) use lowering_record::record_section_lowering;
 
 pub(crate) use dyn_sp::DynSpInitKind;
 #[cfg(test)]
