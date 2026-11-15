@@ -4,7 +4,7 @@ use std::sync::Mutex;
 use tracing::{debug, debug_span, info_span, trace_span};
 
 use crate::{
-    analysis::func_behavior,
+    analysis::{func_behavior, undef_stats::report_undef_uses},
     critical_edge::CriticalEdgeSplitter,
     domtree::DomTree,
     liveness::{InstLiveness, Liveness},
@@ -876,6 +876,7 @@ pub(crate) fn prepare_section(
     .entered();
     let pipeline = pipeline.run(&work)?;
     let funcs = pipeline.funcs;
+    report_undef_uses("legalized", module, &funcs);
     let ptr_escape = pipeline.ptr_escape;
     let membership = work.membership();
 
@@ -1254,6 +1255,7 @@ fn prepare_machine_section_after_pipeline(
             && spill_bounds_satisfied
             && fallback_satisfied
         {
+            report_undef_uses("machine", machine.work.module(), &funcs);
             if std::env::var_os("SONATINA_MEM_LOOP_STATS").is_some() {
                 eprintln!(
                     "MEM_LOOP_STATS funcs={} iterations={} final_spill_funcs={} optional_spill_funcs={}",

@@ -8,6 +8,7 @@ use sonatina_ir::{InstId, Module, isa::evm::Evm, module::FuncRef};
 use sonatina_triple::{Architecture, EvmVersion, OperatingSystem, TargetTriple, Vendor};
 
 use crate::{
+    analysis::undef_stats::report_undef_uses,
     backend::{Backend, BackendOptions},
     isa::evm::{EvmBackend, ImmediateMaterializationMode, LateCleanupProfile},
     object::{CompileOptions, ObjectArtifact, ObjectCompileError, compile_all_objects},
@@ -81,7 +82,9 @@ impl<B: Backend> Compile<B> {
     /// reference to the optimized module for inspection or IR dumping.
     pub fn optimize(&mut self) -> &Module {
         if !self.optimized {
+            report_undef_uses("frontend", &self.module, &self.module.funcs());
             self.backend.pipeline(&self.options).run(&mut self.module);
+            report_undef_uses("optimized", &self.module, &self.module.funcs());
             self.optimized = true;
         }
         &self.module
