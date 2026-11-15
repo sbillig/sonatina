@@ -3,10 +3,13 @@
 //! read, the machine IR the section's code is emitted from, and what
 //! connects that machine IR to the bytes. Recording it changes no byte.
 //!
-//! Functions are named as the IR text names them, values and blocks by their
-//! ids in the text of their module (`v12`, `block3`).
+//! Functions and symbols are named as the IR text of the section's module
+//! names them, values and blocks by their ids in the text of their module
+//! (`v12`, `block3`).
 
 use sonatina_ir::{BlockId, Immediate, ValueId};
+
+use super::SymbolDef;
 
 #[derive(Debug, Clone)]
 pub struct SectionLowering {
@@ -28,6 +31,11 @@ pub struct SectionLowering {
     /// Each label the late merges redirected, as `(old, new)`: code that
     /// jumped or called to `old` now goes to `new`.
     pub redirects: Vec<(CodeLabel, CodeLabel)>,
+    /// The section's symbol table, by offset, each symbol as the IR text
+    /// writes it (`%func`, `$global`, `&embed`, `.` for the section). The
+    /// pipeline adds functions and globals to the section's module, which the
+    /// compiled module does not name.
+    pub symbols: Vec<(String, SymbolDef)>,
 }
 
 #[derive(Debug, Clone)]
