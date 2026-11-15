@@ -15,14 +15,14 @@ use crate::{
         pipeline::Pipeline,
     },
     stackalloc::{
-        Action, Actions, Allocator, StackifyAlloc, StackifyBuilder, StackifyEdgeSplitter,
-        StackifySearchProfile,
+        Action, Actions, Allocator, SpillWord, StackifyAlloc, StackifyBuilder,
+        StackifyEdgeSplitter, StackifySearchProfile,
     },
 };
 use rustc_hash::{FxHashMap, FxHashSet};
 use smallvec::{SmallVec, smallvec};
 use sonatina_ir::{
-    BlockId, Function, Immediate, InstId, InstSetBase, InstSetExt, Module, Value, ValueId,
+    BlockId, Function, Immediate, InstId, InstSetBase, InstSetExt, Module, ValueId,
     cfg::ControlFlowGraph,
     inst::evm::inst_set::EvmInstKind,
     ir_writer::FuncWriter,
@@ -132,20 +132,15 @@ fn fixtures_store_exactly_the_spills_they_reload() {
                 let stores = prepared.module().func_store.view(func, |function| {
                     let mut cfg = ControlFlowGraph::new();
                     cfg.compute(function);
-                    // An `undef` operand is loaded from a word nothing stores.
-                    let undef_objs: FxHashSet<_> = function
-                        .dfg
-                        .value_ids()
-                        .filter(|&value| matches!(function.dfg.value(value), Value::Undef { .. }))
-                        .filter_map(|value| alloc.spill_obj(value))
-                        .collect();
                     let accesses = spill_word_accesses(function, alloc, |action| match *action {
-                        Action::MemLoadAbs(addr) => Some(((0, addr), false)),
-                        Action::MemStoreAbs(addr) => Some(((0, addr), true)),
-                        Action::MemLoadObj(obj) if !undef_objs.contains(&obj) => {
+                        Action::SpillLoad(_, SpillWord::Abs(addr)) => Some(((0, addr), false)),
+                        Action::SpillStore(_, SpillWord::Abs(addr)) => Some(((0, addr), true)),
+                        Action::SpillLoad(_, SpillWord::Obj(obj)) => {
                             Some(((1, obj.as_u32()), false))
                         }
-                        Action::MemStoreObj(obj) => Some(((1, obj.as_u32()), true)),
+                        Action::SpillStore(_, SpillWord::Obj(obj)) => {
+                            Some(((1, obj.as_u32()), true))
+                        }
                         _ => None,
                     });
                     (
