@@ -12,6 +12,8 @@ use sonatina_ir::{
 };
 use std::{collections::HashSet, fmt, io};
 
+use crate::stackalloc::SpillAccess;
+
 // xxx offset reference graph?
 //  fn call graph
 
@@ -76,6 +78,9 @@ pub struct VCode<Op> {
     /// and without repeats: where the late merges moved the code a label
     /// named.
     pub redirects: Vec<(Label, Label)>,
+
+    /// Each spill store and reload lowering emitted, in emission order.
+    pub spill_accesses: Vec<SpillAccess>,
 }
 
 impl<Op> VCode<Op> {
@@ -229,6 +234,7 @@ impl<Op> Default for VCode<Op> {
             blocks: Default::default(),
             insts_pool: Default::default(),
             redirects: Vec::new(),
+            spill_accesses: Vec::new(),
         }
     }
 }

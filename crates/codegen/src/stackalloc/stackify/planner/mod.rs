@@ -10,7 +10,7 @@ pub(crate) use normalize_search::StackifySearchCache;
 
 use crate::{
     bitset::BitSet,
-    stackalloc::{Action, Actions},
+    stackalloc::{Action, Actions, SpillWord},
 };
 use cranelift_entity::{EntityRef, SecondaryMap};
 use sonatina_ir::ValueId;
@@ -150,7 +150,7 @@ impl<'a> MemPlan<'a> {
             ) {
                 actions.push(
                     SpillStorage::Scratch(slot)
-                        .store_action()
+                        .store_action(v)
                         .expect("scratch storage has a store action"),
                 );
                 return;
@@ -161,7 +161,7 @@ impl<'a> MemPlan<'a> {
         let obj = self.spill_obj[v].expect("spilled value missing stack object id");
         actions.push(
             SpillStorage::Object(obj)
-                .store_action()
+                .store_action(v)
                 .expect("object storage has a store action"),
         );
     }
@@ -171,7 +171,10 @@ impl<'a> MemPlan<'a> {
             self.spill.request_spill(v);
             // This fixed-point iteration will be discarded; the real slot assignment happens at
             // `v`'s definition once it becomes part of `spill_set`.
-            return Action::MemLoadObj(crate::isa::evm::static_arena_alloc::StackObjId::new(0));
+            return Action::SpillLoad(
+                v,
+                SpillWord::Obj(crate::isa::evm::static_arena_alloc::StackObjId::new(0)),
+            );
         };
 
         if let Some(action) = self.remat_actions[v] {
@@ -184,14 +187,17 @@ impl<'a> MemPlan<'a> {
 
         if !self.must_use_object_storage(v) {
             if let Some(slot) = self.slots.scratch.slot_for(v) {
-                return Action::MemLoadAbs(slot * 32);
+                return Action::SpillLoad(v, SpillWord::Abs(slot * 32));
             }
             self.request_object_storage(v);
         }
 
         // Invariant: every spilled value has a `StackObjId` assigned by stackify's builder
         // (should be verified when finalizing the spill set).
-        Action::MemLoadObj(self.spill_obj[v].expect("spilled value missing stack object id"))
+        Action::SpillLoad(
+            v,
+            SpillWord::Obj(self.spill_obj[v].expect("spilled value missing stack object id")),
+        )
     }
 
     fn emit_store_if_spilled_at_depth(&mut self, v: ValueId, depth: u8, actions: &mut Actions) {

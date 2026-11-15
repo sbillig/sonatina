@@ -930,7 +930,7 @@ mod tests {
         domtree::DomTree,
         liveness::Liveness,
         stackalloc::{
-            Action,
+            Action, SpillWord,
             stackify::{
                 builder::StackifyReachability,
                 planner::{
@@ -1994,7 +1994,7 @@ block0:
             assert!(
                 actions
                     .iter()
-                    .any(|action| matches!(action, Action::MemLoadObj(_))),
+                    .any(|action| matches!(action, Action::SpillLoad(_, SpillWord::Obj(_)))),
                 "expected greedy fallback to materialize the second operand from spill/load state: {actions:?}"
             );
             assert!(

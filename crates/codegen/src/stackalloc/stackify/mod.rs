@@ -315,7 +315,7 @@ block2:
             assert!(
                 alloc.pre_actions[jump_inst]
                     .iter()
-                    .any(|action| matches!(action, Action::MemLoadObj(_) | Action::MemLoadAbs(_))),
+                    .any(|action| matches!(action, Action::SpillLoad(..))),
                 "expected backedge to entry to reload the dropped entry arg:\npre_actions={:?}",
                 alloc.pre_actions[jump_inst]
             );
@@ -416,7 +416,7 @@ block3:
                 alloc.pre_actions.values().any(|actions| {
                     actions
                         .iter()
-                        .any(|action| matches!(action, Action::MemStoreObj(_) | Action::MemStoreAbs(_)))
+                        .any(|action| matches!(action, Action::SpillStore(..)))
                 }),
                 "expected merge repair to emit at least one spill store"
             );
