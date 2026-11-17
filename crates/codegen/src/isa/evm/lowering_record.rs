@@ -126,6 +126,7 @@ pub(crate) fn record_section_lowering(
                         }
                         ActionSite::Case(inst, case) => {
                             let (block, index) = positions[&inst];
+                            let case = u32::try_from(case).expect("br_table case overflow");
                             CodePoint::Case { block, index, case }
                         }
                     };

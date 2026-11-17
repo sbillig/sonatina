@@ -27,7 +27,7 @@ pub enum ActionSite {
     After(InstId),
     /// Before the comparison of case `case` of the `br_table` `inst`
     /// ([`Allocator::br_table_case`]).
-    Case(InstId, u32),
+    Case(InstId, usize),
 }
 
 /// A reload of a spilled value from its word, or a store of it there, as

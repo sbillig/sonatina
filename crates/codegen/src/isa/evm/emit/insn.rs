@@ -133,7 +133,7 @@ impl EvmMachineFunctionLowering<'_> {
                         ctx,
                         alloc.br_table_case(insn, case_idx),
                         frame_layout,
-                        ActionSite::Case(insn, case_idx as u32),
+                        ActionSite::Case(insn, case_idx),
                     );
                     ctx.push(OpCode::EQ);
                     ctx.push_jump_target(OpCode::PUSH1, Label::Block(dest));
