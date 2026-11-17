@@ -44,9 +44,16 @@ pub struct FuncLowering {
     /// Where the function's code starts; `None` if its code is another's.
     pub offset: Option<u32>,
     pub blocks: Vec<BlockLowering>,
-    /// Where each value the stack does not hold everywhere is kept, and where
-    /// the function's code stores and reloads it.
+    /// Where each value the stack does not hold everywhere is kept.
     pub spills: Vec<SpillLowering>,
+    /// The moves between the stack and memory that the function's code makes
+    /// for the stack allocator, at each point that has any, with the moves at
+    /// a point in the order the code makes them. The points of a block come in
+    /// the order its code reaches them: function entry, then for each
+    /// instruction, before it, before each of its `br_table` case compares,
+    /// and after it; blocks in the machine IR's order. A function without code
+    /// of its own has none.
+    pub spill_actions: Vec<(CodePoint, Vec<SpillAction>)>,
     pub frame: FrameLowering,
     /// The placement of each `evm_malloc` of the source IR, by its result.
     pub mallocs: Vec<(ValueId, MallocLowering)>,
@@ -81,15 +88,24 @@ pub enum StackSlot {
 pub struct SpillLowering {
     pub value: ValueId,
     pub location: SpillLocation,
-    /// The points at which the code stores the value into its location, in
-    /// emission order: after its definition, at entry for an argument, and
-    /// for a phi before the terminator of each predecessor (an edge block,
-    /// for a critical edge) that gives it an operand other than itself. The
-    /// stack top holds the value stored: a phi's operand on its edge.
-    pub stores: Vec<CodePoint>,
-    /// The points at which the code reloads the value from its location onto
-    /// the stack, in emission order.
-    pub reloads: Vec<CodePoint>,
+}
+
+/// A move between the stack and memory that a function's code makes for the
+/// stack allocator.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SpillAction {
+    /// Pop the stack top into the location of the spilled value: the value
+    /// itself after its definition or, for an argument, at function entry,
+    /// and for a phi its operand on the edge, before the predecessor's
+    /// terminator.
+    Store(ValueId),
+    /// Push the spilled value from its location.
+    Reload(ValueId),
+    /// Before a call, copy the word at address `word`, which holds a scratch
+    /// object of the caller that the callee may overwrite, to `shadow`.
+    Save { word: u32, shadow: SpillLocation },
+    /// After the call, copy `shadow` back to the word at address `word`.
+    Restore { word: u32, shadow: SpillLocation },
 }
 
 /// A point of a function's machine IR at which its code runs the stack
@@ -113,11 +129,13 @@ pub enum CodePoint {
     },
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum SpillLocation {
     /// The word at this memory address.
     Memory(u32),
-    /// This word slot of the function's dynamic frame.
+    /// This word slot of the function's dynamic frame: while the frame is
+    /// entered, the word `32 * (stable_words + 1 - slot)` bytes below the
+    /// dynamic stack pointer, which is the word at `0x80`.
     Frame(u32),
     /// Recomputed, not stored.
     Rematerialized,
@@ -136,10 +154,6 @@ pub struct FrameLowering {
     pub dyn_sp_entry_init: Option<DynSpInitLowering>,
     /// The calls before which the code initializes the dynamic stack pointer.
     pub dyn_sp_init_calls: u32,
-    /// Each call around which the code saves and restores the caller's
-    /// scratch objects, as its block and its position in the block. What is
-    /// saved where is not recorded.
-    pub call_preserves: Vec<(BlockId, u32)>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

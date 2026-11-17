@@ -30,15 +30,6 @@ pub enum ActionSite {
     Case(InstId, usize),
 }
 
-/// A reload of a spilled value from its word, or a store of it there, as
-/// emitted from an [`Action::SpillLoad`] or [`Action::SpillStore`] at `site`.
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
-pub struct SpillPoint {
-    pub value: ValueId,
-    pub reload: bool,
-    pub site: ActionSite,
-}
-
 pub trait Allocator {
     /// Actions to run at function entry (function-argument spill stores).
     fn enter_function(&self, function: &Function) -> Actions;

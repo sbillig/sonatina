@@ -1,5 +1,5 @@
 use super::vcode::{Label, SectionCodeUnitId, SymFixup, VCode, VCodeFixup, VCodeInst};
-use crate::stackalloc::{Allocator, SpillPoint};
+use crate::stackalloc::Allocator;
 use rustc_hash::{FxHashMap, FxHashSet};
 use sonatina_ir::{
     BlockId, Function, GlobalVariableRef, Immediate, Inst, InstDowncast, InstId, Linkage, Module,
@@ -361,10 +361,6 @@ impl<'a, Op: Default> Lower<'a, Op> {
         }
 
         Ok(self.vcode)
-    }
-
-    pub fn record_spill_point(&mut self, point: SpillPoint) {
-        self.vcode.spill_points.push(point);
     }
 
     pub fn push(&mut self, op: Op) -> VCodeInst {

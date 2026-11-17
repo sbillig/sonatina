@@ -8,14 +8,14 @@ use sonatina_codegen::{
     object::{
         ObjectArtifact, encode_gv_initializer_to_bytes,
         lowering::{
-            CodeLabel, CodePoint, FuncLowering, SectionLowering, SpillLocation, StableLowering,
-            StackSlot,
+            CodeLabel, CodePoint, FuncLowering, SectionLowering, SpillAction, SpillLocation,
+            SpillLowering, StableLowering, StackSlot,
         },
     },
 };
-use sonatina_ir::BlockId;
+use sonatina_ir::{BlockId, ValueId};
 use sonatina_parser::parse_module;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 
 fn try_compile(source: &str, opt: OptLevel, record: bool) -> Option<Vec<ObjectArtifact>> {
     EvmCompile::new(parse_module(source).expect("fixture parses").module)
@@ -135,14 +135,6 @@ fn check_record(lowering: &SectionLowering, bytes: &[u8]) {
     }
 
     for func in &lowering.funcs {
-        for (block, _) in &func.frame.call_preserves {
-            assert!(
-                blocks.contains(&(func.name.as_str(), *block)),
-                "{}: a call preserve in unknown block{}",
-                func.name,
-                block.0
-            );
-        }
         if func.frame.dyn_sp_init_calls != 0 || func.frame.dyn_sp_entry_init.is_some() {
             assert!(
                 lowering.funcs.iter().any(|f| f.frame.lazy_frame),
@@ -151,7 +143,7 @@ fn check_record(lowering: &SectionLowering, bytes: &[u8]) {
             );
         }
     }
-    check_spill_accesses(lowering, bytes, &starts);
+    check_spill_actions(lowering, bytes, &starts).unwrap();
     for func in &lowering.funcs {
         let Some(entry) = func.blocks.first() else {
             continue;
@@ -167,60 +159,161 @@ fn check_record(lowering: &SectionLowering, bytes: &[u8]) {
     }
 }
 
-/// The block of `func` a point is in.
-fn point_block(func: &FuncLowering, point: CodePoint) -> BlockId {
-    match point {
-        CodePoint::Entry => func.blocks[0].block,
-        CodePoint::Before { block, .. }
-        | CodePoint::After { block, .. }
-        | CodePoint::Case { block, .. } => block,
+/// A load (`false`) or store (`true`) of a word of memory, as the code makes
+/// it.
+type Access = (bool, SpillLocation);
+
+/// The accesses of a recorded spill action, in the order the code makes them.
+fn action_accesses(func: &FuncLowering, action: SpillAction) -> Vec<Access> {
+    let location = |value: ValueId| {
+        func.spills
+            .iter()
+            .find(|spill| spill.value == value)
+            .map(|spill| spill.location)
+            .expect("a spill action moves a spilled value")
+    };
+    match action {
+        SpillAction::Store(value) => vec![(true, location(value))],
+        SpillAction::Reload(value) => vec![(false, location(value))],
+        SpillAction::Save { word, shadow } => {
+            vec![(false, SpillLocation::Memory(word)), (true, shadow)]
+        }
+        SpillAction::Restore { word, shadow } => {
+            vec![(false, shadow), (true, SpillLocation::Memory(word))]
+        }
     }
 }
 
-/// The constant addresses each block of each function of the machine IR
-/// stores to with `evm_mstore` (`true`) and loads from with `evm_mload`, from
-/// its text.
-fn machine_ir_accesses(machine_ir: &str) -> BTreeMap<(String, u32, bool), Vec<u32>> {
-    let mut accesses: BTreeMap<_, Vec<u32>> = BTreeMap::new();
-    let (mut func, mut block) = (String::new(), 0);
+/// Where a point is in its block's code, by the position of its instruction:
+/// function entry, then before an instruction, the instruction's own opcodes
+/// (`phase` 1), its `br_table` case compares, and after it.
+fn point_order(point: CodePoint) -> (u32, u32, u32) {
+    match point {
+        CodePoint::Entry => (0, 0, 0),
+        CodePoint::Before { index, .. } => (index + 1, 0, 0),
+        CodePoint::Case { index, case, .. } => (index + 1, 2, case),
+        CodePoint::After { index, .. } => (index + 1, 3, 0),
+    }
+}
+
+/// The constant-address `evm_mstore` (`true`) or `evm_mload` of each
+/// instruction of the machine IR, by function, block and position in the
+/// block (phis included), from its text.
+fn machine_ir_accesses(machine_ir: &str) -> BTreeMap<(String, BlockId, u32), (bool, u32)> {
+    let mut accesses = BTreeMap::new();
+    let (mut func, mut block, mut index) = (String::new(), BlockId(0), 0);
     for line in machine_ir.lines().map(str::trim) {
-        if let Some(rest) = line.split_once('%') {
-            if line.starts_with("func ") {
-                func = rest.1.split('(').next().unwrap().to_string();
-            }
-        } else if let Some(n) = line.strip_prefix("block").and_then(|l| l.strip_suffix(':')) {
-            block = n.parse().unwrap();
-        } else if let Some((store, operands)) = line
-            .strip_prefix("evm_mstore ")
-            .map(|operands| (true, operands))
-            .or_else(|| {
-                line.split_once("= evm_mload ")
-                    .map(|(_, operands)| (false, operands))
-            })
-            && let Some((addr, _)) = operands.split_once(".i256")
-            && let Ok(addr) = addr.parse()
+        if let Some((_, rest)) = line
+            .strip_prefix("func ")
+            .and_then(|header| header.split_once('%'))
         {
-            accesses
-                .entry((func.clone(), block, store))
-                .or_default()
-                .push(addr);
+            func = rest.split('(').next().unwrap().to_string();
+        } else if let Some(n) = line
+            .strip_prefix("block")
+            .and_then(|label| label.strip_suffix(':'))
+        {
+            (block, index) = (BlockId(n.parse().unwrap()), 0);
+        } else if !line.is_empty() && line != "}" {
+            if let Some((store, operands)) = line
+                .strip_prefix("evm_mstore ")
+                .map(|operands| (true, operands))
+                .or_else(|| {
+                    line.split_once("= evm_mload ")
+                        .map(|(_, operands)| (false, operands))
+                })
+                && let Some((addr, _)) = operands.split_once(".i256")
+                && let Ok(addr) = addr.parse()
+            {
+                accesses.insert((func.clone(), block, index), (store, addr));
+            }
+            index += 1;
         }
     }
     accesses
 }
 
-/// The recorded stores and reloads of memory spills are the code's: in each
-/// block, every `PUSH w; MSTORE` (`PUSH w; MLOAD`) of a spill word `w` of the
-/// function is a store (reload) the record lists there or a store (load) of
-/// the machine IR at `w`, and every one listed is in the code. Sections whose
-/// code the late merges moved, and functions whose code saves words around
-/// calls or addresses a dynamic frame, access spill words in other ways and
-/// are left out. Returns the number of stores and reloads checked.
-fn check_spill_accesses(lowering: &SectionLowering, bytes: &[u8], starts: &BTreeSet<u32>) -> usize {
-    if !lowering.units.is_empty() || !lowering.redirects.is_empty() {
-        return 0;
+/// The accesses of the code from `start` to `end` to `words`: `PUSH w`
+/// followed by `MLOAD` or `MSTORE` for a word of memory, and for a slot of a
+/// dynamic frame of `frame_words` words, its address below the dynamic stack
+/// pointer, `PUSH 32 * (frame_words + 1 - slot); PUSH1 0x80; MLOAD; SUB`,
+/// followed by `MLOAD` or `MSTORE`.
+fn code_accesses(
+    bytes: &[u8],
+    starts: &BTreeSet<u32>,
+    (start, end): (u32, u32),
+    words: &HashSet<SpillLocation>,
+    frame_words: Option<u32>,
+) -> Vec<Access> {
+    let insts: Vec<(u8, Option<u32>)> = starts
+        .range(start..end)
+        .map(|&pc| {
+            let (pc, op) = (pc as usize, bytes[pc as usize]);
+            let push = match op {
+                op if op == OpCode::PUSH0 as u8 => Some(0),
+                op if (OpCode::PUSH1 as u8..=OpCode::PUSH4 as u8).contains(&op) => {
+                    Some(usize::from(op - OpCode::PUSH1 as u8 + 1))
+                }
+                _ => None,
+            };
+            let imm = push.map(|width| {
+                bytes[pc + 1..=pc + width]
+                    .iter()
+                    .fold(0u32, |word, &byte| word << 8 | u32::from(byte))
+            });
+            (op, imm)
+        })
+        .collect();
+    let access = |op| match op {
+        op if op == OpCode::MSTORE as u8 => Some(true),
+        op if op == OpCode::MLOAD as u8 => Some(false),
+        _ => None,
+    };
+    let mut accesses = Vec::new();
+    let mut rest = insts.as_slice();
+    while let Some(((_, imm), tail)) = rest.split_first() {
+        rest = tail;
+        let Some(imm) = *imm else {
+            continue;
+        };
+        if let Some(frame_words) = frame_words
+            && let [(_, Some(0x80)), (mload, None), (sub, None), (op, None), ..] = tail
+            && *mload == OpCode::MLOAD as u8
+            && *sub == OpCode::SUB as u8
+            && let Some(store) = access(*op)
+            && imm % 32 == 0
+            && let Some(slot) = (frame_words + 1).checked_sub(imm / 32)
+        {
+            rest = &tail[4..];
+            if words.contains(&SpillLocation::Frame(slot)) {
+                accesses.push((store, SpillLocation::Frame(slot)));
+            }
+        } else if let [(op, None), ..] = tail
+            && let Some(store) = access(*op)
+            && words.contains(&SpillLocation::Memory(imm))
+        {
+            rest = &tail[1..];
+            accesses.push((store, SpillLocation::Memory(imm)));
+        }
     }
-    let mut checked = 0;
+    accesses
+}
+
+/// The recorded spill actions are the code's, in order: in each block, the
+/// accesses of the code to the words the function's actions name
+/// (`code_accesses`) are the accesses of the block's actions, point by point
+/// in the order the code reaches the points and in each point in the order
+/// recorded, with among them the machine IR's own loads and stores at those
+/// words, each at its instruction. Sections whose code the late merges moved
+/// are left out: a block's code is no longer the bytes from its offset to the
+/// next. Returns the number of recorded accesses checked.
+fn check_spill_actions(
+    lowering: &SectionLowering,
+    bytes: &[u8],
+    starts: &BTreeSet<u32>,
+) -> Result<usize, String> {
+    if !lowering.units.is_empty() || !lowering.redirects.is_empty() {
+        return Ok(0);
+    }
     let mut block_starts: BTreeSet<u32> = lowering
         .funcs
         .iter()
@@ -232,86 +325,110 @@ fn check_spill_accesses(lowering: &SectionLowering, bytes: &[u8], starts: &BTree
         .collect();
     block_starts.insert(lowering.code_size);
     let ir_accesses = machine_ir_accesses(&lowering.machine_ir);
+    let mut checked = 0;
     for func in &lowering.funcs {
-        if func.offset.is_none()
-            || !func.frame.call_preserves.is_empty()
-            || func.frame.lazy_frame
-            || func.frame.stable == StableLowering::DynamicFrame
-        {
-            continue;
-        }
-        let mut recorded: BTreeMap<(BlockId, u32, bool), usize> = BTreeMap::new();
-        let mut words = BTreeSet::new();
-        for spill in &func.spills {
-            let SpillLocation::Memory(word) = spill.location else {
-                continue;
+        let blocks: BTreeMap<BlockId, usize> = func
+            .blocks
+            .iter()
+            .zip(0..)
+            .map(|(block, order)| (block.block, order))
+            .collect();
+        let point_key = |point| {
+            let block = match point {
+                CodePoint::Entry => 0,
+                CodePoint::Before { block, .. }
+                | CodePoint::After { block, .. }
+                | CodePoint::Case { block, .. } => blocks[&block],
             };
-            words.insert(word);
-            for (points, store) in [(&spill.stores, true), (&spill.reloads, false)] {
-                for &point in points {
-                    *recorded
-                        .entry((point_block(func, point), word, store))
-                        .or_default() += 1;
-                }
-            }
+            (block, point_order(point))
+        };
+        if !func
+            .spill_actions
+            .windows(2)
+            .all(|pair| point_key(pair[0].0) < point_key(pair[1].0))
+        {
+            return Err(format!(
+                "{}: the points are not in the order the code reaches them",
+                func.name
+            ));
         }
+        let words: HashSet<SpillLocation> = func
+            .spill_actions
+            .iter()
+            .flat_map(|(_, actions)| actions)
+            .flat_map(|&action| action_accesses(func, action))
+            .map(|(_, word)| word)
+            .collect();
+        let frame_words =
+            (func.frame.stable == StableLowering::DynamicFrame).then_some(func.frame.stable_words);
         for block in &func.blocks {
+            // Each access the code may make in the block, with whether it may
+            // be left out: the recorded ones may not, the machine IR's may,
+            // since its address need not be pushed right before the opcode.
+            let mut expected: Vec<((u32, u32, u32), Access, bool)> = func
+                .spill_actions
+                .iter()
+                .filter(|(point, _)| point_key(*point).0 == blocks[&block.block])
+                .flat_map(|&(point, ref actions)| {
+                    actions
+                        .iter()
+                        .flat_map(|&action| action_accesses(func, action))
+                        .map(move |access| (point_order(point), access, false))
+                })
+                .collect();
+            checked += expected.len();
+            expected.extend(
+                ir_accesses
+                    .range(
+                        (func.name.clone(), block.block, 0)
+                            ..=(func.name.clone(), block.block, u32::MAX),
+                    )
+                    .filter(|(_, (_, addr))| words.contains(&SpillLocation::Memory(*addr)))
+                    .map(|(&(_, _, index), &(store, addr))| {
+                        (
+                            (index + 1, 1, 0),
+                            (store, SpillLocation::Memory(addr)),
+                            true,
+                        )
+                    }),
+            );
+            expected.sort_by_key(|(order, ..)| *order);
             let Some(start) = block.offset else {
-                assert!(
-                    !recorded.keys().any(|(b, ..)| *b == block.block),
-                    "{}: block{} has spill stores or reloads but no code",
-                    func.name,
-                    block.block.0
-                );
+                if expected.iter().any(|&(.., optional)| !optional) {
+                    return Err(format!(
+                        "{}: block{} has spill actions but no code",
+                        func.name, block.block.0
+                    ));
+                }
                 continue;
             };
             let end = *block_starts.range(start + 1..).next().unwrap();
-            let mut found: BTreeMap<(u32, bool), usize> = BTreeMap::new();
-            for pc in starts.range(start..end) {
-                let (pc, op) = (*pc as usize, bytes[*pc as usize]);
-                let width = match op {
-                    op if op == OpCode::PUSH0 as u8 => 0,
-                    op if (OpCode::PUSH1 as u8..=OpCode::PUSH4 as u8).contains(&op) => {
-                        usize::from(op - OpCode::PUSH1 as u8 + 1)
-                    }
-                    _ => continue,
-                };
-                let word = bytes[pc + 1..=pc + width]
-                    .iter()
-                    .fold(0u32, |word, &byte| word << 8 | u32::from(byte));
-                let store = match bytes.get(pc + 1 + width) {
-                    Some(&op) if op == OpCode::MSTORE as u8 => true,
-                    Some(&op) if op == OpCode::MLOAD as u8 => false,
-                    _ => continue,
-                };
-                if words.contains(&word) {
-                    *found.entry((word, store)).or_default() += 1;
-                }
+            let found = code_accesses(bytes, starts, (start, end), &words, frame_words);
+            // Whether the expected accesses from each on can be the code's from
+            // each on, the optional ones left out or not: `rest[j]` for the
+            // code's from `j`.
+            let mut rest: Vec<bool> = (0..=found.len()).map(|j| j == found.len()).collect();
+            for &(_, access, optional) in expected.iter().rev() {
+                rest = (0..=found.len())
+                    .map(|j| {
+                        (optional && rest[j]) || (found.get(j) == Some(&access) && rest[j + 1])
+                    })
+                    .collect();
             }
-            for &word in &words {
-                for store in [true, false] {
-                    let listed = recorded
-                        .get(&(block.block, word, store))
-                        .copied()
-                        .unwrap_or(0);
-                    let code = found.get(&(word, store)).copied().unwrap_or(0);
-                    let ir = ir_accesses
-                        .get(&(func.name.clone(), block.block.0, store))
-                        .map_or(0, |ir| ir.iter().filter(|&&addr| addr == word).count());
-                    checked += listed;
-                    assert!(
-                        listed <= code && code <= listed + ir,
-                        "{}: block{} {} word {word} {code} times, with {listed} recorded and \
-                         {ir} of the machine IR",
-                        func.name,
-                        block.block.0,
-                        if store { "stores" } else { "loads" }
-                    );
-                }
+            if !rest[0] {
+                return Err(format!(
+                    "{}: block{} makes the accesses {found:?}, but the record says {:?}",
+                    func.name,
+                    block.block.0,
+                    expected
+                        .iter()
+                        .map(|&(_, access, optional)| (access, optional))
+                        .collect::<Vec<_>>()
+                ));
             }
         }
     }
-    checked
+    Ok(checked)
 }
 
 /// Compiles `source` at each of `levels` with and without the record: the
@@ -349,7 +466,7 @@ fn lowering_record_is_metadata_and_agrees_with_bytes(fixture: Fixture<&str>) {
 }
 
 /// The EVM fixtures, at O0: late merges, which leave spills out of
-/// `check_spill_accesses`, are off.
+/// `check_spill_actions`, are off.
 #[dir_test(dir: "$CARGO_MANIFEST_DIR/test_files/evm", glob: "*.sntn")]
 fn lowering_record_of_evm_fixtures_agrees_with_bytes(fixture: Fixture<&str>) {
     if fixture.content().contains("\nobject ") {
@@ -439,25 +556,31 @@ object @Table {
     }
 }
 
-/// The stores and reloads of each spill of the function `name` of the
-/// fixture `file` compiled at O0, as `(value, location, stores, reloads)`.
-fn spill_points(file: &str, name: &str) -> Vec<String> {
+/// The O0 record of the fixture `file`'s only section, checked against the
+/// bytes, and the function `name` of it.
+fn recorded_func(file: &str, name: &str) -> (SectionLowering, Vec<u8>, FuncLowering) {
     let path = format!("{}/test_files/evm/{file}", env!("CARGO_MANIFEST_DIR"));
     let source = std::fs::read_to_string(path).expect("fixture reads");
     let artifacts = compile(&source, OptLevel::O0, true);
     let section = artifacts[0].sections.values().next().expect("a section");
-    let lowering = section.lowering.as_ref().expect("a lowering record");
+    let lowering = section.lowering.clone().expect("a lowering record");
     let starts = instruction_starts(&section.bytes, lowering.code_size as usize);
     assert!(
-        check_spill_accesses(lowering, &section.bytes, &starts) > 0,
-        "the stores and reloads are checked against the bytes"
+        check_spill_actions(&lowering, &section.bytes, &starts).unwrap() > 0,
+        "the spill actions are checked against the bytes"
     );
     let func = lowering
         .funcs
         .iter()
         .find(|func| func.name == name)
-        .expect("the function is recorded");
-    let point = |point: &CodePoint| match *point {
+        .expect("the function is recorded")
+        .clone();
+    (lowering, section.bytes.clone(), func)
+}
+
+/// The spill actions of `func`, a point to a line.
+fn spill_action_lines(func: &FuncLowering) -> Vec<String> {
+    let point = |point| match point {
         CodePoint::Entry => "entry".to_string(),
         CodePoint::Before { block, index } => format!("before block{}:{index}", block.0),
         CodePoint::After { block, index } => format!("after block{}:{index}", block.0),
@@ -465,63 +588,107 @@ fn spill_points(file: &str, name: &str) -> Vec<String> {
             format!("case {case} of block{}:{index}", block.0)
         }
     };
-    let points = |points: &[CodePoint]| points.iter().map(point).collect::<Vec<_>>().join(", ");
-    func.spills
+    let action = |action| match action {
+        SpillAction::Store(value) => format!("store v{}", value.as_u32()),
+        SpillAction::Reload(value) => format!("reload v{}", value.as_u32()),
+        SpillAction::Save { word, shadow } => format!("save {word} to {shadow:?}"),
+        SpillAction::Restore { word, shadow } => format!("restore {word} from {shadow:?}"),
+    };
+    func.spill_actions
         .iter()
-        .map(|spill| {
-            format!(
-                "v{} {:?} stores [{}] reloads [{}]",
-                spill.value.as_u32(),
-                spill.location,
-                points(&spill.stores),
-                points(&spill.reloads)
-            )
+        .map(|&(at, ref actions)| {
+            let actions: Vec<_> = actions.iter().map(|&a| action(a)).collect();
+            format!("{}: {}", point(at), actions.join(", "))
         })
         .collect()
 }
 
 /// At O0 `%spill` keeps its arguments `v1` to `v7` in memory across the
-/// calls of its loop: each is stored at entry and reloaded for the first call
-/// (`block2:1`, after the phi), and `v7` again for the `add` at `block2:4`.
+/// calls of its loop: it stores each at entry, reloads them all for the first
+/// call (`block2:1`, after the phi), last argument first, and `v7` again for
+/// the `add` at `block2:4`.
 #[test]
 fn lowering_record_lists_argument_stores_and_reloads() {
-    let word = |value: u32| {
-        let reloads = if value == 7 {
-            "before block2:1, before block2:4"
-        } else {
-            "before block2:1"
-        };
-        format!(
-            "v{value} Memory({}) stores [entry] reloads [{reloads}]",
-            32 * (value - 1)
-        )
-    };
+    let (_, _, func) = recorded_func("spill.sntn", "spill");
     assert_eq!(
-        spill_points("spill.sntn", "spill"),
-        (1..=7).map(word).collect::<Vec<_>>()
+        func.spills,
+        (1..=7)
+            .map(|value| SpillLowering {
+                value: ValueId(value),
+                location: SpillLocation::Memory(32 * (value - 1)),
+            })
+            .collect::<Vec<_>>()
+    );
+    assert_eq!(
+        spill_action_lines(&func),
+        [
+            "entry: store v1, store v2, store v3, store v4, store v5, store v6, store v7",
+            "before block2:1: reload v7, reload v6, reload v5, reload v4, reload v3, reload v2, \
+             reload v1",
+            "before block2:4: reload v7",
+        ]
     );
 }
 
-/// At O0 `%rotate`'s twenty rotating phis are stored on the edge from
-/// `block0` and on the backedge from `block2`, before each block's `jump`,
-/// and reloaded on the backedge for the rotation. The counter's increment
-/// `v24` is not spilled: the backedge takes it from the stack, and only
-/// reloaded values are stored.
+/// At O0 `%rotate`'s twenty phis rotate left on the backedge from `block2`,
+/// `v1` taking `v2`, ..., `v20` taking `v1`, and all are spilled. Before the
+/// backedge's `jump` the code stores the counter `v21` from the stack, holds
+/// the old `v1` for `v20`, then reloads each phi's operand just before it
+/// stores the phi it is the operand of: the stores of the edge come
+/// interleaved with the reloads of their operands.
 #[test]
-fn lowering_record_lists_phi_edge_stores_and_reloads() {
-    let spills = spill_points("spilled_phi_edge_rotation.sntn", "rotate");
-    for expected in [
-        "v0 Memory(0) stores [entry] reloads [before block1:21]",
-        "v1 Memory(32) stores [before block0:0, before block2:1] reloads [before block2:1]",
-        "v20 Memory(640) stores [before block0:0, before block2:1] \
-         reloads [before block2:1, before block3:0]",
-        "v21 Memory(672) stores [before block0:0, before block2:1] \
-         reloads [before block1:21, before block2:0]",
-    ] {
-        assert!(
-            spills.iter().any(|spill| spill == expected),
-            "{expected} in {spills:#?}"
-        );
-    }
-    assert_eq!(spills.len(), 22, "{spills:#?}");
+fn lowering_record_orders_phi_edge_stores_and_reloads() {
+    let (_, _, func) = recorded_func("spilled_phi_edge_rotation.sntn", "rotate");
+    let backedge: Vec<_> = ["store v21".to_string(), "reload v1".to_string()]
+        .into_iter()
+        .chain((2..=20).flat_map(|k| [format!("reload v{k}"), format!("store v{}", k - 1)]))
+        .chain(["store v20".to_string()])
+        .collect();
+    let stores: Vec<_> = (1..=21).map(|k| format!("store v{k}")).collect();
+    assert_eq!(
+        spill_action_lines(&func),
+        [
+            "entry: store v0".to_string(),
+            format!("before block0:0: {}", stores.join(", ")),
+            "before block1:21: reload v0, reload v21".to_string(),
+            "before block2:0: reload v21".to_string(),
+            format!("before block2:1: {}", backedge.join(", ")),
+            "before block3:0: reload v20".to_string(),
+        ]
+    );
+}
+
+/// The check of the record against the bytes sees the order of the actions
+/// at a point: with the reload of `v2` and the store of `v1` on `%rotate`'s
+/// backedge swapped, the record no longer agrees with the bytes.
+#[test]
+fn spill_action_check_rejects_another_order() {
+    let (mut lowering, bytes, _) = recorded_func("spilled_phi_edge_rotation.sntn", "rotate");
+    let starts = instruction_starts(&bytes, lowering.code_size as usize);
+    let rotate = lowering
+        .funcs
+        .iter_mut()
+        .find(|func| func.name == "rotate")
+        .expect("the function is recorded");
+    let (_, backedge) = rotate
+        .spill_actions
+        .iter_mut()
+        .find(|(point, _)| {
+            *point
+                == CodePoint::Before {
+                    block: BlockId(2),
+                    index: 1,
+                }
+        })
+        .expect("the backedge has spill actions");
+    assert_eq!(
+        backedge[2..4],
+        [
+            SpillAction::Reload(ValueId(2)),
+            SpillAction::Store(ValueId(1))
+        ]
+    );
+    backedge.swap(2, 3);
+    let error = check_spill_actions(&lowering, &bytes, &starts).unwrap_err();
+    assert!(error.contains("rotate: block2"), "{error}");
 }

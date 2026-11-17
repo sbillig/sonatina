@@ -28,18 +28,6 @@ pub(crate) enum FrameSite {
     PostInst(InstId),
 }
 
-impl FrameSite {
-    /// The site of the allocator actions run here.
-    pub(crate) fn action_site(self) -> ActionSite {
-        match self {
-            FrameSite::EnterFunction => ActionSite::Entry,
-            FrameSite::PreInst(inst) => ActionSite::Before(inst),
-            FrameSite::PostInst(inst) => ActionSite::After(inst),
-            FrameSite::BlockEntry(_) => unreachable!("a block entry runs no actions"),
-        }
-    }
-}
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(crate) enum FrameInjectionPoint {
     BeforeSite(FrameSite),
