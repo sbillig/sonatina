@@ -1,5 +1,6 @@
 ---
 source: crates/codegen/tests/evm.rs
+assertion_line: 2507
 expression: "String::from_utf8(out).unwrap()"
 input_file: test_files/evm/malloc_free_ptr_floor.sntn
 ---
@@ -55,7 +56,7 @@ two_mallocs:
     PUSH1 0x5f (95)  // v4.i256 = gt v1 95.i256;
     DUP2
     GT
-    PUSH1 block3  // br v4 block4 block2;
+    PUSH1 block3  // br v4 block1 block2;
     JUMPI
   block2:
     POP  // jump block3;
@@ -94,7 +95,7 @@ call_preserves_floor:
     PUSH1 0x5f (95)  // v4.i256 = gt v1 95.i256;
     DUP2
     GT
-    PUSH1 block3  // br v4 block4 block2;
+    PUSH1 block3  // br v4 block1 block2;
     JUMPI
   block2:
     POP  // jump block3;
@@ -140,7 +141,7 @@ call_kills_floor:
     PUSH1 0x5f (95)  // v4.i256 = gt v1 95.i256;
     DUP2
     GT
-    PUSH1 block3  // br v4 block7 block2;
+    PUSH1 block3  // br v4 block1 block2;
     JUMPI
   block2:
     POP  // jump block3;
@@ -161,7 +162,7 @@ call_kills_floor:
     PUSH1 0x5f (95)  // v9.i256 = gt v8 95.i256;
     DUP2
     GT
-    PUSH1 block6  // br v9 block8 block5;
+    PUSH1 block6  // br v9 block4 block5;
     JUMPI
   block5:
     POP  // jump block6;
@@ -184,7 +185,7 @@ join_uses_min_floor:
     PUSH1 0x5f (95)  // v5.i256 = gt v2 95.i256;
     DUP2
     GT
-    PUSH1 block6  // br v5 block10 block5;
+    PUSH1 block6  // br v5 block4 block5;
     JUMPI
   block5:
     POP  // jump block6;
@@ -196,7 +197,7 @@ join_uses_min_floor:
     ADD
     PUSH1 0x40 (64)  // evm_mstore v1 v8;
     MSTORE
-    SWAP1  // br v0 block1 block12;
+    SWAP1  // br v0 block1 block2;
     ISZERO
     PUSH1 block3
     JUMPI
@@ -211,7 +212,7 @@ join_uses_min_floor:
     PUSH1 0x5f (95)  // v10.i256 = gt v9 95.i256;
     DUP2
     GT
-    PUSH1 block9  // br v10 block11 block8;
+    PUSH1 block9  // br v10 block7 block8;
     JUMPI
   block8:
     POP  // jump block9;

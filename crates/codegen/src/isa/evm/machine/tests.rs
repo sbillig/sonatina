@@ -445,7 +445,7 @@ fn machine_gvn_folds_word_bool_constant_without_zext() {
     run_machine_opt_pipeline(
         &module,
         &[func_ref],
-        LateCleanupProfile::Off,
+        LateCleanupProfile::Speed,
         SwitchLoweringStrategy::Auto,
         16,
     )
@@ -628,7 +628,7 @@ fn machine_gvn_accepts_truthy_word_branch_condition() {
     run_machine_opt_pipeline(
         &module,
         &[func_ref],
-        LateCleanupProfile::Off,
+        LateCleanupProfile::Speed,
         SwitchLoweringStrategy::Auto,
         16,
     )
