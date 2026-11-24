@@ -50,8 +50,10 @@ pub(crate) fn coalesce_machine_copies(func: &mut Function) -> bool {
     changed
 }
 
+/// A machine address as a symbolic base plus a constant offset, modulo 2^256.
+/// With no base it is a constant address.
 #[derive(Clone, Copy)]
-struct Address {
+pub(crate) struct Address {
     base: Option<ValueId>,
     offset: U256,
 }
@@ -61,11 +63,13 @@ impl Address {
         self.base == other.base && self.offset == other.offset.overflowing_add(bytes.into()).0
     }
 
-    fn absolute_range(self, len: u32) -> Option<(u32, u32)> {
-        if self.base.is_some() || self.offset > u32::MAX.into() {
-            return None;
-        }
-        let start = self.offset.low_u32();
+    /// The constant address, if it has no base and fits in `u32`.
+    pub(crate) fn constant_u32(self) -> Option<u32> {
+        (self.base.is_none() && self.offset <= u32::MAX.into()).then(|| self.offset.low_u32())
+    }
+
+    pub(crate) fn absolute_range(self, len: u32) -> Option<(u32, u32)> {
+        let start = self.constant_u32()?;
         Some((start, start.checked_add(len)?))
     }
 
@@ -86,7 +90,8 @@ impl Address {
 /// A matched copy address and the value it was matched from.
 type CopyOperand = (ValueId, Address);
 
-fn address(func: &Function, isa: &EvmMachine, mut value: ValueId) -> Address {
+/// Evaluates `value` through chains of `add` and `sub` with immediates.
+pub(crate) fn address(func: &Function, isa: &EvmMachine, mut value: ValueId) -> Address {
     let mut offset = U256::zero();
     loop {
         if let Some(imm) = func.dfg.value_imm(value) {

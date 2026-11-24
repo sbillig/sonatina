@@ -41,6 +41,7 @@ use super::{
     fixed_slots,
     heap_plan::compute_heap_bound_provenance,
     machine::{
+        copy::address,
         final_spills::{
             FinalSpillAllocationInput, FinalSpillChoiceCtx, FinalSpillObjects,
             FixedMemoryWriteRange, MachineFinalSpillInput, OptionalFinalSpillPlacement,
@@ -721,37 +722,37 @@ pub(crate) fn machine_fixed_memory_write_range(
 ) -> Option<FixedMemoryWriteRange> {
     match isa.inst_set().resolve_inst(function.dfg.inst(inst)) {
         EvmMachineInstKind::EvmMstore(mstore) => {
-            fixed_write_range(function, inst, *mstore.addr(), WORD_BYTES)
+            fixed_write_range(function, isa, inst, *mstore.addr(), WORD_BYTES)
         }
         EvmMachineInstKind::EvmMstore8(mstore8) => {
-            fixed_write_range(function, inst, *mstore8.addr(), 1)
+            fixed_write_range(function, isa, inst, *mstore8.addr(), 1)
         }
         EvmMachineInstKind::EvmCalldataCopy(copy) => {
-            fixed_write_range_from_len_value(function, inst, *copy.dst_addr(), *copy.len())
+            fixed_write_range_from_len_value(function, isa, inst, *copy.dst_addr(), *copy.len())
         }
         EvmMachineInstKind::EvmCodeCopy(copy) => {
-            fixed_write_range_from_len_value(function, inst, *copy.dst_addr(), *copy.len())
+            fixed_write_range_from_len_value(function, isa, inst, *copy.dst_addr(), *copy.len())
         }
         EvmMachineInstKind::EvmExtCodeCopy(copy) => {
-            fixed_write_range_from_len_value(function, inst, *copy.dst_addr(), *copy.len())
+            fixed_write_range_from_len_value(function, isa, inst, *copy.dst_addr(), *copy.len())
         }
         EvmMachineInstKind::EvmReturnDataCopy(copy) => {
-            fixed_write_range_from_len_value(function, inst, *copy.dst_addr(), *copy.len())
+            fixed_write_range_from_len_value(function, isa, inst, *copy.dst_addr(), *copy.len())
         }
         EvmMachineInstKind::EvmMcopy(copy) => {
-            fixed_write_range_from_len_value(function, inst, *copy.dest(), *copy.len())
+            fixed_write_range_from_len_value(function, isa, inst, *copy.dest(), *copy.len())
         }
         EvmMachineInstKind::EvmCall(call) => {
-            fixed_write_range_from_len_value(function, inst, *call.ret_addr(), *call.ret_len())
+            fixed_write_range_from_len_value(function, isa, inst, *call.ret_addr(), *call.ret_len())
         }
         EvmMachineInstKind::EvmCallCode(call) => {
-            fixed_write_range_from_len_value(function, inst, *call.ret_addr(), *call.ret_len())
+            fixed_write_range_from_len_value(function, isa, inst, *call.ret_addr(), *call.ret_len())
         }
         EvmMachineInstKind::EvmDelegateCall(call) => {
-            fixed_write_range_from_len_value(function, inst, *call.ret_addr(), *call.ret_len())
+            fixed_write_range_from_len_value(function, isa, inst, *call.ret_addr(), *call.ret_len())
         }
         EvmMachineInstKind::EvmStaticCall(call) => {
-            fixed_write_range_from_len_value(function, inst, *call.ret_addr(), *call.ret_len())
+            fixed_write_range_from_len_value(function, isa, inst, *call.ret_addr(), *call.ret_len())
         }
         _ => None,
     }
@@ -759,15 +760,21 @@ pub(crate) fn machine_fixed_memory_write_range(
 
 fn fixed_write_range_from_len_value(
     function: &Function,
+    isa: &EvmMachine,
     inst: InstId,
     addr: ValueId,
     len: ValueId,
 ) -> Option<FixedMemoryWriteRange> {
-    fixed_write_range(function, inst, addr, value_imm_u32(function, len)?)
+    let len = address(function, isa, len).constant_u32()?;
+    fixed_write_range(function, isa, inst, addr, len)
 }
 
+/// The range a write of `len` bytes at `addr` covers, if `addr` is constant.
+/// A constant need not be an immediate: -O0 machine IR keeps the source's
+/// arithmetic on immediates.
 fn fixed_write_range(
     function: &Function,
+    isa: &EvmMachine,
     inst: InstId,
     addr: ValueId,
     len: u32,
@@ -775,8 +782,7 @@ fn fixed_write_range(
     if len == 0 {
         return None;
     }
-    let start_byte = value_imm_u32(function, addr)?;
-    let end_byte = start_byte.checked_add(len)?;
+    let (start_byte, end_byte) = address(function, isa, addr).absolute_range(len)?;
     Some(FixedMemoryWriteRange {
         inst,
         start_byte,
@@ -1613,6 +1619,7 @@ mod tests {
         builder::{FunctionBuilder, ModuleBuilder},
         func_cursor::InstInserter,
         inst::{
+            arith::{Add, Sub},
             control_flow::{Br, Call, Jump, Return},
             evm::{
                 EvmCalldataCopy, EvmMstore, EvmMstore8, EvmReturn, EvmRevert, EvmStaticCall,
@@ -1805,6 +1812,38 @@ mod tests {
         });
 
         assert!(ranges.is_empty());
+    }
+
+    /// -O0 machine IR keeps arithmetic on immediates unfolded; a write
+    /// through it still has a fixed range, and one through a symbolic base
+    /// does not.
+    #[test]
+    fn fixed_write_collector_evaluates_constant_address_arithmetic() {
+        let ranges = collect_machine_write_ranges(&[Type::I256], |builder, is| {
+            let dynamic = builder.args()[0];
+            let value = word(builder, 7);
+            let [a128, a32, a224, a64, a_neg32, a0x200, a16, a0] =
+                [128, 32, 224, 64, -32, 0x200, 16, 0].map(|val| word(builder, val));
+            let add = builder.insert_inst(Add::new(is, a128, a32), Type::I256);
+            builder.insert_inst_no_result(EvmMstore::new(is, add, value));
+            let inner = builder.insert_inst(Add::new(is, a224, a32), Type::I256);
+            let sub = builder.insert_inst(Sub::new(is, inner, a64), Type::I256);
+            builder.insert_inst_no_result(EvmMstore::new(is, sub, value));
+            let wrapped = builder.insert_inst(Add::new(is, a_neg32, a64), Type::I256);
+            builder.insert_inst_no_result(EvmMstore8::new(is, wrapped, value));
+            let symbolic = builder.insert_inst(Add::new(is, dynamic, a32), Type::I256);
+            builder.insert_inst_no_result(EvmMstore::new(is, symbolic, value));
+            let dst = builder.insert_inst(Add::new(is, a0x200, a0), Type::I256);
+            let len = builder.insert_inst(Add::new(is, a16, a16), Type::I256);
+            builder.insert_inst_no_result(EvmCalldataCopy::new(is, dst, a0, len));
+            let symbolic_len = builder.insert_inst(Add::new(is, dynamic, a16), Type::I256);
+            builder.insert_inst_no_result(EvmCalldataCopy::new(is, dst, a0, symbolic_len));
+        });
+
+        assert_eq!(
+            range_bytes(&ranges),
+            vec![(32, 33), (160, 192), (192, 224), (0x200, 0x220)]
+        );
     }
 
     #[test]

@@ -1,0 +1,39 @@
+#! evm.config: { stack_reach: 2, vcode: true, mem_plan_detail: true }
+#! evm.case: ok
+#!   calldata: u256(1) u256(2) u256(3) u256(4)
+#!   expect: return u256(57) u256(99)
+
+# `v5` is the constant address 160 (0xa0), left as `add 128 32` at O0. The
+# 5 products live across its store spill to the static arena, which starts
+# at 0xa0; they stay off 0xa0 only if the fixed-write analysis evaluates the
+# `add`.
+target = "evm-ethereum-osaka"
+
+func public %entry() {
+block0:
+    v1.i256 = evm_calldata_load 0.i256;
+    v2.i256 = evm_calldata_load 32.i256;
+    v3.i256 = evm_calldata_load 64.i256;
+    v4.i256 = evm_calldata_load 96.i256;
+    v30.i256 = mul v1 3.i256;
+    v31.i256 = mul v2 4.i256;
+    v32.i256 = mul v3 5.i256;
+    v33.i256 = mul v4 6.i256;
+    v34.i256 = mul v1 7.i256;
+    v5.i256 = add 128.i256 32.i256;
+    evm_mstore v5 99.i256;
+    v101.i256 = add v30 v31;
+    v102.i256 = add v101 v32;
+    v103.i256 = add v102 v33;
+    v104.i256 = add v103 v34;
+    v12.i256 = evm_mload v5;
+    evm_mstore 0.i256 v104;
+    evm_mstore 32.i256 v12;
+    evm_return 0.i256 64.i256;
+}
+
+object @Contract {
+  section runtime {
+    entry %entry;
+  }
+}
