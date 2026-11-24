@@ -443,7 +443,6 @@ fn check_steps(lowering: &SectionLowering) {
             pass.kind,
             MachinePassKind::CfgCleanup
                 | MachinePassKind::ScalarCanonicalize
-                | MachinePassKind::KnownBitsSimplify
                 | MachinePassKind::Sccp
                 | MachinePassKind::Gvn
                 | MachinePassKind::Adce

@@ -120,7 +120,6 @@ pub(crate) fn run_machine_pass(
             kind,
             MachinePassKind::CfgCleanup
                 | MachinePassKind::ScalarCanonicalize
-                | MachinePassKind::KnownBitsSimplify
                 | MachinePassKind::Sccp
                 | MachinePassKind::Gvn
                 | MachinePassKind::Adce
