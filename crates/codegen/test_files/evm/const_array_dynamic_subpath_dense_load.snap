@@ -1,5 +1,6 @@
 ---
 source: crates/codegen/tests/evm.rs
+assertion_line: 2507
 expression: "String::from_utf8(out).unwrap()"
 input_file: test_files/evm/const_array_dynamic_subpath_dense_load.sntn
 ---
@@ -53,7 +54,7 @@ pc [30, 31) func=load_dense_subpath block=0 vcode=11 machine=5 reason=missing_pr
 pc [31, 32) func=load_dense_subpath block=0 vcode=12 machine=5 reason=missing_provenance post_opt=-
 
 evm:
-  case index_2: calldata_len=32 success reason=Return gas_used=21222 gas_refunded=0 logs=0 output=call len=32 tx_gas=21140 runtime_gas=82
+  case index_2: calldata_len=32 success reason=Return gas_used=21224 gas_refunded=0 logs=0 output=call len=32 tx_gas=21140 runtime_gas=84
 
 
 --------------- DEBUG ---------------
@@ -79,9 +80,9 @@ load_dense_subpath:
   block0:
     JUMPDEST
     PUSH0 0x0 (0)  // v1.i256 = sym_addr $__sonatina_const_words_tables_0;
-    SWAP1  // v3.i256 = shl 5.i256 v0;
-    PUSH1 0x5 (5)
-    SHL
+    SWAP1  // v3.i256 = mul v0 v2;
+    PUSH1 0x20 (32)
+    MUL
     ADD  // v4.i256 = add v1 v3;
     PUSH1 0x20 (32)  // evm_code_copy 0.i256 v4 v2;
     SWAP1

@@ -1,30 +1,31 @@
 ---
 source: crates/codegen/tests/evm.rs
+assertion_line: 2507
 expression: "String::from_utf8(out).unwrap()"
 input_file: test_files/evm/agg_make_noopt.sntn
 ---
 evm.config: stack_reach=16 vcode=true bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false
 
 object: Contract
-  section runtime: 192 bytes
-  total: 192 bytes
+  section runtime: 222 bytes
+  total: 222 bytes
 
 functions:
   mem: global_dyn_base=0x100 arena_base=0x0 scratch_peak_words=8 stable_chain_peak_words=0
   entry: ir_blocks=1 ir_insts=12 vcode_ops=52 fixups=8 imm_bytes=6
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=8 abs_words_end=0
-  stored: ir_blocks=1 ir_insts=6 vcode_ops=12 fixups=0 imm_bytes=2
+  stored: ir_blocks=1 ir_insts=8 vcode_ops=16 fixups=0 imm_bytes=2
     mem: scratch_words=2 stable_words=0 stable_mode=None entry_abs_words=8 abs_words_end=2
-  indexed: ir_blocks=1 ir_insts=7 vcode_ops=17 fixups=0 imm_bytes=3
+  indexed: ir_blocks=1 ir_insts=10 vcode_ops=25 fixups=0 imm_bytes=3
     mem: scratch_words=3 stable_words=0 stable_mode=None entry_abs_words=8 abs_words_end=3
-  nested: ir_blocks=1 ir_insts=8 vcode_ops=19 fixups=0 imm_bytes=5
+  nested: ir_blocks=1 ir_insts=12 vcode_ops=29 fixups=0 imm_bytes=5
     mem: scratch_words=3 stable_words=0 stable_mode=None entry_abs_words=8 abs_words_end=3
-  rotate: ir_blocks=4 ir_insts=19 vcode_ops=50 fixups=2 imm_bytes=16
+  rotate: ir_blocks=4 ir_insts=21 vcode_ops=56 fixups=2 imm_bytes=18
     mem: scratch_words=8 stable_words=0 stable_mode=None entry_abs_words=8 abs_words_end=8
 
 evm:
-  case ok: calldata_len=96 success reason=Return gas_used=21959 gas_refunded=0 logs=0 output=call len=128 tx_gas=21420 runtime_gas=539
-  case twice: calldata_len=96 success reason=Return gas_used=22053 gas_refunded=0 logs=0 output=call len=128 tx_gas=21420 runtime_gas=633
+  case ok: calldata_len=96 success reason=Return gas_used=22037 gas_refunded=0 logs=0 output=call len=128 tx_gas=21420 runtime_gas=617
+  case twice: calldata_len=96 success reason=Return gas_used=22133 gas_refunded=0 logs=0 output=call len=128 tx_gas=21420 runtime_gas=713
 
 
 --------------- DEBUG ---------------
@@ -91,12 +92,16 @@ stored:
     JUMPDEST
     PUSH0  // evm_mstore v2 v0;
     MSTORE
-    PUSH1 0x20 (32)  // evm_mstore v3 v1;
-    MSTORE
+    PUSH1 0x20 (32)  // v4.i256 = add v2 v3;
+    PUSH0
+    ADD
+    MSTORE  // evm_mstore v4 v1;
     PUSH0  // v5.i256 = evm_mload v2;
     MLOAD
-    PUSH1 0x20 (32)  // v7.i256 = evm_mload v3;
-    MLOAD
+    PUSH1 0x20 (32)  // v6.i256 = add v2 v3;
+    PUSH0
+    ADD
+    MLOAD  // v7.i256 = evm_mload v6;
     ADD  // v8.i256 = add v5 v7;
     SWAP1  // return v8;
     JUMP
@@ -111,14 +116,22 @@ indexed:
     SWAP1  // evm_mstore v3 v0;
     PUSH0
     MSTORE
-    SWAP1  // evm_mstore v5 v1;
-    PUSH1 0x20 (32)
+    PUSH1 0x20 (32)  // v6.i256 = add v3 v5;
+    PUSH0
+    ADD
+    SWAP1  // evm_mstore v6 v1;
+    SWAP2
+    SWAP1
     MSTORE
-    PUSH1 0x40 (64)  // evm_mstore 64.i256 v4;
-    MSTORE
-    PUSH1 0x5 (5)  // v9.i256 = shl 5.i256 v2;
-    SHL
-    MLOAD  // v11.i256 = evm_mload v9;
+    PUSH1 0x40 (64)  // v8.i256 = add v3 64.i256;
+    PUSH0
+    ADD
+    MSTORE  // evm_mstore v8 v4;
+    PUSH1 0x20 (32)  // v9.i256 = mul v2 v5;
+    MUL
+    PUSH0  // v10.i256 = add v3 v9;
+    ADD
+    MLOAD  // v11.i256 = evm_mload v10;
     SWAP1  // return v11;
     JUMP
 
@@ -132,15 +145,25 @@ nested:
     SWAP1  // evm_mstore v4 v0;
     PUSH0
     MSTORE
-    SWAP1  // evm_mstore v5 v1;
-    PUSH1 0x20 (32)
+    PUSH1 0x20 (32)  // v6.i256 = add v4 v5;
+    PUSH0
+    ADD
+    SWAP1  // evm_mstore v6 v1;
+    SWAP2
+    SWAP1
     MSTORE
-    PUSH1 0x40 (64)  // evm_mstore v7 v3;
-    MSTORE
-    PUSH1 0x20 (32)  // v10.i256 = evm_mload v5;
-    MLOAD
-    PUSH1 0x40 (64)  // v12.i256 = evm_mload v7;
-    MLOAD
+    PUSH1 0x40 (64)  // v8.i256 = add v4 v7;
+    PUSH0
+    ADD
+    MSTORE  // evm_mstore v8 v3;
+    PUSH1 0x20 (32)  // v9.i256 = add v4 v5;
+    PUSH0
+    ADD
+    MLOAD  // v10.i256 = evm_mload v9;
+    PUSH1 0x40 (64)  // v11.i256 = add v4 v7;
+    PUSH0
+    ADD
+    MLOAD  // v12.i256 = evm_mload v11;
     ADD  // v13.i256 = add v10 v12;
     SWAP1  // return v13;
     JUMP
@@ -152,19 +175,25 @@ rotate:
     DUP1  // evm_mstore v7 v0;
     PUSH1 0xc0 (192)
     MSTORE
-    DUP2  // evm_mstore 224.i256 v1;
-    PUSH1 0xe0 (224)
+    PUSH1 0x20 (32)  // v12.i256 = add v7 v8;
+    PUSH1 0xc0 (192)
+    ADD
+    DUP3  // evm_mstore v12 v1;
+    SWAP1
     MSTORE
     SWAP1  // evm_mstore v6 v1;
     PUSH1 0x80 (128)
     MSTORE
-    PUSH1 0xa0 (160)  // evm_mstore 160.i256 v0;
-    MSTORE
+    PUSH1 0x20 (32)  // v9.i256 = add v6 v8;
+    PUSH1 0x80 (128)
+    ADD
+    MSTORE  // evm_mstore v9 v0;
   block1:
     JUMPDEST
-    DUP1  // v35.i256 = is_zero v3;
-    ISZERO
-    PUSH1 block3  // br v35 block3 block2;
+    PUSH0  // v10.i256 = eq v3 v4;
+    DUP2
+    EQ
+    PUSH1 block3  // br v10 block3 block2;
     JUMPI
   block2:
     PUSH1 0x40 (64)  // evm_mcopy v5 v6 v5;
