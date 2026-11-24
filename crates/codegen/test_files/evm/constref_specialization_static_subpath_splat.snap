@@ -56,8 +56,8 @@ pc [34, 35) func=load block=0 vcode=10 machine=4 reason=missing_provenance post_
 pc [35, 36) func=load block=0 vcode=11 machine=4 reason=missing_provenance post_opt=-
 
 evm:
-  case index_0: calldata_len=32 success reason=Return gas_used=21219 gas_refunded=0 logs=0 output=call len=32 tx_gas=21128 runtime_gas=91
-  case index_1: calldata_len=32 success reason=Return gas_used=21231 gas_refunded=0 logs=0 output=call len=32 tx_gas=21140 runtime_gas=91
+  case index_0: calldata_len=32 success reason=Return gas_used=21221 gas_refunded=0 logs=0 output=call len=32 tx_gas=21128 runtime_gas=93
+  case index_1: calldata_len=32 success reason=Return gas_used=21233 gas_refunded=0 logs=0 output=call len=32 tx_gas=21140 runtime_gas=93
 
 
 --------------- DEBUG ---------------
@@ -86,9 +86,9 @@ entry:
 load:
   block0:
     JUMPDEST
-    SWAP1  // v3.i256 = shl 5.i256 v1;
-    PUSH1 0x5 (5)
-    SHL
+    SWAP1  // v3.i256 = mul v1 v2;
+    PUSH1 0x20 (32)
+    MUL
     ADD  // v4.i256 = add v0 v3;
     PUSH1 0x20 (32)  // evm_code_copy 0.i256 v4 v2;
     SWAP1

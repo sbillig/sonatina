@@ -1,5 +1,6 @@
 ---
 source: crates/codegen/tests/evm.rs
+assertion_line: 2507
 expression: "String::from_utf8(out).unwrap()"
 input_file: test_files/evm/malloc_return_escape_unrelated_dyn_base.sntn
 ---
@@ -49,7 +50,7 @@ mk:
     PUSH2 0x15f (351)  // v4.i256 = gt v1 351.i256;
     DUP2
     GT
-    PUSH1 block3  // br v4 block4 block2;
+    PUSH1 block3  // br v4 block1 block2;
     JUMPI
   block2:
     POP  // jump block3;

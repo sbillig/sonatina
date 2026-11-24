@@ -691,10 +691,12 @@ fn rpo_from_src(src: &str) -> Vec<u32> {
     })
 }
 
+/// `main`'s opcodes at `Speed`. At `Off` the fallthrough layout rewrite does not
+/// run, and a bottom-tested loop's branch still follows block ids.
 fn lowered_opcodes(src: &str) -> Vec<u8> {
     let parsed = parse_module(src).expect("module parses");
     let f = find_func(&parsed.module, "main");
-    let backend = osaka_backend();
+    let backend = osaka_backend().with_late_cleanup_profile(LateCleanupProfile::Speed);
     let prepared = backend
         .prepare_section(work_module_with_entry(&parsed.module, &[f], f))
         .expect("prepare should succeed");
@@ -1718,11 +1720,11 @@ block0:
     );
 }
 
-fn prepared_func_dump(src: &str, func_name: &str) -> String {
+fn prepared_func_dump(src: &str, func_name: &str, profile: LateCleanupProfile) -> String {
     let parsed = parse_module(src).expect("module parses");
     let funcs = parsed.module.funcs();
     let entry = find_func(&parsed.module, func_name);
-    let backend = osaka_backend();
+    let backend = osaka_backend().with_late_cleanup_profile(profile);
     let prepared = backend
         .prepare_section(work_module_with_entry(&parsed.module, &funcs, entry))
         .expect("prepare should succeed");
@@ -1766,6 +1768,7 @@ block2:
 }
 "#,
         "entry",
+        LateCleanupProfile::Off,
     );
 
     assert!(
@@ -1811,6 +1814,7 @@ block0:
 }
 "#,
         "entry",
+        LateCleanupProfile::Off,
     );
 
     let keccak_bases: Vec<_> = dumped
@@ -2025,6 +2029,7 @@ block0:
 "#
             ),
             "entry",
+            LateCleanupProfile::Off,
         );
         assert_eq!(
             !dumped.contains("evm_mload 64.i256"),
@@ -2054,6 +2059,7 @@ block0:
 "#
             ),
             "entry",
+            LateCleanupProfile::Off,
         );
         assert_eq!(
             !dumped.contains("evm_mload 64.i256"),
@@ -2095,6 +2101,7 @@ block2:
 }
 "#,
         "entry",
+        LateCleanupProfile::Off,
     );
 
     assert!(
@@ -2142,6 +2149,7 @@ block4:
 }
 "#,
         "entry",
+        LateCleanupProfile::Speed,
     );
 
     assert!(
@@ -2170,6 +2178,7 @@ block0:
 }
 "#,
         "entry",
+        LateCleanupProfile::Off,
     );
 
     assert!(
@@ -2211,6 +2220,7 @@ block2:
 }
 "#,
         "entry",
+        LateCleanupProfile::Off,
     );
 
     assert!(
