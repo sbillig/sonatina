@@ -3,6 +3,9 @@
 #!   calldata: u256(3)
 #!   expect: return u256(7)
 
+# At O0 `%load` reads the constref as a pointer to the code-copied data. With
+# late cleanup on, constref specialization binds it to a clone instead; see
+# `prepare_section_keeps_live_unspecialized_constref_original`.
 target = "evm-ethereum-osaka"
 
 global private const [i256; 4] $sevens = [7, 7, 7, 7];

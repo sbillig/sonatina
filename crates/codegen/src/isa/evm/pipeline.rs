@@ -205,8 +205,9 @@ impl EvmPipelineContext<'_> {
     }
 
     fn run_const_lowering(&mut self) -> Result<(), String> {
-        let stats = specialize_private_constrefs(self.module(), &self.funcs);
-        if stats.changed {
+        if self.backend.late_cleanup_profile != LateCleanupProfile::Off
+            && specialize_private_constrefs(self.module(), &self.funcs).changed
+        {
             run_dead_arg_elim(self.module(), &self.roots, DeadArgElimConfig::default());
             self.refresh_section_funcs();
             self.func_behavior_dirty = true;
