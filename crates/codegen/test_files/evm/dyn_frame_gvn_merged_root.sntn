@@ -3,8 +3,8 @@
 #!   expect: return u256(6)
 
 # The second word of a frame alloca is addressed twice, once before and once
-# after the recursive call. At O0 both lower to the same machine add, which
-# machine GVN merges, deleting the value the second address maps to.
+# after the recursive call. At O0 the two adds stay separate machine values;
+# `dyn_frame_gvn_merged_root_opt2` has machine GVN merge them.
 target = "evm-ethereum-osaka"
 
 func private %rec(v0.i256) -> i256 {
