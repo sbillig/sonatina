@@ -1,6 +1,9 @@
 use std::{collections::BTreeSet, sync::Arc};
 
-use crate::{isa::evm::test_util::osaka_triple, object::lowering::MachinePassKind};
+use crate::{
+    isa::evm::test_util::osaka_triple, object::lowering::MachinePassKind,
+    optim::steps::StepRecorder,
+};
 use sonatina_ir::{
     I256, Immediate, Linkage, Module, Signature, Type, U256, ValueId,
     builder::ModuleBuilder,
@@ -27,7 +30,6 @@ use super::{
     super::{LateCleanupProfile, SwitchLoweringStrategy},
     branch::canonicalize_machine_branch_conditions,
     pipeline::run_machine_opt_pipeline,
-    record::MachineRecorder,
     switch::lower_switches,
     verify::verify_machine_function,
 };
@@ -504,7 +506,7 @@ fn machine_known_bits_drops_mask_on_mstore8_value() {
 #[test]
 fn machine_steps_record_demanded_bits_of_dropped_mask() {
     let (module, func_ref) = mstore8_mask_module();
-    let mut recorder = MachineRecorder::new(&module, &[func_ref], LateCleanupProfile::Speed);
+    let mut recorder = StepRecorder::new(&module, &[func_ref]);
     run_machine_opt_pipeline(
         &module,
         &[func_ref],
@@ -514,7 +516,7 @@ fn machine_steps_record_demanded_bits_of_dropped_mask() {
         Some(&mut recorder),
     )
     .expect("machine pipeline should run");
-    let steps = recorder.finish();
+    let steps = recorder.finish(LateCleanupProfile::Speed);
     let pass = steps
         .passes
         .iter()

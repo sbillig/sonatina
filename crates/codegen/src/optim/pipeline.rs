@@ -26,6 +26,7 @@ use crate::{
     compile::OptLevel,
     domtree::DomTree,
     loop_analysis::LoopTree,
+    object::lowering::StepKind,
     transform::aggregate::{
         ObjectArgPromotion,
         object_arg_invariance::{FunctionArgInvariance, compute_arg_invariance},
@@ -64,6 +65,7 @@ use super::{
     return_thread::ReturnThread,
     scalar_canonicalize::ScalarCanonicalize,
     sccp::SccpSolver,
+    steps::{StepLog, StepRecorder},
     switch_formation::SwitchFormation,
 };
 
@@ -315,11 +317,11 @@ impl Pass {
         self.info().name
     }
 
-    pub(crate) const fn needs_func_behavior(self) -> bool {
+    const fn needs_func_behavior(self) -> bool {
         self.info().needs_func_behavior
     }
 
-    pub(crate) const fn needs_object_facts(self) -> bool {
+    const fn needs_object_facts(self) -> bool {
         matches!(
             self,
             Pass::AggregateCombine
@@ -331,7 +333,7 @@ impl Pass {
         )
     }
 
-    pub(crate) const fn invalidates_func_behavior(self) -> bool {
+    const fn invalidates_func_behavior(self) -> bool {
         self.info().invalidates_func_behavior
     }
 
@@ -800,7 +802,7 @@ impl Pipeline {
                         pass_count = passes.len()
                     )
                     .entered();
-                    run_function_pass_round(module, passes, &mut func_behavior_dirty, None);
+                    run_function_pass_round(module, passes, &mut func_behavior_dirty, None, None);
                 }
                 Step::DeadArgElim => {
                     let _span = debug_span!("sonatina.optim.pipeline.dead_arg_elim").entered();
@@ -836,11 +838,14 @@ impl Default for Pipeline {
     }
 }
 
+/// Runs `passes` over `funcs`, or every function of `module`, reporting
+/// their steps on `funcs` to `recorder` if one records.
 pub(crate) fn run_function_pass_round(
     module: &Module,
     passes: &[Pass],
     func_behavior_dirty: &mut bool,
     funcs: Option<&[FuncRef]>,
+    mut recorder: Option<&mut StepRecorder>,
 ) {
     let mut round_facts = RoundFacts::default();
     for &pass in passes {
@@ -849,7 +854,13 @@ pub(crate) fn run_function_pass_round(
             func_behavior::analyze_module(module);
             *func_behavior_dirty = false;
         }
-        let result = run_module_pass(pass, module, funcs, &mut round_facts);
+        let result = run_module_pass(
+            pass,
+            module,
+            funcs,
+            &mut round_facts,
+            recorder.as_deref_mut(),
+        );
         if result.changed && result.invalidates_func_behavior {
             *func_behavior_dirty = true;
         }
@@ -892,6 +903,7 @@ fn run_module_pass(
     module: &Module,
     funcs: Option<&[FuncRef]>,
     round_facts: &mut RoundFacts,
+    recorder: Option<&mut StepRecorder>,
 ) -> PassResult {
     let _span = debug_span!("sonatina.optim.pipeline.pass_round", pass = pass.as_str()).entered();
     if pass.needs_object_facts() {
@@ -914,7 +926,7 @@ fn run_module_pass(
         FxHashSet::default()
     };
     let changed = AtomicBool::new(false);
-    let run_on = |func_ref: FuncRef, func: &mut Function| {
+    let run_on = |func_ref: FuncRef, func: &mut Function, log: Option<&mut StepLog>| {
         let _span = debug_span!(
             "sonatina.optim.pipeline.function",
             func_ref = func_ref.as_u32()
@@ -932,19 +944,39 @@ fn run_module_pass(
                 .as_ref()
                 .and_then(|proofs| proofs.get(&func_ref)),
             tail_callers.contains(&func_ref),
+            log,
         )
         .changed
         {
             changed.store(true, Ordering::Relaxed);
         }
     };
-    match funcs {
-        Some(funcs) => sonatina_ir::parallel::for_each(&module.func_store, funcs, |&func_ref| {
-            module
-                .func_store
-                .modify(func_ref, |func| run_on(func_ref, func));
-        }),
-        None => module.func_store.par_for_each(run_on),
+    match (funcs, recorder) {
+        (Some(funcs), Some(recorder)) => {
+            let logs = recorder.begin_pass(module, pass.into());
+            let logs = sonatina_ir::parallel::map_owned(
+                &module.func_store,
+                funcs.iter().copied().zip(logs).collect(),
+                |(func_ref, mut log)| {
+                    module
+                        .func_store
+                        .modify(func_ref, |func| run_on(func_ref, func, Some(&mut log)));
+                    log
+                },
+            );
+            recorder.end_pass(logs);
+        }
+        (Some(funcs), None) => {
+            sonatina_ir::parallel::for_each(&module.func_store, funcs, |&func_ref| {
+                module
+                    .func_store
+                    .modify(func_ref, |func| run_on(func_ref, func, None));
+            })
+        }
+        (None, None) => module
+            .func_store
+            .par_for_each(|func_ref, func| run_on(func_ref, func, None)),
+        (None, Some(_)) => unreachable!("steps are recorded of the listed functions"),
     }
     PassResult::new(pass, changed.load(Ordering::Relaxed))
 }
@@ -962,7 +994,8 @@ struct PassContext {
 }
 
 /// Dispatch a single pass, recomputing any required analyses from the
-/// current function state.
+/// current function state. The passes of the EVM machine round report their
+/// steps to `log`.
 #[allow(clippy::too_many_arguments)]
 fn run_pass(
     pass: Pass,
@@ -973,6 +1006,7 @@ fn run_pass(
     object_effects: Option<&ObjectEffectSummaryMap>,
     arg_invariance: Option<&FunctionArgInvariance>,
     tail_caller: bool,
+    mut log: Option<&mut StepLog>,
 ) -> PassResult {
     let _span = trace_span!("sonatina.optim.pipeline.pass", pass = pass.as_str()).entered();
     let changed = match pass {
@@ -982,7 +1016,9 @@ fn run_pass(
         }
         Pass::CfgCleanup => {
             let _span = trace_span!("sonatina.optim.pipeline.pass.cfg_cleanup").entered();
-            CfgCleanup::new().run(func)
+            let changed = CfgCleanup::new().run(func);
+            StepLog::step(&mut log, StepKind::CfgCleanup, func, None);
+            changed
         }
         Pass::AggregateCombine => {
             let _span = trace_span!("sonatina.optim.pipeline.pass.aggregate_combine").entered();
@@ -990,7 +1026,9 @@ fn run_pass(
         }
         Pass::BranchCanonicalize => {
             let _span = trace_span!("sonatina.optim.pipeline.pass.branch_canonicalize").entered();
-            BranchCanonicalize::new().run(func)
+            let changed = BranchCanonicalize::new().run(func);
+            StepLog::step(&mut log, StepKind::BranchCanonicalize, func, None);
+            changed
         }
         Pass::ObjectLoadStore => {
             let _span = trace_span!("sonatina.optim.pipeline.pass.object_load_store").entered();
@@ -1037,11 +1075,11 @@ fn run_pass(
         }
         Pass::ScalarCanonicalize => {
             let _span = trace_span!("sonatina.optim.pipeline.pass.scalar_canonicalize").entered();
-            ScalarCanonicalize::new().run(func)
+            ScalarCanonicalize::new().run_with_steps(func, log)
         }
         Pass::KnownBitsSimplify => {
             let _span = trace_span!("sonatina.optim.pipeline.pass.known_bits_simplify").entered();
-            KnownBitsSimplify::new().run(func)
+            KnownBitsSimplify::new().run_with_steps(func, log)
         }
         Pass::CheckedArithElim => {
             let _span = trace_span!("sonatina.optim.pipeline.pass.checked_arith_elim").entered();
@@ -1173,17 +1211,19 @@ fn run_pass(
             let mut solver = SccpSolver::new();
             let changed = {
                 let _span = trace_span!("sonatina.optim.pipeline.sccp.solve").entered();
-                solver.run(func, &mut ctx.cfg)
+                solver.run_with_steps(func, &mut ctx.cfg, log.as_deref_mut())
             };
             let cleaned = {
                 let _span = trace_span!("sonatina.optim.pipeline.sccp.cleanup").entered();
                 CfgCleanup::new().run(func)
             };
+            StepLog::step(&mut log, StepKind::CfgCleanup, func, None);
             changed || cleaned
         }
         Pass::Adce => {
             let _span = trace_span!("sonatina.optim.pipeline.pass.adce").entered();
-            AdceSolver::with_call_policy(AdceCallPolicy::UseCurrentFuncEffects).run(func)
+            AdceSolver::with_call_policy(AdceCallPolicy::UseCurrentFuncEffects)
+                .run_with_steps(func, log)
         }
         Pass::Licm => {
             let _span = trace_span!("sonatina.optim.pipeline.pass.licm").entered();
@@ -1291,11 +1331,12 @@ fn run_pass(
             object_memory.compute(func, func_local_object_args, object_effects);
             {
                 let _span = trace_span!("sonatina.optim.pipeline.gvn.solve").entered();
-                solver.run_with_object_memory(
+                solver.run_with_steps(
                     func,
                     &mut ctx.cfg,
                     &mut ctx.domtree,
                     Some(&object_memory),
+                    log,
                 )
             }
         }
@@ -1441,6 +1482,7 @@ block0:
                 &[Pass::AggregateCombine],
                 &mut behavior_dirty,
                 Some(&[helper]),
+                None,
             );
             if change_call {
                 module.func_store.modify(helper, |func| {
@@ -1460,6 +1502,7 @@ block0:
                 &[Pass::AggregateScalarize],
                 &mut behavior_dirty,
                 Some(&[observer]),
+                None,
             );
             assert!(verify_module(&module, &config).is_ok());
             module.func_store.view(observer, |func| {
@@ -3418,6 +3461,7 @@ block2:
             &[Pass::Sccp, Pass::CfgCleanup],
             &mut func_behavior_dirty,
             Some(&[selected]),
+            None,
         );
 
         module.func_store.view(selected, |func| {
