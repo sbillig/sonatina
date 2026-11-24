@@ -28,7 +28,7 @@ use crate::{
     cfg_edit::CfgEditor,
     cfg_scc::CfgSccAnalysis,
     domtree::{DomTree, DominatorTreeTraversable},
-    object::lowering::{StepFacts, StepKind},
+    object::lowering::{GvnFacts, GvnOperand, StepFacts, StepKind},
     optim::{
         adce::divergent_blocks,
         aggregate::{CarrierSource, ObjectMemoryAnalysis, ObjectReadGvnKey},
@@ -1501,6 +1501,56 @@ impl GvnSolver {
         self.assign_class(value, class);
     }
 
+    /// The classes, edge facts and dead edges of the solution, of the values
+    /// and blocks of `func`: the function solved, or the function edge
+    /// removal left if `pruned`.
+    fn export(&self, func: &Function, pruned: bool) -> GvnFacts {
+        let operand = |value| match func.dfg.value(value) {
+            Value::Immediate { imm, .. } => Some(GvnOperand::Imm(*imm)),
+            Value::Arg { .. } | Value::Inst { .. } => Some(GvnOperand::Value(value)),
+            Value::Global { .. } | Value::Zero { .. } => None,
+        };
+        let layout = &func.layout;
+        let class = layout
+            .iter_block()
+            .flat_map(|block| layout.iter_inst(block))
+            .flat_map(|inst| func.dfg.inst_results(inst))
+            .filter_map(|&value| {
+                let leader = self.leader(value);
+                Some((value, operand(leader).filter(|_| leader != value)?))
+            })
+            .collect();
+        let mut facts = GvnFacts {
+            class,
+            ..GvnFacts::default()
+        };
+        for block in layout
+            .iter_block()
+            .filter(|&block| self.blocks[block].reachable)
+        {
+            let edges = self.blocks[block]
+                .out_edges
+                .iter()
+                .map(|&edge| self.edge_data(edge));
+            // Edge removal keeps the order of the edges it keeps.
+            for (data, slot) in edges.filter(|data| !pruned || data.reachable).zip(0..) {
+                if !data.reachable {
+                    facts.dead_edges.push((block, slot));
+                }
+                let predicate = data
+                    .predicate
+                    .map(|PredicateRelation::Eq { lhs, rhs }| (lhs, rhs));
+                let resolved = data.cond.expand().zip(data.resolved_cond.expand());
+                for (lhs, rhs) in predicate.into_iter().chain(resolved) {
+                    if let (Some(lhs), Some(rhs)) = (operand(lhs), operand(rhs)) {
+                        facts.preds.push((block, slot, lhs, rhs));
+                    }
+                }
+            }
+        }
+        facts
+    }
+
     /// Returns `true` if the edge is backedge.
     fn is_back_edge(&self, edge: Edge) -> bool {
         let from = self.edge_data(edge).from;
@@ -2390,18 +2440,19 @@ impl<'a> RedundantCodeRemover<'a> {
         // The solver's facts, of the function it solved and still of the
         // function edge removal leaves.
         let recording = steps.is_some();
-        let facts = |func: &Function| {
+        let facts = |func: &Function, pruned| {
             recording.then(|| StepFacts {
                 known_bits: known_bits.export(func),
+                gvn: Some(self.solver.export(func, pruned)),
                 ..StepFacts::default()
             })
         };
         // Remove unreachable edges and blocks before redundant code removal to calculate precise
         // dominator tree.
-        let prune_facts = facts(func);
+        let prune_facts = facts(func, false);
         self.changed |= self.remove_unreachable_edges(func);
         StepLog::step(&mut steps, StepKind::GvnPrune, func, prune_facts);
-        let rewrite_facts = facts(func);
+        let mut rewrite_facts = facts(func, true);
 
         // Recompute cfg and domtree.
         cfg.compute(func);
@@ -2433,6 +2484,22 @@ impl<'a> RedundantCodeRemover<'a> {
                 func.erase_inst(inst);
                 self.changed = true;
             }
+        }
+        if let Some(gvn) = rewrite_facts.as_mut().and_then(|facts| facts.gvn.as_mut()) {
+            let phis: FxHashSet<_> = self.resolved_value_phis.values().collect();
+            gvn.value_phis = self
+                .renames
+                .iter()
+                .filter(|(_, phi)| phis.contains(phi))
+                .map(|(&value, &phi)| {
+                    (
+                        value,
+                        func.layout.inst_block(func.dfg.value_inst(phi).unwrap()),
+                        phi,
+                    )
+                })
+                .collect();
+            gvn.value_phis.sort_unstable();
         }
         StepLog::step(&mut steps, StepKind::GvnRewrite, func, rewrite_facts);
         self.changed
