@@ -1,5 +1,6 @@
 ---
 source: crates/codegen/tests/evm.rs
+assertion_line: 2507
 expression: "String::from_utf8(out).unwrap()"
 input_file: test_files/evm/fixed_slot_spill_live_across_pointer_write.sntn
 ---
@@ -30,5 +31,5 @@ evm mem plan: through_integer scratch_words=2 stable_words=0 stable_mode=None en
 
 
 evm:
-  case integer_address_0: calldata_len=96 success reason=Return gas_used=22214 gas_refunded=0 logs=0 output=call len=32 tx_gas=21408 runtime_gas=806
-  case integer_address_32: calldata_len=96 success reason=Return gas_used=22226 gas_refunded=0 logs=0 output=call len=32 tx_gas=21420 runtime_gas=806
+  case integer_address_0: calldata_len=96 success reason=Return gas_used=22216 gas_refunded=0 logs=0 output=call len=32 tx_gas=21408 runtime_gas=808
+  case integer_address_32: calldata_len=96 success reason=Return gas_used=22228 gas_refunded=0 logs=0 output=call len=32 tx_gas=21420 runtime_gas=808

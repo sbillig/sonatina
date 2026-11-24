@@ -1,21 +1,22 @@
 ---
 source: crates/codegen/tests/evm.rs
+assertion_line: 2507
 expression: "String::from_utf8(out).unwrap()"
 input_file: test_files/evm/memzero.sntn
 ---
 evm.config: stack_reach=16 vcode=true bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false
 
 object: Contract
-  section runtime: 27 bytes
-  total: 27 bytes
+  section runtime: 29 bytes
+  total: 29 bytes
 
 functions:
   mem: global_dyn_base=0x40 arena_base=0x0 scratch_peak_words=2 stable_chain_peak_words=0
-  entry: ir_blocks=1 ir_insts=9 vcode_ops=21 fixups=0 imm_bytes=6
+  entry: ir_blocks=1 ir_insts=10 vcode_ops=24 fixups=0 imm_bytes=5
     mem: scratch_words=2 stable_words=0 stable_mode=None entry_abs_words=2 abs_words_end=2
 
 evm:
-  case ok: calldata_len=0 success reason=Return gas_used=21066 gas_refunded=0 logs=0 output=call len=32 tx_gas=21000 runtime_gas=66
+  case ok: calldata_len=0 success reason=Return gas_used=21074 gas_refunded=0 logs=0 output=call len=32 tx_gas=21000 runtime_gas=74
 
 
 --------------- DEBUG ---------------
@@ -26,8 +27,11 @@ entry:
     PUSH1 0x1 (1)  // evm_mstore v0 v1;
     PUSH0
     MSTORE
-    PUSH1 0x2 (2)  // evm_mstore v2 v4;
-    PUSH1 0x20 (32)
+    PUSH1 0x20 (32)  // v3.i256 = add v0 v2;
+    PUSH0
+    ADD
+    PUSH1 0x2 (2)  // evm_mstore v3 v4;
+    DUP2
     MSTORE
     CALLDATASIZE  // v6.i256 = evm_calldata_size;
     PUSH1 0x40 (64)  // evm_calldata_copy v0 v6 v5;
@@ -36,7 +40,7 @@ entry:
     CALLDATACOPY
     PUSH0  // v7.i256 = evm_mload v0;
     MLOAD
-    PUSH1 0x20 (32)  // v8.i256 = evm_mload v2;
+    SWAP1  // v8.i256 = evm_mload v3;
     MLOAD
     ADD  // v9.i256 = add v7 v8;
     PUSH0  // evm_mstore v0 v9;
