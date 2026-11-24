@@ -3,6 +3,8 @@
 #!   calldata: u32be(11) u32be(22)
 #!   expect: return u256(27)
 
+# At O0 the lowering adds each GEP's constant offset to the alloca address;
+# `gep_immediate_fold_opt2` shows the machine pass round folding it.
 target = "evm-ethereum-osaka"
 
 type @triple = { i256, i256, i256 };

@@ -1,0 +1,69 @@
+---
+source: crates/codegen/tests/evm.rs
+assertion_line: 2509
+expression: opt_ir_snapshot
+input_file: test_files/evm/gvn_path_fact_late_join_edge.sntn
+---
+target = "evm-ethereum-osaka"
+
+func public %entry() {
+    block0:
+        v40.i256 = evm_calldata_load 0.i256;
+        v0.i1 = is_zero v40;
+        v41.i256 = evm_calldata_load 32.i256;
+        v30.i1 = is_zero v41;
+        v51.i256 = evm_calldata_load 96.i256;
+        v31.i1 = is_zero v51;
+        v52.i256 = evm_calldata_load 128.i256;
+        v32.i1 = is_zero v52;
+        v53.i256 = evm_calldata_load 160.i256;
+        v33.i1 = is_zero v53;
+        jump block1;
+
+    block1:
+        v1.i256 = phi (0.i256 block0) (v9 block7);
+        v2.i1 = is_zero v1;
+        br v2 block2 block3;
+
+    block2:
+        br v0 block4 block7;
+
+    block3:
+        br v30 block20 block10;
+
+    block20:
+        br v31 block21 block10;
+
+    block21:
+        br v32 block22 block10;
+
+    block22:
+        br v33 block4 block10;
+
+    block4:
+        v3.i256 = evm_calldata_load 64.i256;
+        v4.i1 = is_zero v3;
+        br v4 block5 block7;
+
+    block5:
+        br v0 block7 block9;
+
+    block9:
+        mstore 0.i256 77.i256 i256;
+        jump block7;
+
+    block7:
+        v9.i256 = add v1 1.i256;
+        v10.i1 = lt v9 5.i256;
+        br v10 block1 block10;
+
+    block10:
+        evm_return 0.i256 32.i256;
+}
+
+
+object @Contract {
+    section runtime {
+        entry %entry;
+    }
+}
