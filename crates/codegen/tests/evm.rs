@@ -3718,3 +3718,162 @@ object @Contract {
         }
     }
 }
+
+/// Runs `entry` of `body` on `calldata` at every optimization level and returns each level's
+/// 32-byte result, or its compile or execution failure.
+fn word_results_at_all_levels(
+    body: &str,
+    calldata: &[u8],
+) -> Vec<(OptLevel, Result<IrU256, String>)> {
+    let source = format!(
+        "target = \"evm-ethereum-osaka\"\n{body}\nobject @Contract {{ section runtime {{ entry %entry; }} }}\n"
+    );
+    [OptLevel::O0, OptLevel::O1, OptLevel::O2, OptLevel::Os]
+        .into_iter()
+        .map(|level| {
+            let compiler = Compile::new(parse_sona(&source).module, EvmCompiler::default())
+                .with_opt_level(level);
+            let result = compiler
+                .compile()
+                .map_err(|err| format!("{err:?}"))
+                .and_then(|artifacts| {
+                    let runtime = artifacts[0]
+                        .sections
+                        .iter()
+                        .find(|(name, _)| name.0 == "runtime")
+                        .unwrap();
+                    match EvmHarness::from_runtime(&runtime.1.bytes).call(calldata) {
+                        ExecutionResult::Success {
+                            output: Output::Call(actual),
+                            ..
+                        } => Ok(IrU256::from_big_endian(&actual)),
+                        result => Err(format!("{result:?}")),
+                    }
+                });
+            (level, result)
+        })
+        .collect()
+}
+
+fn calldata_words(words: &[u64]) -> Vec<u8> {
+    words
+        .iter()
+        .flat_map(|&word| IrU256::from(word).to_big_endian())
+        .collect()
+}
+
+/// `not (zext (is_zero (lt a b)))` is never zero, so the branch always takes `block1`, which
+/// returns `zext (lt a b) - 1`: `2**256 - 1` for `a = 5, b = 3`. The machine round's GVN
+/// peels the word `not` and assumes `lt a b` is 1 there.
+#[test]
+#[ignore = "reproduces GVN peeling a word `not` from a branch condition"]
+fn word_not_branch_keeps_compare_at_all_levels() {
+    let body = r#"
+func public %entry() {
+    block0:
+        v0.i256 = evm_calldata_load 0.i256;
+        v1.i256 = evm_calldata_load 32.i256;
+        v2.i1 = lt v0 v1;
+        v3.i1 = is_zero v2;
+        v4.i256 = zext v3 i256;
+        v5.i256 = not v4;
+        v6.i1 = ne v5 0.i256;
+        br v6 block1 block2;
+
+    block1:
+        v7.i256 = zext v2 i256;
+        v8.i256 = sub v7 1.i256;
+        mstore 0.i256 v8 i256;
+        evm_return 0.i256 32.i256;
+
+    block2:
+        mstore 0.i256 7.i256 i256;
+        evm_return 0.i256 32.i256;
+}
+"#;
+    let results = word_results_at_all_levels(body, &calldata_words(&[5, 3]));
+    eprintln!("{results:?}");
+    for (level, result) in results {
+        assert_eq!(result, Ok(IrU256::MAX), "{level:?}");
+    }
+}
+
+/// `lt (and y 15) (or z 16)` is always true, so `eq` of it with true is true and the result is
+/// `x & 255`: `0xff` for `x = 0x1ff`. Range analysis records the machine round's word compare
+/// as the `i1` true, whose signed range is `[-1, -1]`, decides the `eq` false, and drops the mask.
+#[test]
+#[ignore = "reproduces range analysis giving a true word compare the i1 signed range"]
+fn decided_word_compare_keeps_mask_at_all_levels() {
+    let body = r#"
+func public %entry() {
+    block0:
+        v0.i256 = evm_calldata_load 0.i256;
+        v1.i256 = evm_calldata_load 32.i256;
+        v2.i256 = evm_calldata_load 64.i256;
+        v3.i256 = and v0 15.i256;
+        v4.i256 = or v1 16.i256;
+        v5.i1 = lt v3 v4;
+        v6.i1 = eq v5 1.i1;
+        v7.i256 = zext v6 i256;
+        v8.i256 = mul v7 v2;
+        v9.i256 = and v8 255.i256;
+        mstore 0.i256 v9 i256;
+        evm_return 0.i256 32.i256;
+}
+"#;
+    let results = word_results_at_all_levels(body, &calldata_words(&[0, 0, 0x1ff]));
+    eprintln!("{results:?}");
+    for (level, result) in results {
+        assert_eq!(result, Ok(IrU256::from(0xffu64)), "{level:?}");
+    }
+}
+
+/// `block3` and `block4` both have predecessors `block1` and `block2`, so their phis share a
+/// GVN class, and so do the `add`s of them. GVN resolves the `add` in `block4` to a phi it
+/// inserts in `block3`, which does not dominate `block4`.
+#[test]
+#[ignore = "reproduces value phi resolved into a non-dominating block"]
+fn sibling_phi_adds_run_at_all_levels() {
+    let body = r#"
+func public %entry() {
+    block0:
+        v0.i256 = evm_calldata_load 0.i256;
+        v1.i256 = evm_calldata_load 32.i256;
+        v2.i256 = evm_calldata_load 64.i256;
+        v3.i256 = evm_calldata_load 96.i256;
+        v4.i256 = evm_calldata_load 128.i256;
+        v5.i1 = ne v0 0.i256;
+        br v5 block1 block2;
+
+    block1:
+        v6.i256 = add v3 1.i256;
+        mstore 32.i256 v6 i256;
+        v7.i1 = ne v1 0.i256;
+        br v7 block3 block4;
+
+    block2:
+        v8.i256 = add v4 1.i256;
+        mstore 32.i256 v8 i256;
+        v9.i1 = ne v2 0.i256;
+        br v9 block3 block4;
+
+    block3:
+        v10.i256 = phi (v3 block1) (v4 block2);
+        v11.i256 = add v10 1.i256;
+        mstore 0.i256 v11 i256;
+        evm_return 0.i256 32.i256;
+
+    block4:
+        v12.i256 = phi (v3 block1) (v4 block2);
+        v13.i256 = add v12 1.i256;
+        mstore 0.i256 v13 i256;
+        evm_return 0.i256 32.i256;
+}
+"#;
+    // block0 -> block1 -> block4 returns `v3 + 1`.
+    let results = word_results_at_all_levels(body, &calldata_words(&[1, 0, 0, 10, 20]));
+    eprintln!("{results:?}");
+    for (level, result) in results {
+        assert_eq!(result, Ok(IrU256::from(11u64)), "{level:?}");
+    }
+}

@@ -2951,6 +2951,58 @@ func private %promo_piece(v0.i1, v1.i256) -> i256 {
         assert!(dumped.contains("(11.i256 block7)"), "{dumped}");
     }
 
+    /// `block3` and `block4` have the same predecessors, so `v7` and `v9` get one phi key and
+    /// one class, and `v8` and `v10` share a class whose value phi is placed in `block3`.
+    /// Resolving it for `v10` aliases `v10` to the phi inserted in `block3`, which does not
+    /// dominate `block4`.
+    #[test]
+    #[ignore = "reproduces value phi resolved into a non-dominating block"]
+    fn value_phi_of_sibling_phi_class_stays_in_its_block() {
+        let module = parse_module(
+            r#"
+target = "evm-ethereum-london"
+
+func public %f(v0.i1, v1.i1, v2.i1, v3.i32, v4.i32) -> i32 {
+    block0:
+        br v0 block1 block2;
+
+    block1:
+        v5.i32 = add v3 1.i32;
+        br v1 block3 block4;
+
+    block2:
+        v6.i32 = add v4 1.i32;
+        br v2 block3 block4;
+
+    block3:
+        v7.i32 = phi (v3 block1) (v4 block2);
+        v8.i32 = add v7 1.i32;
+        return v8;
+
+    block4:
+        v9.i32 = phi (v3 block1) (v4 block2);
+        v10.i32 = add v9 1.i32;
+        return v10;
+}
+"#,
+        )
+        .expect("module parses")
+        .module;
+        let func_ref = module.funcs()[0];
+        module.func_store.modify(func_ref, |func| {
+            let mut cfg = ControlFlowGraph::default();
+            cfg.compute(func);
+            let mut domtree = DomTree::default();
+            domtree.compute(&cfg);
+            GvnSolver::new().run(func, &mut cfg, &mut domtree);
+        });
+        let dumped = module.func_store.view(func_ref, |func| {
+            FuncWriter::new(func_ref, func).dump_string()
+        });
+        eprintln!("{dumped}");
+        verify_module_or_panic(&module, &VerifierConfig::for_level(VerificationLevel::Full));
+    }
+
     #[test]
     fn equal_value_phis_do_not_permanently_alias_expression_classes() {
         let mut solver = GvnSolver::new();
