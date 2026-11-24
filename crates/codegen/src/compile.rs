@@ -298,7 +298,7 @@ impl OptLevel {
     }
 }
 
-fn evm_backend_for_module(
+pub(crate) fn evm_backend_for_module(
     module: &Module,
     opt_level: OptLevel,
 ) -> Result<EvmBackend, Vec<ObjectCompileError>> {
