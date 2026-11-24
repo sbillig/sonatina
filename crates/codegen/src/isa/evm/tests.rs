@@ -1,6 +1,7 @@
 use super::{test_util::osaka_backend, *};
 use crate::{
     analysis::func_behavior,
+    compile::{OptLevel, evm_backend_for_module},
     critical_edge::CriticalEdgeSplitter,
     domtree::DomTree,
     liveness::{InstLiveness, Liveness},
@@ -16,7 +17,6 @@ use crate::{
     },
     stackalloc::{
         Action, Actions, Allocator, StackifyAlloc, StackifyBuilder, StackifyEdgeSplitter,
-        StackifySearchProfile,
     },
 };
 use rustc_hash::{FxHashMap, FxHashSet};
@@ -93,13 +93,9 @@ fn fixtures_store_exactly_the_spills_they_reload() {
             })
             .map_or(16, |reach| reach.parse().unwrap());
         let mut unread = Vec::new();
-        for (optimize, profile) in [
-            (false, StackifySearchProfile::Fast),
-            (true, StackifySearchProfile::GreedyWide),
-            (true, StackifySearchProfile::Exact),
-        ] {
+        for level in [OptLevel::O0, OptLevel::O1, OptLevel::O2] {
             let mut parsed = parse_module(&source).unwrap();
-            if optimize {
+            if level != OptLevel::O0 {
                 Pipeline::speed().run(&mut parsed.module);
                 let roots = collect_object_roots(&parsed.module);
                 run_dead_func_elim(&mut parsed.module, &roots, Default::default());
@@ -117,9 +113,9 @@ fn fixtures_store_exactly_the_spills_they_reload() {
                             .func_sig(*func, |sig| sig.linkage().has_definition())
                 })
                 .collect();
-            let prepared = osaka_backend()
+            let prepared = evm_backend_for_module(&parsed.module, level)
+                .unwrap()
                 .with_stackify_reach_depth(reach)
-                .with_stackify_search_profile(profile)
                 .prepare_section(SectionWorkModule::from_roots(
                     &parsed.module,
                     funcs[0],
@@ -150,7 +146,7 @@ fn fixtures_store_exactly_the_spills_they_reload() {
                         .ctx
                         .func_sig(func, |sig| sig.name().to_string());
                     unread.push(format!(
-                        "{}: %{name} ({profile:?}): {} unread stores, {} unstored loads",
+                        "{}: %{name} ({level:?}): {} unread stores, {} unstored loads",
                         path.display(),
                         stores.0,
                         stores.1
