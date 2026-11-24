@@ -29,19 +29,22 @@ pub(crate) fn run_machine_opt_pipeline(
     switch_strategy: SwitchLoweringStrategy,
     reach_depth: u8,
 ) -> Result<(), String> {
+    let run_passes = profile != LateCleanupProfile::Off;
     let _span = debug_span!(
         "sonatina.codegen.evm.machine.pipeline",
         funcs = funcs.len(),
-        passes = MACHINE_PASSES.len()
+        passes = if run_passes { MACHINE_PASSES.len() } else { 0 }
     )
     .entered();
-    let mut func_behavior_dirty = true;
-    run_function_pass_round(
-        module,
-        MACHINE_PASSES,
-        &mut func_behavior_dirty,
-        Some(funcs),
-    );
+    if run_passes {
+        let mut func_behavior_dirty = true;
+        run_function_pass_round(
+            module,
+            MACHINE_PASSES,
+            &mut func_behavior_dirty,
+            Some(funcs),
+        );
+    }
     let use_tree = match switch_strategy {
         SwitchLoweringStrategy::Auto => profile == LateCleanupProfile::Speed,
         SwitchLoweringStrategy::Linear => false,

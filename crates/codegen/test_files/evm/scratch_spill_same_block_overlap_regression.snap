@@ -1,23 +1,24 @@
 ---
 source: crates/codegen/tests/evm.rs
+assertion_line: 2507
 expression: "String::from_utf8(out).unwrap()"
 input_file: test_files/evm/scratch_spill_same_block_overlap_regression.sntn
 ---
 evm.config: stack_reach=8 vcode=true bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false
 
 object: Contract
-  section runtime: 209 bytes
-  total: 209 bytes
+  section runtime: 315 bytes
+  total: 315 bytes
 
 functions:
   mem: global_dyn_base=0x800 arena_base=0x0 scratch_peak_words=0 stable_chain_peak_words=64
-  entry: ir_blocks=1 ir_insts=37 vcode_ops=111 fixups=0 imm_bytes=68
+  entry: ir_blocks=1 ir_insts=69 vcode_ops=210 fixups=2 imm_bytes=69
     mem: scratch_words=0 stable_words=64 stable_mode=StableAbs(base=0x0) entry_abs_words=0 abs_words_end=64
-  touch: ir_blocks=1 ir_insts=1 vcode_ops=2 fixups=0 imm_bytes=0
+  touch: ir_blocks=1 ir_insts=1 vcode_ops=3 fixups=0 imm_bytes=0
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=64 abs_words_end=0
 
 evm:
-  case copy_first_word: calldata_len=0 success reason=Return gas_used=21669 gas_refunded=0 logs=0 output=call len=32 tx_gas=21000 runtime_gas=669
+  case copy_first_word: calldata_len=0 success reason=Return gas_used=21949 gas_refunded=0 logs=0 output=call len=32 tx_gas=21000 runtime_gas=949
 
 
 --------------- DEBUG ---------------
@@ -28,103 +29,202 @@ entry:
     PUSH1 0x1 (1)  // evm_mstore v0 v2;
     PUSH0
     MSTORE
-    PUSH1 0x2 (2)  // evm_mstore v3 v5;
-    PUSH1 0x20 (32)
+    PUSH1 0x20 (32)  // v4.i256 = add v0 v3;
+    PUSH0
+    ADD
+    PUSH1 0x2 (2)  // evm_mstore v4 v5;
+    SWAP1
     MSTORE
-    PUSH1 0x3 (3)  // evm_mstore v6 v8;
-    PUSH1 0x40 (64)
+    PUSH1 0x40 (64)  // v7.i256 = add v0 v6;
+    PUSH0
+    ADD
+    PUSH1 0x3 (3)  // evm_mstore v7 v8;
+    SWAP1
     MSTORE
-    PUSH1 0x4 (4)  // evm_mstore v9 v11;
-    PUSH1 0x60 (96)
+    PUSH1 0x60 (96)  // v10.i256 = add v0 v9;
+    PUSH0
+    ADD
+    PUSH1 0x4 (4)  // evm_mstore v10 v11;
+    SWAP1
     MSTORE
-    PUSH1 0x5 (5)  // evm_mstore v12 v14;
-    PUSH1 0x80 (128)
+    PUSH1 0x80 (128)  // v13.i256 = add v0 v12;
+    PUSH0
+    ADD
+    PUSH1 0x5 (5)  // evm_mstore v13 v14;
+    SWAP1
     MSTORE
-    PUSH1 0x6 (6)  // evm_mstore v15 v17;
-    PUSH1 0xa0 (160)
+    PUSH1 0xa0 (160)  // v16.i256 = add v0 v15;
+    PUSH0
+    ADD
+    PUSH1 0x6 (6)  // evm_mstore v16 v17;
+    SWAP1
     MSTORE
-    PUSH1 0x7 (7)  // evm_mstore v18 v20;
-    PUSH1 0xc0 (192)
+    PUSH1 0xc0 (192)  // v19.i256 = add v0 v18;
+    PUSH0
+    ADD
+    PUSH1 0x7 (7)  // evm_mstore v19 v20;
+    SWAP1
     MSTORE
-    PUSH1 0x8 (8)  // evm_mstore v21 v23;
-    PUSH1 0xe0 (224)
+    PUSH1 0xe0 (224)  // v22.i256 = add v0 v21;
+    PUSH0
+    ADD
+    PUSH1 0x8 (8)  // evm_mstore v22 v23;
+    SWAP1
     MSTORE
-    PUSH1 0x9 (9)  // evm_mstore v24 v26;
-    PUSH2 0x100 (256)
+    PUSH2 0x100 (256)  // v25.i256 = add v0 v24;
+    PUSH0
+    ADD
+    PUSH1 0x9 (9)  // evm_mstore v25 v26;
+    SWAP1
     MSTORE
-    PUSH1 0xa (10)  // evm_mstore v27 v29;
-    PUSH2 0x120 (288)
+    PUSH2 0x120 (288)  // v28.i256 = add v0 v27;
+    PUSH0
+    ADD
+    PUSH1 0xa (10)  // evm_mstore v28 v29;
+    SWAP1
     MSTORE
-    PUSH1 0xb (11)  // evm_mstore v30 v32;
-    PUSH2 0x140 (320)
+    PUSH2 0x140 (320)  // v31.i256 = add v0 v30;
+    PUSH0
+    ADD
+    PUSH1 0xb (11)  // evm_mstore v31 v32;
+    SWAP1
     MSTORE
-    PUSH1 0xc (12)  // evm_mstore v33 v101;
-    PUSH2 0x160 (352)
+    PUSH2 0x160 (352)  // v100.i256 = add v0 v33;
+    PUSH0
+    ADD
+    PUSH1 0xc (12)  // evm_mstore v100 v101;
+    SWAP1
     MSTORE
-    PUSH1 0xd (13)  // evm_mstore v102 v104;
-    PUSH2 0x180 (384)
+    PUSH2 0x180 (384)  // v103.i256 = add v0 v102;
+    PUSH0
+    ADD
+    PUSH1 0xd (13)  // evm_mstore v103 v104;
+    SWAP1
     MSTORE
-    PUSH1 0xe (14)  // evm_mstore v105 v107;
-    PUSH2 0x1a0 (416)
+    PUSH2 0x1a0 (416)  // v106.i256 = add v0 v105;
+    PUSH0
+    ADD
+    PUSH1 0xe (14)  // evm_mstore v106 v107;
+    SWAP1
     MSTORE
-    PUSH1 0xf (15)  // evm_mstore v108 v110;
-    PUSH2 0x1c0 (448)
+    PUSH2 0x1c0 (448)  // v109.i256 = add v0 v108;
+    PUSH0
+    ADD
+    PUSH1 0xf (15)  // evm_mstore v109 v110;
+    SWAP1
     MSTORE
-    PUSH1 0x10 (16)  // evm_mstore v111 v113;
-    PUSH2 0x1e0 (480)
+    PUSH2 0x1e0 (480)  // v112.i256 = add v0 v111;
+    PUSH0
+    ADD
+    PUSH1 0x10 (16)  // evm_mstore v112 v113;
+    SWAP1
     MSTORE
-    PUSH1 0x11 (17)  // evm_mstore v114 v116;
-    PUSH2 0x200 (512)
+    PUSH2 0x200 (512)  // v115.i256 = add v0 v114;
+    PUSH0
+    ADD
+    PUSH1 0x11 (17)  // evm_mstore v115 v116;
+    SWAP1
     MSTORE
-    PUSH1 0x12 (18)  // evm_mstore v117 v119;
-    PUSH2 0x220 (544)
+    PUSH2 0x220 (544)  // v118.i256 = add v0 v117;
+    PUSH0
+    ADD
+    PUSH1 0x12 (18)  // evm_mstore v118 v119;
+    SWAP1
     MSTORE
-    PUSH1 0x13 (19)  // evm_mstore v120 v122;
-    PUSH2 0x240 (576)
+    PUSH2 0x240 (576)  // v121.i256 = add v0 v120;
+    PUSH0
+    ADD
+    PUSH1 0x13 (19)  // evm_mstore v121 v122;
+    SWAP1
     MSTORE
-    PUSH1 0x14 (20)  // evm_mstore v123 v125;
-    PUSH2 0x260 (608)
+    PUSH2 0x260 (608)  // v124.i256 = add v0 v123;
+    PUSH0
+    ADD
+    PUSH1 0x14 (20)  // evm_mstore v124 v125;
+    SWAP1
     MSTORE
-    PUSH1 0x15 (21)  // evm_mstore v126 v128;
-    PUSH2 0x280 (640)
+    PUSH2 0x280 (640)  // v127.i256 = add v0 v126;
+    PUSH0
+    ADD
+    PUSH1 0x15 (21)  // evm_mstore v127 v128;
+    SWAP1
     MSTORE
-    PUSH1 0x16 (22)  // evm_mstore v129 v131;
-    PUSH2 0x2a0 (672)
+    PUSH2 0x2a0 (672)  // v130.i256 = add v0 v129;
+    PUSH0
+    ADD
+    PUSH1 0x16 (22)  // evm_mstore v130 v131;
+    SWAP1
     MSTORE
-    PUSH1 0x17 (23)  // evm_mstore v34 v36;
-    PUSH2 0x2c0 (704)
+    PUSH2 0x2c0 (704)  // v35.i256 = add v0 v34;
+    PUSH0
+    ADD
+    PUSH1 0x17 (23)  // evm_mstore v35 v36;
+    SWAP1
     MSTORE
-    PUSH1 0x18 (24)  // evm_mstore v37 v39;
-    PUSH2 0x2e0 (736)
+    PUSH2 0x2e0 (736)  // v38.i256 = add v0 v37;
+    PUSH0
+    ADD
+    PUSH1 0x18 (24)  // evm_mstore v38 v39;
+    SWAP1
     MSTORE
-    PUSH1 0x19 (25)  // evm_mstore v40 v42;
-    PUSH2 0x300 (768)
+    PUSH2 0x300 (768)  // v41.i256 = add v0 v40;
+    PUSH0
+    ADD
+    PUSH1 0x19 (25)  // evm_mstore v41 v42;
+    SWAP1
     MSTORE
-    PUSH1 0x1a (26)  // evm_mstore v43 v45;
-    PUSH2 0x320 (800)
+    PUSH2 0x320 (800)  // v44.i256 = add v0 v43;
+    PUSH0
+    ADD
+    PUSH1 0x1a (26)  // evm_mstore v44 v45;
+    SWAP1
     MSTORE
-    PUSH1 0x1b (27)  // evm_mstore v46 v48;
-    PUSH2 0x340 (832)
+    PUSH2 0x340 (832)  // v47.i256 = add v0 v46;
+    PUSH0
+    ADD
+    PUSH1 0x1b (27)  // evm_mstore v47 v48;
+    SWAP1
     MSTORE
-    PUSH1 0x1c (28)  // evm_mstore v49 v51;
-    PUSH2 0x360 (864)
+    PUSH2 0x360 (864)  // v50.i256 = add v0 v49;
+    PUSH0
+    ADD
+    PUSH1 0x1c (28)  // evm_mstore v50 v51;
+    SWAP1
     MSTORE
-    PUSH1 0x1d (29)  // evm_mstore v52 v54;
-    PUSH2 0x380 (896)
+    PUSH2 0x380 (896)  // v53.i256 = add v0 v52;
+    PUSH0
+    ADD
+    PUSH1 0x1d (29)  // evm_mstore v53 v54;
+    SWAP1
     MSTORE
-    PUSH1 0x1e (30)  // evm_mstore v55 v57;
-    PUSH2 0x3a0 (928)
+    PUSH2 0x3a0 (928)  // v56.i256 = add v0 v55;
+    PUSH0
+    ADD
+    PUSH1 0x1e (30)  // evm_mstore v56 v57;
+    SWAP1
     MSTORE
-    PUSH1 0x1f (31)  // evm_mstore v58 v60;
-    PUSH2 0x3c0 (960)
+    PUSH2 0x3c0 (960)  // v59.i256 = add v0 v58;
+    PUSH0
+    ADD
+    PUSH1 0x1f (31)  // evm_mstore v59 v60;
+    SWAP1
     MSTORE
-    PUSH1 0x20 (32)  // evm_mstore v61 v3;
-    PUSH2 0x3e0 (992)
+    PUSH2 0x3e0 (992)  // v62.i256 = add v0 v61;
+    PUSH0
+    ADD
+    PUSH1 0x20 (32)  // evm_mstore v62 v3;
+    SWAP1
     MSTORE
     PUSH2 0x200 (512)  // evm_mcopy v1 v0 v114;
     PUSH0
     PUSH2 0x400 (1024)
     MCOPY
+    PUSH2 0x400 (1024)  // call %touch v1;
+    PUSH1 `pc + (4)`
+    SWAP1
+    PUSH1 FuncRef(1)
+    JUMP
+    JUMPDEST
     PUSH2 0x400 (1024)  // evm_mcopy v1 v0 v1;
     PUSH0
     DUP2
@@ -140,5 +240,6 @@ entry:
 // func private %touch(v0.i256)
 touch:
   block0:
+    JUMPDEST
     POP  // return;
     JUMP
