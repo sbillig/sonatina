@@ -1,0 +1,81 @@
+#! evm.config: { vcode: true, bytecode_hex: false, stackify_trace: false, evm_trace: false, opt: 2 }
+#! evm.case: late_join_edge
+#!   calldata: u256(1) u256(0) u256(0) u256(0) u256(0) u256(0)
+#!   expect: return u256(77)
+
+# GVN first reaches block4 only from block2, whose edge implies `v0`, so
+# block5's branch on `v0` looks decided. block4's other edge, from block3,
+# becomes reachable only after GVN finds the counter `v1` varies and walks the
+# chain block3..block23, one block per iteration. block5 must then be visited
+# again, or block9's store is deleted and the call returns 0.
+target = "evm-ethereum-osaka"
+
+func public %entry() {
+    block0:
+        v40.i256 = evm_calldata_load 0.i256;
+        v0.i1 = is_zero v40;
+        v41.i256 = evm_calldata_load 32.i256;
+        v30.i1 = is_zero v41;
+        v51.i256 = evm_calldata_load 96.i256;
+        v31.i1 = is_zero v51;
+        v52.i256 = evm_calldata_load 128.i256;
+        v32.i1 = is_zero v52;
+        v53.i256 = evm_calldata_load 160.i256;
+        v33.i1 = is_zero v53;
+        jump block1;
+
+    block1:
+        v1.i256 = phi (0.i256 block0) (v9 block7);
+        v2.i1 = is_zero v1;
+        br v2 block2 block3;
+
+    block2:
+        br v0 block4 block7;
+
+    block3:
+        br v30 block20 block10;
+
+    block20:
+        br v31 block21 block10;
+
+    block21:
+        br v32 block22 block10;
+
+    block22:
+        br v33 block23 block10;
+
+    block23:
+        jump block4;
+
+    block4:
+        v3.i256 = evm_calldata_load 64.i256;
+        v4.i1 = is_zero v3;
+        br v4 block5 block6;
+
+    block5:
+        br v0 block8 block9;
+
+    block8:
+        jump block7;
+
+    block9:
+        mstore 0.i256 77.i256 i256;
+        jump block7;
+
+    block6:
+        jump block7;
+
+    block7:
+        v9.i256 = add v1 1.i256;
+        v10.i1 = lt v9 5.i256;
+        br v10 block1 block10;
+
+    block10:
+        evm_return 0.i256 32.i256;
+}
+
+object @Contract {
+  section runtime {
+    entry %entry;
+  }
+}
