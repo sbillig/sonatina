@@ -442,6 +442,7 @@ fn machine_gvn_folds_word_bool_constant_without_zext() {
         LateCleanupProfile::Speed,
         SwitchLoweringStrategy::Auto,
         16,
+        None,
     )
     .expect("GVN should fold word bool constants without panicking");
     module.func_store.view(func_ref, |function| {
@@ -484,6 +485,7 @@ fn machine_known_bits_drops_mask_on_mstore8_value() {
         LateCleanupProfile::Speed,
         SwitchLoweringStrategy::Auto,
         16,
+        None,
     )
     .expect("machine pipeline should run");
     module.func_store.view(func_ref, |function| {
@@ -546,6 +548,7 @@ fn machine_known_bits_drops_mask_on_mstore8_value_in_loop() {
         LateCleanupProfile::Speed,
         SwitchLoweringStrategy::Auto,
         16,
+        None,
     )
     .expect("machine pipeline should run");
     module.func_store.view(func_ref, |function| {
@@ -625,6 +628,7 @@ fn machine_gvn_accepts_truthy_word_branch_condition() {
         LateCleanupProfile::Speed,
         SwitchLoweringStrategy::Auto,
         16,
+        None,
     )
     .expect("GVN should accept truthy word branch conditions");
 }
