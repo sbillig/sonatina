@@ -714,7 +714,7 @@ fn machine_fixed_memory_write_ranges(
     ranges
 }
 
-fn machine_fixed_memory_write_range(
+pub(crate) fn machine_fixed_memory_write_range(
     function: &Function,
     isa: &EvmMachine,
     inst: InstId,

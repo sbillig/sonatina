@@ -18,9 +18,13 @@ pub(crate) fn coalesce_machine_copies(func: &mut Function) -> bool {
         let insts: Vec<_> = func.layout.iter_inst(block).collect();
         let mut start = 0;
         while start < insts.len() {
-            if let Some((count, source, dest, len)) = copy_run(func, &isa, &insts[start..]) {
+            if let Some((count, (source, source_addr), (dest, dest_addr), len)) =
+                copy_run(func, &isa, &insts[start..])
+            {
                 let run = &insts[start..start + count];
                 let last = *run.last().unwrap();
+                let source = source_addr.operand(func, source);
+                let dest = dest_addr.operand(func, dest);
                 let len = func
                     .dfg
                     .make_imm_value(Immediate::from_i256(I256::from(len), Type::I256));
@@ -64,7 +68,23 @@ impl Address {
         let start = self.offset.low_u32();
         Some((start, start.checked_add(len)?))
     }
+
+    /// The `mcopy` operand for this address, matched from `value`: the
+    /// immediate when the address is constant, since spill protection reads
+    /// fixed ranges only from immediates.
+    fn operand(self, func: &mut Function, value: ValueId) -> ValueId {
+        if self.base.is_some() {
+            return value;
+        }
+        func.dfg.make_imm_value(Immediate::from_i256(
+            I256::from_u256(self.offset),
+            Type::I256,
+        ))
+    }
 }
+
+/// A matched copy address and the value it was matched from.
+type CopyOperand = (ValueId, Address);
 
 fn address(func: &Function, isa: &EvmMachine, mut value: ValueId) -> Address {
     let mut offset = U256::zero();
@@ -110,7 +130,7 @@ fn copy_run(
     func: &Function,
     isa: &EvmMachine,
     insts: &[InstId],
-) -> Option<(usize, ValueId, ValueId, u32)> {
+) -> Option<(usize, CopyOperand, CopyOperand, u32)> {
     let EvmMachineInstKind::EvmMload(first) = isa.inst_set().resolve_inst(func.dfg.inst(insts[0]))
     else {
         return None;
@@ -161,7 +181,12 @@ fn copy_run(
                     && bounded_constants
                     && (snapshot || disjoint)
                 {
-                    best = Some((index + 1, source, dest_value, len));
+                    best = Some((
+                        index + 1,
+                        (source, source_addr),
+                        (dest_value, dest_addr),
+                        len,
+                    ));
                 }
             }
             EvmMachineInstKind::Add(_) | EvmMachineInstKind::Sub(_) => {}
@@ -174,7 +199,9 @@ fn copy_run(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::isa::evm::machine::verify::verify_machine_function;
+    use crate::isa::evm::{
+        machine::verify::verify_machine_function, prepare::machine_fixed_memory_write_range,
+    };
     use sonatina_parser::parse_module;
     use sonatina_verifier::{VerificationLevel, VerifierConfig, verify_module_or_panic};
 
@@ -233,6 +260,45 @@ mod tests {
             });
             verify_module_or_panic(&module, &VerifierConfig::for_level(VerificationLevel::Full));
         }
+    }
+
+    /// -O0 machine IR keeps constant address arithmetic unfolded. A copy
+    /// between constant addresses still writes a fixed range.
+    #[test]
+    fn machine_copy_of_constant_addresses_writes_a_fixed_range() {
+        let source = "target = \"evm-ethereum-osaka\"\nfunc public %entry() {\nblock0:\n\
+                      v0.i256 = add 224.i256 32.i256;\n\
+                      v1.i256 = add 96.i256 32.i256;\n\
+                      v2.i256 = evm_mload v0;\n\
+                      v3.i256 = evm_mload 288.i256;\n\
+                      evm_mstore v1 v2;\n\
+                      evm_mstore 160.i256 v3;\n\
+                      return;\n}";
+        let module = parse_module(source).unwrap().module;
+        let func_ref = module.funcs()[0];
+        module.func_store.modify(func_ref, |func| {
+            assert!(coalesce_machine_copies(func));
+            verify_machine_function(func_ref, func).unwrap();
+            let isa = EvmMachine::new(func.dfg.ctx.triple);
+            let insts: Vec<_> = func
+                .layout
+                .iter_block()
+                .flat_map(|block| func.layout.iter_inst(block))
+                .collect();
+            let source = insts.iter().find_map(|&inst| {
+                match isa.inst_set().resolve_inst(func.dfg.inst(inst)) {
+                    EvmMachineInstKind::EvmMcopy(copy) => func.dfg.value_imm(*copy.addr()),
+                    _ => None,
+                }
+            });
+            assert_eq!(source, Some(Immediate::from_i256(256.into(), Type::I256)));
+            let writes: Vec<_> = insts
+                .iter()
+                .filter_map(|&inst| machine_fixed_memory_write_range(func, &isa, inst))
+                .map(|write| (write.start_byte, write.end_byte))
+                .collect();
+            assert_eq!(writes, [(128, 192)]);
+        });
     }
 
     #[test]

@@ -1,0 +1,46 @@
+#! evm.config: { stack_reach: 2, vcode: true, mem_plan_detail: true }
+#! evm.case: ok
+#!   calldata: u256(0) u256(1) u256(2) u256(3) u256(4) u256(5) u256(6)
+#!   expect: return u256(6) u256(50)
+
+# The stores to `v5` (the unfolded constant 128) and to 160 copy the two words
+# at `v0`, so they coalesce into one `mcopy` over [128, 192). The block's
+# return payload makes the store to 160 exempt from layout reservations, so
+# only the spill planner keeps spills off [160, 192), and it sees the `mcopy`
+# as a fixed write only if its destination is the immediate 128. `v30` spills
+# to the static arena at 0xa0 otherwise.
+target = "evm-ethereum-osaka"
+
+func public %entry() {
+block0:
+    v0.i256 = evm_calldata_load 0.i256;
+    v1.i256 = evm_calldata_load 32.i256;
+    v2.i256 = evm_calldata_load 64.i256;
+    v3.i256 = evm_calldata_load 96.i256;
+    v4.i256 = evm_calldata_load 128.i256;
+    v20.i256 = evm_calldata_load 160.i256;
+    v21.i256 = evm_calldata_load 192.i256;
+    v30.i256 = mul v1 3.i256;
+    v31.i256 = mul v2 4.i256;
+    v32.i256 = mul v3 5.i256;
+    v33.i256 = mul v4 6.i256;
+    evm_mstore 0.i256 v20;
+    evm_mstore 32.i256 v21;
+    v5.i256 = add 96.i256 32.i256;
+    v6.i256 = evm_mload v0;
+    v7.i256 = add v0 32.i256;
+    v8.i256 = evm_mload v7;
+    evm_mstore v5 v6;
+    evm_mstore 160.i256 v8;
+    v101.i256 = add v30 v31;
+    v102.i256 = add v101 v32;
+    v103.i256 = add v102 v33;
+    evm_mstore 192.i256 v103;
+    evm_return 160.i256 64.i256;
+}
+
+object @Contract {
+  section runtime {
+    entry %entry;
+  }
+}
