@@ -1,6 +1,6 @@
 ---
 source: crates/codegen/tests/evm.rs
-assertion_line: 2461
+assertion_line: 2507
 expression: "String::from_utf8(out).unwrap()"
 input_file: test_files/evm/array_iter_reverse.sntn
 ---
@@ -29,51 +29,51 @@ test_view_param_local_ref_take_reverse:
     PUSH1 0x60 (96)
     PUSH1 0x40 (64)
     MSTORE
-    PUSH2 0x160 (352)  // evm_mstore v11 352.i256;
+    PUSH2 0x160 (352)  // evm_mstore v11 v9;
     PUSH1 0x40 (64)
     MSTORE
     PUSH1 0x1 (1)  // evm_mstore v6 v12;
     PUSH1 0x60 (96)
     MSTORE
-    PUSH1 0x2 (2)  // evm_mstore v24 v17;
+    PUSH1 0x2 (2)  // evm_mstore v15 v17;
     PUSH1 0x80 (128)
     MSTORE
-    PUSH1 0x3 (3)  // evm_mstore v28 v20;
+    PUSH1 0x3 (3)  // evm_mstore v18 v20;
     PUSH1 0xa0 (160)
     MSTORE
-    PUSH1 0x4 (4)  // evm_mstore v32 v23;
+    PUSH1 0x4 (4)  // evm_mstore v21 v23;
     PUSH1 0xc0 (192)
     MSTORE
-    PUSH1 0x5 (5)  // evm_mstore 224.i256 v27;
+    PUSH1 0x5 (5)  // evm_mstore v24 v26;
     PUSH1 0xe0 (224)
     MSTORE
-    PUSH1 0x6 (6)  // evm_mstore v8 v31;
+    PUSH1 0x6 (6)  // evm_mstore v8 v27;
     PUSH2 0x100 (256)
     MSTORE
-    PUSH1 0x7 (7)  // evm_mstore 288.i256 v35;
+    PUSH1 0x7 (7)  // evm_mstore v28 v30;
     PUSH2 0x120 (288)
     MSTORE
-    PUSH1 0x8 (8)  // evm_mstore 320.i256 8.i256;
+    PUSH1 0x8 (8)  // evm_mstore v31 v32;
     PUSH2 0x140 (320)
     MSTORE
-    PUSH1 0x40 (64)  // v45.i256 = evm_mload v11;
+    PUSH1 0x40 (64)  // v34.i256 = evm_mload v11;
     MLOAD
-    PUSH1 0x4 (4)  // evm_mstore v45 v23;
+    PUSH1 0x4 (4)  // evm_mstore v34 v23;
     DUP2
     MSTORE
-    PUSH1 0x20 (32)  // v46.i256 = add v45 v14;
+    PUSH1 0x20 (32)  // v35.i256 = add v34 v14;
     ADD
-    PUSH1 0x60 (96)  // evm_mstore v46 v6;
+    PUSH1 0x60 (96)  // evm_mstore v35 v6;
     SWAP1
     MSTORE
-    PUSH1 0x40 (64)  // v29.i256 = evm_mload v11;
+    PUSH1 0x40 (64)  // v37.i256 = evm_mload v11;
     MLOAD
-    PUSH1 0x4 (4)  // evm_mstore v29 v23;
+    PUSH1 0x4 (4)  // evm_mstore v37 v23;
     DUP2
     MSTORE
-    PUSH1 0x20 (32)  // v30.i256 = add v29 v14;
+    PUSH1 0x20 (32)  // v25.i256 = add v37 v14;
     ADD
-    PUSH1 0x60 (96)  // evm_mstore v30 v6;
+    PUSH1 0x60 (96)  // evm_mstore v25 v6;
     SWAP1
     MSTORE
     PUSH1 0x60 (96)  // jump block2;
@@ -86,28 +86,28 @@ test_view_param_local_ref_take_reverse:
     SWAP1  // jump block2;
   block2:
     JUMPDEST
-    DUP3  // v47.i256 = evm_mload v5;
+    DUP3  // v38.i256 = evm_mload v5;
     MLOAD
-    ADD  // v48.i256 = add v2 v47;
-    SWAP1  // v33.i256 = add v3 v12;
+    ADD  // v39.i256 = add v2 v38;
+    SWAP1  // v40.i256 = add v3 v12;
     PUSH1 0x1 (1)
     ADD
-    PUSH1 0x4 (4)  // v34.i256 = lt v33 v23;
+    PUSH1 0x4 (4)  // v29.i256 = lt v40 v23;
     DUP2
     LT
-    SWAP3  // v36.i256 = add v5 v14;
+    SWAP3  // v41.i256 = add v5 v14;
     PUSH1 0x20 (32)
     ADD
-    SWAP3  // br v34 block1 block3;
+    SWAP3  // br v29 block1 block3;
     PUSH1 block1
     JUMPI
   block3:
-    POP  // v38.i256 = eq v48 10.i256;
+    POP  // v33.i256 = eq v39 10.i256;
     SWAP1
     POP
     PUSH1 0xa (10)
     EQ
-    PUSH1 block5  // br v38 block5 block4;
+    PUSH1 block5  // br v33 block5 block4;
     JUMPI
   block4:
     PUSH0  // evm_revert 0.i256 0.i256;

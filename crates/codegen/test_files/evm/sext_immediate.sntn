@@ -1,0 +1,26 @@
+#! evm.case: ok
+#!   calldata:
+#!   expect: return u256(0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff) u256(0) u256(0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff80) u256(0x7f)
+
+# Machine lowering folds a sign extension of an immediate to the extended
+# immediate.
+target = "evm-ethereum-osaka"
+
+func public %entry() {
+    block0:
+        v0.i256 = sext 1.i1 i256;
+        v1.i256 = sext 0.i1 i256;
+        v2.i256 = sext -128.i8 i256;
+        v3.i256 = sext 127.i8 i256;
+        mstore 0.i32 v0 i256;
+        mstore 32.i32 v1 i256;
+        mstore 64.i32 v2 i256;
+        mstore 96.i32 v3 i256;
+        evm_return 0.i8 128.i8;
+}
+
+object @Contract {
+  section runtime {
+    entry %entry;
+  }
+}

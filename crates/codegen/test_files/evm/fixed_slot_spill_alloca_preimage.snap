@@ -7,16 +7,16 @@ input_file: test_files/evm/fixed_slot_spill_alloca_preimage.sntn
 evm.config: stack_reach=16 vcode=true bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false
 
 object: Contract
-  section runtime: 169 bytes
-  total: 169 bytes
+  section runtime: 166 bytes
+  total: 166 bytes
 
 functions:
   mem: global_dyn_base=0xa0 arena_base=0x40 scratch_peak_words=2 stable_chain_peak_words=1
-  entry: ir_blocks=1 ir_insts=47 vcode_ops=136 fixups=0 imm_bytes=31
+  entry: ir_blocks=1 ir_insts=46 vcode_ops=134 fixups=0 imm_bytes=30
     mem: scratch_words=2 stable_words=1 stable_mode=StableAbs(base=0x80) entry_abs_words=2 abs_words_end=3
 
 evm:
-  case hashes_key_and_slot: calldata_len=32 success reason=Return gas_used=21605 gas_refunded=0 logs=0 output=call len=32 tx_gas=21140 runtime_gas=465
+  case hashes_key_and_slot: calldata_len=32 success reason=Return gas_used=21599 gas_refunded=0 logs=0 output=call len=32 tx_gas=21140 runtime_gas=459
 
 
 --------------- DEBUG ---------------
@@ -148,10 +148,8 @@ entry:
     POP
     POP
     ADD
-    PUSH1 0x20 (32)  // v64.i256 = add v51 32.i256;
-    PUSH1 0x40 (64)
-    ADD
-    MSTORE  // evm_mstore v64 v62;
+    PUSH1 0x60 (96)  // evm_mstore 96.i256 v62;
+    MSTORE
     PUSH1 0x40 (64)  // v65.i256 = evm_keccak256 v51 v51;
     DUP1
     KECCAK256

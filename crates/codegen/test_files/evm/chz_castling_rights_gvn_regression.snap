@@ -1,5 +1,6 @@
 ---
 source: crates/codegen/tests/evm.rs
+assertion_line: 2507
 expression: "String::from_utf8(out).unwrap()"
 input_file: test_files/evm/chz_castling_rights_gvn_regression.sntn
 ---
@@ -118,37 +119,37 @@ main_root:
     MSTORE
   block22:
     JUMPDEST
-    PUSH0  // v43.i256 = evm_mload v4;
+    PUSH0  // v38.i256 = evm_mload v4;
     MLOAD
-    PUSH1 0x40 (64)  // v45.i256 = evm_mload 64.i256;
+    PUSH1 0x40 (64)  // v39.i256 = evm_mload 64.i256;
     MLOAD
-    PUSH1 0x60 (96)  // v47.i256 = evm_mload 96.i256;
+    PUSH1 0x60 (96)  // v40.i256 = evm_mload 96.i256;
     MLOAD
-    PUSH1 0x80 (128)  // v49.i256 = evm_mload 128.i256;
+    PUSH1 0x80 (128)  // v41.i256 = evm_mload 128.i256;
     MLOAD
-    PUSH1 0xa0 (160)  // v51.i256 = evm_mload 160.i256;
+    PUSH1 0xa0 (160)  // v42.i256 = evm_mload 160.i256;
     MLOAD
-    PUSH1 0xc0 (192)  // v54.i256 = evm_mload 192.i256;
+    PUSH1 0xc0 (192)  // v43.i256 = evm_mload 192.i256;
     MLOAD
-    SWAP5  // v55.i256 = and v43 1.i256;
+    SWAP5  // v44.i256 = and v38 1.i256;
     PUSH1 0x1 (1)
     AND
-    PUSH0  // br_table v55 block10 (v4 block32);
+    PUSH0  // br_table v44 block10 (v4 block32);
     DUP2
     EQ
     PUSH1 block32
     JUMPI
   block10:
-    POP  // br v54 block11 block29;
+    POP  // br v43 block11 block29;
     DUP5
     ISZERO
     PUSH1 block29
     JUMPI
   block11:
-    SWAP4  // v57.i256 = xor v54 255.i256;
+    SWAP4  // v46.i256 = xor v43 255.i256;
     PUSH1 0xff (255)
     XOR
-    PUSH1 0x3 (3)  // v58.i256 = and 3.i256 v57;
+    PUSH1 0x3 (3)  // v47.i256 = and 3.i256 v46;
     AND
     PUSH1 block13  // jump block13;
     JUMP
@@ -159,24 +160,24 @@ main_root:
     PUSH1 0x3 (3)
   block13:
     JUMPDEST
-    PUSH1 0xfd (253)  // v60.i256 = and v0 253.i256;
+    PUSH1 0xfd (253)  // v49.i256 = and v0 253.i256;
     AND
-    SWAP3  // v62.i256 = and v45 -31.i256;
+    SWAP3  // v51.i256 = and v39 -31.i256;
     PUSH1 0x1e (30)
     NOT
     AND
-    SWAP3  // v63.i256 = shl 1.i256 v60;
+    SWAP3  // v52.i256 = shl 1.i256 v49;
     PUSH1 0x1 (1)
     SHL
-    SWAP1  // v64.i256 = or v62 v63;
+    SWAP1  // v53.i256 = or v51 v52;
     SWAP3
     OR
-    SWAP3  // br v51 block14 block15;
+    SWAP3  // br v42 block14 block15;
     ISZERO
     PUSH1 block15
     JUMPI
   block14:
-    SWAP2  // v66.i256 = and v64 -481.i256;
+    SWAP2  // v55.i256 = and v53 -481.i256;
     PUSH2 0x1e0 (480)
     NOT
     AND
@@ -184,19 +185,19 @@ main_root:
     JUMP
   block15:
     JUMPDEST
-    SWAP2  // v67.i256 = and v64 -481.i256;
+    SWAP2  // v56.i256 = and v53 -481.i256;
     PUSH2 0x1e0 (480)
     NOT
     AND
-    PUSH2 0x1e0 (480)  // v69.i256 = or v67 480.i256;
+    PUSH2 0x1e0 (480)  // v58.i256 = or v56 480.i256;
     OR
   block16:
     JUMPDEST
-    SWAP1  // br v49 block30 block21;
+    SWAP1  // br v41 block30 block21;
     PUSH1 block30
     JUMPI
   block21:
-    SWAP1  // br v47 block19 block31;
+    SWAP1  // br v40 block19 block31;
     ISZERO
     PUSH1 block31
     JUMPI
@@ -216,15 +217,15 @@ main_root:
     PUSH0
   block20:
     JUMPDEST
-    SWAP1  // v71.i256 = and v1 -130561.i256;
+    SWAP1  // v60.i256 = and v1 -130561.i256;
     PUSH3 0x1fe00 (130560)
     NOT
     AND
-    OR  // v72.i256 = or v71 v2;
-    PUSH5 0x1fffe0000 (8589803520)  // v74.i256 = and v72 -8589803521.i256;
+    OR  // v61.i256 = or v60 v2;
+    PUSH5 0x1fffe0000 (8589803520)  // v63.i256 = and v61 -8589803521.i256;
     NOT
     AND
-    PUSH3 0x40000 (262144)  // v76.i256 = or v74 262144.i256;
+    PUSH3 0x40000 (262144)  // v65.i256 = or v63 262144.i256;
     OR
     PUSH1 block25  // jump block25;
     JUMP
@@ -239,11 +240,11 @@ main_root:
     PUSH0
   block25:
     JUMPDEST
-    PUSH1 0x1 (1)  // v77.i256 = shr 1.i256 v3;
+    PUSH1 0x1 (1)  // v66.i256 = shr 1.i256 v3;
     SHR
-    PUSH1 0xf (15)  // v78.i256 = and v77 15.i256;
+    PUSH1 0xf (15)  // v67.i256 = and v66 15.i256;
     AND
-    PUSH0  // evm_mstore v4 v78;
+    PUSH0  // evm_mstore v4 v67;
     MSTORE
     PUSH1 0x20 (32)  // evm_return v4 32.i256;
     PUSH0

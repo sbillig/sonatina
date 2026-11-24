@@ -30,7 +30,7 @@ evm:
 // func public %fold_simple(v9.i256) -> i256
 fold_simple:
   block0:
-    PUSH1 0x7 (7)  // evm_mstore 192.i256 v3;
+    PUSH1 0x7 (7)  // evm_mstore v2 v3;
     PUSH1 0xc0 (192)
     MSTORE
     PUSH1 0xa0 (160)  // v4.i256 = add v0 v9;
@@ -42,7 +42,7 @@ fold_simple:
 // func public %fold_nested(v9.i256) -> i256
 fold_nested:
   block0:
-    PUSH1 0x9 (9)  // evm_mstore 224.i256 v3;
+    PUSH1 0x9 (9)  // evm_mstore v2 v3;
     PUSH1 0xe0 (224)
     MSTORE
     PUSH1 0xa0 (160)  // v4.i256 = add v0 v9;
@@ -68,7 +68,7 @@ dynamic_index:
 // func public %entry()
 entry:
   block0:
-    PUSH1 0x7 (7)  // evm_mstore 192.i256 v1;
+    PUSH1 0x7 (7)  // evm_mstore v0 v1;
     PUSH1 0xc0 (192)
     MSTORE
     PUSH0  // v3.i256 = evm_calldata_load v2;

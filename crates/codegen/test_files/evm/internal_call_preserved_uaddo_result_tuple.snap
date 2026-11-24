@@ -1,6 +1,6 @@
 ---
 source: crates/codegen/tests/evm.rs
-assertion_line: 2136
+assertion_line: 2507
 expression: "String::from_utf8(out).unwrap()"
 input_file: test_files/evm/internal_call_preserved_uaddo_result_tuple.sntn
 ---
@@ -121,23 +121,23 @@ evm:
     // jump block5;
     - stack=[v24, v23]
       jump -> block5
-  block5 P=[v30, v0] T=[]
+  block5 P=[v29, v0] T=[]
     // v25.i256 = evm_mload v0;
-    - stack=[v30, v0], last_use=[v0]
+    - stack=[v29, v0], last_use=[v0]
       pre: [SWAP1]
       evm_mload [v0] -> v25
     // v26.i256 = eq v25 1.i256;
-    - stack=[v25, v30], last_use=[v25]
+    - stack=[v25, v29], last_use=[v25]
       pre: [PUSH(1)]
       eq [1, v25] -> v26
     // br v26 block6 block12;
-    - stack=[v26, v30]
+    - stack=[v26, v29]
       br [v26] -> [block6, block12]
-  block6 P=[] T=[v30]
-    inherited from block5: [v30]
-    // v28.i256 = evm_mload v30;
-    - stack=[v30], last_use=[v30]
-      evm_mload [v30] -> v28
+  block6 P=[] T=[v29]
+    inherited from block5: [v29]
+    // v28.i256 = evm_mload v29;
+    - stack=[v29], last_use=[v29]
+      evm_mload [v29] -> v28
     // evm_mstore 0.i256 v28;
     - stack=[v28], last_use=[v28]
       pre: [PUSH(0)]
@@ -175,7 +175,7 @@ entry:
     PUSH2 0x220 (544)
     PUSH1 0x40 (64)
     MSTORE
-    PUSH2 0x240 (576)  // evm_mstore v4 576.i256;
+    PUSH2 0x240 (576)  // evm_mstore v4 v3;
     PUSH1 0x40 (64)
     MSTORE
     PUSH1 0x63 (99)  // evm_mstore v30 v5;
@@ -250,7 +250,7 @@ entry:
     PUSH1 block9
     JUMPI
   block6:
-    MLOAD  // v28.i256 = evm_mload v31;
+    MLOAD  // v28.i256 = evm_mload v29;
     PUSH0  // evm_mstore v7 v28;
     MSTORE
     PUSH1 0x20 (32)  // evm_return v7 v2;

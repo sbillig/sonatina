@@ -1,5 +1,6 @@
 ---
 source: crates/codegen/tests/evm.rs
+assertion_line: 2507
 expression: "String::from_utf8(out).unwrap()"
 input_file: test_files/evm/loops.sntn
 ---
@@ -65,13 +66,13 @@ __Bench_runtime:
     PUSH0  // evm_mstore v91 v17;
     PUSH1 0xa0 (160)
     MSTORE
-    PUSH1 0x4 (4)  // evm_mstore 192.i256 v15;
+    PUSH1 0x4 (4)  // evm_mstore v93 v15;
     PUSH1 0xc0 (192)
     MSTORE
-    PUSH4 0x859198d6 (2240911574)  // v83.i256 = lt v90 v22;
+    PUSH4 0x859198d6 (2240911574)  // v101.i256 = lt v90 v22;
     DUP2
     LT
-    PUSH1 block64  // br v83 block64 block63;
+    PUSH1 block64  // br v101 block64 block63;
     JUMPI
   block63:
     PUSH4 0x859198d6 (2240911574)  // br_table v90 block65 (v22 block45) (v21 block36) (v94 block4);
@@ -160,12 +161,12 @@ __Bench_runtime:
     PUSH0  // jump block41;
   block41:
     JUMPDEST
-    PUSH1 0x1 (1)  // v84.i256 = add v77 v66;
+    PUSH1 0x1 (1)  // v83.i256 = add v77 v66;
     ADD
-    DUP2  // v85.i256 = lt v84 v59;
+    DUP2  // v84.i256 = lt v83 v59;
     DUP2
     LT
-    PUSH1 block41  // br v85 block40 block81;
+    PUSH1 block41  // br v84 block40 block81;
     JUMPI
   block81:
     SWAP1  // jump block44;
@@ -190,10 +191,10 @@ __Bench_runtime:
     PUSH1 FuncRef(7)
     JUMP
     JUMPDEST
-    DUP1  // v86.i256 = gt v77 v65;
+    DUP1  // v85.i256 = gt v77 v65;
     PUSH1 0x1 (1)
     GT
-    PUSH1 block83  // br v86 block83 block82;
+    PUSH1 block83  // br v85 block83 block82;
     JUMPI
   block82:
     PUSH1 0x1 (1)  // jump block50;
@@ -210,10 +211,10 @@ __Bench_runtime:
     SWAP1  // v68.i256 = add v77 v11;
     PUSH1 0x1 (1)
     ADD
-    DUP3  // v87.i256 = gt v68 v65;
+    DUP3  // v86.i256 = gt v68 v65;
     DUP2
     GT
-    ISZERO  // br v87 block84 block49;
+    ISZERO  // br v86 block84 block49;
     PUSH1 block49
     JUMPI
   block84:
@@ -386,12 +387,12 @@ __Bench_runtime:
     RETURN
   block54:
     JUMPDEST
-    POP  // v89.i256 = evm_call_value;
+    POP  // v87.i256 = evm_call_value;
     CALLVALUE
-    PUSH1 block22  // br v89 block55 block56;
+    PUSH1 block22  // br v87 block55 block56;
     JUMPI
   block56:
-    PUSH1 0xa0 (160)  // v93.i256 = call %u256_h3271ca15373d4483_decode_hb2fe2bf528775e55_decode__Sol_hfd482bb803ad8c5f_SolDecoder_CallData___fe17857f71623b98 v91;
+    PUSH1 0xa0 (160)  // v89.i256 = call %u256_h3271ca15373d4483_decode_hb2fe2bf528775e55_decode__Sol_hfd482bb803ad8c5f_SolDecoder_CallData___fe17857f71623b98 v91;
     PUSH1 `pc + (4)`
     SWAP1
     PUSH1 FuncRef(7)
@@ -403,7 +404,7 @@ __Bench_runtime:
     PUSH1 FuncRef(7)
     JUMP
     JUMPDEST
-    DUP2  // br v93 block85 block86;
+    DUP2  // br v89 block85 block86;
     PUSH1 block85
     JUMPI
   block86:
@@ -429,7 +430,7 @@ __Bench_runtime:
     SWAP1  // v99.i256 = add v77 v70;
     PUSH1 0x1 (1)
     ADD
-    DUP4  // v100.i256 = lt v99 v93;
+    DUP4  // v100.i256 = lt v99 v89;
     DUP2
     LT
     PUSH1 block58  // br v100 block58 block87;

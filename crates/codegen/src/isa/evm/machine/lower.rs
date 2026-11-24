@@ -705,8 +705,7 @@ impl FuncLowerCtx<'_> {
                 };
                 if update_free_ptr {
                     let size = self.lower_malloc_aligned_size(source_inst)?;
-                    let new_free =
-                        self.emit_binary(arith::Add::new(self.is, base, size), Type::I256);
+                    let new_free = self.emit_add(base, size);
                     let slot = self.i256_imm(FREE_PTR_SLOT as u32);
                     self.insert_no_result(
                         source_inst,
@@ -792,6 +791,15 @@ impl FuncLowerCtx<'_> {
         let value = self.lower_value(from)?;
         if bits == 256 {
             return self.alias_inst_single_result(source_inst, value);
+        }
+        if let Some(imm) = self.machine.dfg.value_imm(value) {
+            let extended = if bits == 1 {
+                Immediate::zero(Type::I256) - imm
+            } else {
+                Immediate::from_i256(imm.as_i256(), source_ty).sext(Type::I256)
+            };
+            let extended = self.machine.dfg.make_imm_value(extended);
+            return self.alias_inst_single_result(source_inst, extended);
         }
         if bits == 1 {
             let zero = self.i256_imm(0);
@@ -969,16 +977,29 @@ impl FuncLowerCtx<'_> {
         } else {
             I256::from((U256::one() << bits) - U256::one())
         };
-        let mask = self
-            .machine
-            .dfg
-            .make_imm_value(Immediate::from_i256(mask, Type::I256));
+        let mask = Immediate::from_i256(mask, Type::I256);
+        if let Some(imm) = self.machine.dfg.value_imm(value) {
+            return Ok(self.machine.dfg.make_imm_value(imm & mask));
+        }
+        let mask = self.machine.dfg.make_imm_value(mask);
         Ok(self.emit_binary(logic::And::new(self.is, value, mask), Type::I256))
     }
 
     fn add_const(&mut self, value: ValueId, offset: u32) -> ValueId {
         let offset = self.i256_imm(offset);
-        self.emit_binary(arith::Add::new(self.is, value, offset), Type::I256)
+        self.emit_add(value, offset)
+    }
+
+    /// Adds two words, folding two immediates: backend analyses find fixed
+    /// addresses only as immediates, so a constant address must stay one.
+    fn emit_add(&mut self, lhs: ValueId, rhs: ValueId) -> ValueId {
+        if let (Some(lhs), Some(rhs)) = (
+            self.machine.dfg.value_imm(lhs),
+            self.machine.dfg.value_imm(rhs),
+        ) {
+            return self.machine.dfg.make_imm_value(lhs + rhs);
+        }
+        self.emit_binary(arith::Add::new(self.is, lhs, rhs), Type::I256)
     }
 
     fn lower_value(&mut self, value: ValueId) -> Result<ValueId, String> {

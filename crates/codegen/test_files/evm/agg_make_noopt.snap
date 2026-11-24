@@ -7,25 +7,25 @@ input_file: test_files/evm/agg_make_noopt.sntn
 evm.config: stack_reach=16 vcode=true bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false
 
 object: Contract
-  section runtime: 222 bytes
-  total: 222 bytes
+  section runtime: 195 bytes
+  total: 195 bytes
 
 functions:
   mem: global_dyn_base=0x100 arena_base=0x0 scratch_peak_words=8 stable_chain_peak_words=0
   entry: ir_blocks=1 ir_insts=12 vcode_ops=52 fixups=8 imm_bytes=6
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=8 abs_words_end=0
-  stored: ir_blocks=1 ir_insts=8 vcode_ops=16 fixups=0 imm_bytes=2
+  stored: ir_blocks=1 ir_insts=6 vcode_ops=12 fixups=0 imm_bytes=2
     mem: scratch_words=2 stable_words=0 stable_mode=None entry_abs_words=8 abs_words_end=2
-  indexed: ir_blocks=1 ir_insts=10 vcode_ops=25 fixups=0 imm_bytes=3
+  indexed: ir_blocks=1 ir_insts=8 vcode_ops=19 fixups=0 imm_bytes=3
     mem: scratch_words=3 stable_words=0 stable_mode=None entry_abs_words=8 abs_words_end=3
-  nested: ir_blocks=1 ir_insts=12 vcode_ops=29 fixups=0 imm_bytes=5
+  nested: ir_blocks=1 ir_insts=8 vcode_ops=19 fixups=0 imm_bytes=5
     mem: scratch_words=3 stable_words=0 stable_mode=None entry_abs_words=8 abs_words_end=3
-  rotate: ir_blocks=4 ir_insts=21 vcode_ops=56 fixups=2 imm_bytes=18
+  rotate: ir_blocks=4 ir_insts=19 vcode_ops=51 fixups=2 imm_bytes=16
     mem: scratch_words=8 stable_words=0 stable_mode=None entry_abs_words=8 abs_words_end=8
 
 evm:
-  case ok: calldata_len=96 success reason=Return gas_used=22037 gas_refunded=0 logs=0 output=call len=128 tx_gas=21420 runtime_gas=617
-  case twice: calldata_len=96 success reason=Return gas_used=22133 gas_refunded=0 logs=0 output=call len=128 tx_gas=21420 runtime_gas=713
+  case ok: calldata_len=96 success reason=Return gas_used=21970 gas_refunded=0 logs=0 output=call len=128 tx_gas=21420 runtime_gas=550
+  case twice: calldata_len=96 success reason=Return gas_used=22066 gas_refunded=0 logs=0 output=call len=128 tx_gas=21420 runtime_gas=646
 
 
 --------------- DEBUG ---------------
@@ -92,18 +92,14 @@ stored:
     JUMPDEST
     PUSH0  // evm_mstore v2 v0;
     MSTORE
-    PUSH1 0x20 (32)  // v4.i256 = add v2 v3;
-    PUSH0
-    ADD
-    MSTORE  // evm_mstore v4 v1;
-    PUSH0  // v5.i256 = evm_mload v2;
+    PUSH1 0x20 (32)  // evm_mstore v3 v1;
+    MSTORE
+    PUSH0  // v4.i256 = evm_mload v2;
     MLOAD
-    PUSH1 0x20 (32)  // v6.i256 = add v2 v3;
-    PUSH0
-    ADD
-    MLOAD  // v7.i256 = evm_mload v6;
-    ADD  // v8.i256 = add v5 v7;
-    SWAP1  // return v8;
+    PUSH1 0x20 (32)  // v5.i256 = evm_mload v3;
+    MLOAD
+    ADD  // v6.i256 = add v4 v5;
+    SWAP1  // return v6;
     JUMP
 
 // func private %indexed(v0.i256, v1.i256, v2.i256) -> i256
@@ -116,23 +112,17 @@ indexed:
     SWAP1  // evm_mstore v3 v0;
     PUSH0
     MSTORE
-    PUSH1 0x20 (32)  // v6.i256 = add v3 v5;
-    PUSH0
-    ADD
-    SWAP1  // evm_mstore v6 v1;
-    SWAP2
-    SWAP1
+    SWAP1  // evm_mstore v5 v1;
+    PUSH1 0x20 (32)
     MSTORE
-    PUSH1 0x40 (64)  // v8.i256 = add v3 64.i256;
-    PUSH0
-    ADD
-    MSTORE  // evm_mstore v8 v4;
-    PUSH1 0x20 (32)  // v9.i256 = mul v2 v5;
+    PUSH1 0x40 (64)  // evm_mstore 64.i256 v4;
+    MSTORE
+    PUSH1 0x20 (32)  // v7.i256 = mul v2 v5;
     MUL
-    PUSH0  // v10.i256 = add v3 v9;
+    PUSH0  // v8.i256 = add v3 v7;
     ADD
-    MLOAD  // v11.i256 = evm_mload v10;
-    SWAP1  // return v11;
+    MLOAD  // v9.i256 = evm_mload v8;
+    SWAP1  // return v9;
     JUMP
 
 // func private %nested(v0.i256, v1.i256) -> i256
@@ -145,27 +135,17 @@ nested:
     SWAP1  // evm_mstore v4 v0;
     PUSH0
     MSTORE
-    PUSH1 0x20 (32)  // v6.i256 = add v4 v5;
-    PUSH0
-    ADD
-    SWAP1  // evm_mstore v6 v1;
-    SWAP2
-    SWAP1
+    SWAP1  // evm_mstore v5 v1;
+    PUSH1 0x20 (32)
     MSTORE
-    PUSH1 0x40 (64)  // v8.i256 = add v4 v7;
-    PUSH0
-    ADD
-    MSTORE  // evm_mstore v8 v3;
-    PUSH1 0x20 (32)  // v9.i256 = add v4 v5;
-    PUSH0
-    ADD
-    MLOAD  // v10.i256 = evm_mload v9;
-    PUSH1 0x40 (64)  // v11.i256 = add v4 v7;
-    PUSH0
-    ADD
-    MLOAD  // v12.i256 = evm_mload v11;
-    ADD  // v13.i256 = add v10 v12;
-    SWAP1  // return v13;
+    PUSH1 0x40 (64)  // evm_mstore v6 v3;
+    MSTORE
+    PUSH1 0x20 (32)  // v7.i256 = evm_mload v5;
+    MLOAD
+    PUSH1 0x40 (64)  // v8.i256 = evm_mload v6;
+    MLOAD
+    ADD  // v9.i256 = add v7 v8;
+    SWAP1  // return v9;
     JUMP
 
 // func private %rotate(v0.i256, v1.i256, v2.i256) -> i256
@@ -175,19 +155,14 @@ rotate:
     DUP1  // evm_mstore v7 v0;
     PUSH1 0xc0 (192)
     MSTORE
-    PUSH1 0x20 (32)  // v12.i256 = add v7 v8;
-    PUSH1 0xc0 (192)
-    ADD
-    DUP3  // evm_mstore v12 v1;
-    SWAP1
+    DUP2  // evm_mstore v12 v1;
+    PUSH1 0xe0 (224)
     MSTORE
     SWAP1  // evm_mstore v6 v1;
     PUSH1 0x80 (128)
     MSTORE
-    PUSH1 0x20 (32)  // v9.i256 = add v6 v8;
-    PUSH1 0x80 (128)
-    ADD
-    MSTORE  // evm_mstore v9 v0;
+    PUSH1 0xa0 (160)  // evm_mstore v9 v0;
+    MSTORE
   block1:
     JUMPDEST
     PUSH0  // v10.i256 = eq v3 v4;
@@ -200,7 +175,7 @@ rotate:
     PUSH1 0x80 (128)
     DUP2
     MCOPY
-    PUSH1 0x1 (1)  // v17.i256 = sub v3 v16;
+    PUSH1 0x1 (1)  // v16.i256 = sub v3 v15;
     SWAP1
     SUB
     PUSH1 0x40 (64)  // evm_mcopy v6 v7 v5;
@@ -220,13 +195,13 @@ rotate:
     PUSH1 0x80 (128)
     PUSH0
     MCOPY
-    PUSH0  // v30.i256 = evm_mload v4;
+    PUSH0  // v23.i256 = evm_mload v4;
     MLOAD
-    PUSH1 0xc0 (192)  // v31.i256 = evm_mload v7;
+    PUSH1 0xc0 (192)  // v24.i256 = evm_mload v7;
     MLOAD
-    SWAP1  // v33.i256 = mul v30 100.i256;
+    SWAP1  // v26.i256 = mul v23 100.i256;
     PUSH1 0x64 (100)
     MUL
-    ADD  // v34.i256 = add v33 v31;
-    SWAP1  // return v34;
+    ADD  // v27.i256 = add v26 v24;
+    SWAP1  // return v27;
     JUMP

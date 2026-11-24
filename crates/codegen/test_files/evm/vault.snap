@@ -1,6 +1,6 @@
 ---
 source: crates/codegen/tests/evm.rs
-assertion_line: 2136
+assertion_line: 2507
 expression: "String::from_utf8(out).unwrap()"
 input_file: test_files/evm/vault.sntn
 ---
@@ -792,7 +792,7 @@ decode_returndata__u256__3271ca15373d4483:
     JUMPDEST
     PUSH1 0xe0 (224)  // evm_mstore v8 v0;
     MSTORE
-    PUSH2 0x100 (256)  // evm_mstore 256.i256 v1;
+    PUSH2 0x100 (256)  // evm_mstore v10 v1;
     MSTORE
     PUSH1 0xe0 (224)  // v13.i256 = call %soldecoder_i__ha12a03fcb5ba844b_new__MemoryBytes_h1e381015a9b0111b__59e0d528d54cca1b v8;
     PUSH1 `pc + (4)`
@@ -807,15 +807,15 @@ decode_returndata__u256__3271ca15373d4483:
     PUSH1 0x40 (64)  // v12.i256 = add v13 64.i256;
     DUP3
     ADD
-    DUP1  // v26.i256 = evm_mload v12;
+    DUP1  // v25.i256 = evm_mload v12;
     MLOAD
-    PUSH1 0x20 (32)  // v27.i256 = add v26 v4;
+    PUSH1 0x20 (32)  // v26.i256 = add v25 v4;
     ADD
-    DUP2  // v28.i256 = evm_mload v12;
+    DUP2  // v27.i256 = evm_mload v12;
     MLOAD
-    DUP2  // v16.i256 = lt v27 v28;
+    DUP2  // v16.i256 = lt v26 v27;
     LT
-    SWAP3  // v17.i256 = gt v27 v15;
+    SWAP3  // v17.i256 = gt v26 v15;
     DUP2
     GT
     SWAP1  // v18.i256 = or v16 v17;
@@ -832,7 +832,7 @@ decode_returndata__u256__3271ca15373d4483:
     SWAP3
     ADD
     MLOAD  // v23.i256 = evm_mload v22;
-    SWAP2  // evm_mstore v12 v27;
+    SWAP2  // evm_mstore v12 v26;
     MSTORE
     SWAP1  // return v23;
     JUMP
@@ -1537,7 +1537,7 @@ __Vault_init:
     SWAP1  // evm_mstore v23 v17;
     PUSH1 0xa0 (160)
     MSTORE
-    PUSH1 0xc0 (192)  // evm_mstore v29 v8;
+    PUSH1 0xc0 (192)  // evm_mstore v25 v8;
     MSTORE
     PUSH1 0xa0 (160)  // v26.i256 = call %soldecoder_i__ha12a03fcb5ba844b_new__MemoryBytes_h1e381015a9b0111b__59e0d528d54cca1b v23;
     PUSH1 `pc + (4)`
