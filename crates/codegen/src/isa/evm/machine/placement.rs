@@ -20,7 +20,7 @@ use crate::{
 
 use super::{
     super::{
-        EvmBackend, heap_plan, malloc_plan,
+        EvmBackend, LateCleanupProfile, heap_plan, malloc_plan,
         memory_plan::{
             self, BackendSpillPlan, BackendSpillReserve, FinalScratchReserveRange, FuncPreAnalysis,
             StableMode, WORD_BYTES, expect_func_entry,
@@ -208,17 +208,18 @@ pub(crate) fn compute_semantic_memory_placement(
                 );
                 // A raw write of the slot, here or in a callee, may have
                 // allocated what outlives the call; the restore would free it.
-                let restores_free_ptr =
-                    !free_ptr_write_summaries.get(&func).copied().unwrap_or(true)
-                        && malloc_plan::should_restore_free_ptr_on_internal_returns(
-                            function,
-                            &module.ctx,
-                            &backend.isa,
-                            &analysis.cfg,
-                            ptr_escape,
-                            &analysis.prov,
-                            &transient,
-                        );
+                // O0 output keeps the free pointer growing.
+                let restores_free_ptr = backend.late_cleanup_profile != LateCleanupProfile::Off
+                    && !free_ptr_write_summaries.get(&func).copied().unwrap_or(true)
+                    && malloc_plan::should_restore_free_ptr_on_internal_returns(
+                        function,
+                        &module.ctx,
+                        &backend.isa,
+                        &analysis.cfg,
+                        ptr_escape,
+                        &analysis.prov,
+                        &transient,
+                    );
                 (escape_kinds, transient, restores_free_ptr)
             });
         (

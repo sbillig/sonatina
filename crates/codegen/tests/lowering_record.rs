@@ -1069,17 +1069,20 @@ fn lowering_record_gives_each_malloc_rule() {
     }
 }
 
-/// A function that releases the heap it allocated is recorded as restoring
-/// the free pointer, and `check_placement` finds the save and the restores
-/// in its machine IR. `%spill` of `arena_alloc_spills.sntn` spills to both
-/// of its reserves and to the fixed slots.
+/// A function that releases the heap it allocated, which only optimized
+/// output does, is recorded as restoring the free pointer, and
+/// `check_placement` finds the save and the restores in its machine IR.
+/// `%spill` of `arena_alloc_spills.sntn` spills to both of its reserves and
+/// to the fixed slots.
 #[test]
 fn lowering_record_gives_restores_reserves_and_fixed_slots() {
-    let records = o0_records(&evm_fixture("free_ptr_restore_releases_callee_heap.sntn"));
+    let source = evm_fixture("free_ptr_restore_releases_callee_heap.sntn");
+    check_fixture(&source, &[OptLevel::O1]);
     assert!(
-        records
+        compile(&source, OptLevel::O1, true)
             .iter()
-            .flat_map(|lowering| &lowering.funcs)
+            .flat_map(|artifact| artifact.sections.values())
+            .flat_map(|section| &section.lowering.as_ref().expect("a record").funcs)
             .any(|func| func.restores_free_ptr)
     );
     let records = o0_records(&evm_fixture("arena_alloc_spills.sntn"));

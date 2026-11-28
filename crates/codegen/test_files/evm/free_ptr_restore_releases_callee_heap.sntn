@@ -1,4 +1,4 @@
-#! evm.config: { opt: 0 }
+#! evm.config: { opt: 1 }
 #! evm.case: ok
 #!   calldata:
 #!   expect: return u256(12) u256(32)
@@ -7,7 +7,8 @@ target = "evm-ethereum-osaka"
 
 # `%f`'s buffer is live across a call that allocates, so it advances the free
 # pointer, but nothing that outlives `%f` points into it: `%f` restores the
-# free pointer on return, and `%entry`'s next malloc reuses its memory.
+# free pointer on return, and `%entry`'s next malloc reuses its memory. O0
+# output does not restore the free pointer.
 
 func public %entry() {
     block0:
@@ -29,7 +30,7 @@ func public %entry() {
         evm_return 0.i8 64.i8;
 }
 
-func private %f(v0.i256) -> i256 {
+func inline(never) private %f(v0.i256) -> i256 {
     block0:
         v1.*i256 = evm_malloc v0;
         mstore v1 7.i256 i256;
@@ -38,7 +39,7 @@ func private %f(v0.i256) -> i256 {
         return v2;
 }
 
-func private %g(v0.i256) {
+func inline(never) private %g(v0.i256) {
     block0:
         v1.*i256 = evm_malloc v0;
         mstore v1 1.i256 i256;

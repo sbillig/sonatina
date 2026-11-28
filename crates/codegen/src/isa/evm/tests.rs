@@ -316,7 +316,8 @@ fn free_ptr_restore_preserves_heap_published_by_a_callee() {
         "../../../test_files/evm/callee_heap_escape_free_ptr.sntn"
     ))
     .expect("module parses");
-    let backend = osaka_backend();
+    // O0 output never restores the free pointer.
+    let backend = osaka_backend().with_late_cleanup_profile(LateCleanupProfile::Speed);
     let entry = find_func(&parsed.module, "entry");
     let placement = compute_test_memory_placement(&parsed.module, &backend, entry, &[]);
     assert!(
@@ -387,7 +388,8 @@ block0:
 "#,
     )
     .expect("module parses");
-    let backend = osaka_backend();
+    // O0 output never restores the free pointer.
+    let backend = osaka_backend().with_late_cleanup_profile(LateCleanupProfile::Speed);
     let entry = find_func(&parsed.module, "entry");
     let placement = compute_test_memory_placement(&parsed.module, &backend, entry, &[]);
     let restores = |name| placement.funcs[&find_func(&parsed.module, name)].restores_free_ptr;
