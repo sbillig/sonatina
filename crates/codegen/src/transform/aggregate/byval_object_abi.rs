@@ -256,7 +256,7 @@ impl ObjectAggregateAbi {
     }
 
     pub fn run(&mut self, module: &Module) -> bool {
-        self.run_with_synthetic_out_args(module)
+        self.run_with_synthetic_out_args(module, true)
             .expect("object aggregate ABI lowering should succeed")
             .iter()
             .any(|(_, args)| !args.is_empty())
@@ -269,7 +269,7 @@ impl ObjectAggregateAbi {
     /// Recompute inferred facts afterward, then consume the guarantees during
     /// object lowering. No contract survives the signature/type cutover.
     pub(crate) fn lower_to_memory(&mut self, module: &Module, cleanup: bool) -> Result<(), String> {
-        let outputs = self.run_with_synthetic_out_args(module)?;
+        let outputs = self.run_with_synthetic_out_args(module, cleanup)?;
         let mut facts = ModuleObjectFacts::compute(module).with_outputs(module, &outputs);
         if cleanup {
             module.func_store.par_for_each(|func_ref, func| {
@@ -286,9 +286,12 @@ impl ObjectAggregateAbi {
         Ok(())
     }
 
+    /// With `elide`, rewrites each call to write its outputs where the caller
+    /// stores them, which spares the copies.
     pub(super) fn run_with_synthetic_out_args(
         &mut self,
         module: &Module,
+        elide: bool,
     ) -> Result<super::LocalObjectArgMap, String> {
         let mut synthetic_out_args =
             super::object_abi::ObjectReturnOutParam.run_with_synthetic_out_args(module);
@@ -324,6 +327,9 @@ impl ObjectAggregateAbi {
             });
         }
         private_abi::propagate_private_abi_types(module, &old_sigs);
+        if !elide {
+            return Ok(synthetic_out_args);
+        }
 
         let mut object_effects = ObjectEffectSummaryMap::default();
         let mut layout_cache = shape::AggregateLayoutCache::default();
@@ -2251,7 +2257,7 @@ mod tests {
     fn run_object_aggregate_abi(module: &Module) -> crate::transform::aggregate::LocalObjectArgMap {
         let mut pass = ObjectAggregateAbi::default();
         let synthetic_out_args = pass
-            .run_with_synthetic_out_args(module)
+            .run_with_synthetic_out_args(module, true)
             .expect("object aggregate ABI lowering should succeed");
         let report = verify_module(
             module,
@@ -3055,6 +3061,40 @@ block0:
                     "{text}"
                 );
             }
+        }
+    }
+
+    /// Without elision `%caller` keeps `%make`'s output in an object of its
+    /// own and copies it to `v1`.
+    #[test]
+    fn calls_copy_their_outputs_without_elision() {
+        for elide in [false, true] {
+            let module = parse_test_module(
+                r#"
+target = "evm-ethereum-osaka"
+func private %make(v0.objref<[i256; 20]>) -> [i256; 20] {
+block0:
+    v1.[i256; 20] = obj.load v0;
+    return v1;
+}
+func private %caller(v0.objref<[[i256; 20]; 2]>) {
+block0:
+    v1.objref<[i256; 20]> = obj.index v0 0.i8;
+    v2.objref<[i256; 20]> = obj.index v0 1.i8;
+    v3.[i256; 20] = call %make v2;
+    obj.store v1 v3;
+    return;
+}
+"#,
+            );
+            ObjectAggregateAbi::default()
+                .run_with_synthetic_out_args(&module, elide)
+                .unwrap();
+            verify_full(&module);
+            let text = dump_func_by_name(&module, "caller");
+            let copies = usize::from(!elide);
+            assert_eq!(count_obj_allocs(&module, "caller"), copies, "{text}");
+            assert_eq!(text.contains("obj.store"), !elide, "{text}");
         }
     }
 
@@ -4460,7 +4500,7 @@ block0:
         );
 
         let err = ObjectAggregateAbi::default()
-            .run_with_synthetic_out_args(&module)
+            .run_with_synthetic_out_args(&module, true)
             .expect_err("rewriting should report impossible call budget");
         assert!(
             err.contains("cannot lower impossible for EVM")
