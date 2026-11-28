@@ -253,14 +253,13 @@ fn analyze_splice(
         return None;
     }
 
-    let (_, body_insts) = insts.split_last()?;
     let mut collected = collect_splice_body(
         callee,
         callee_call_count,
         reconstruction_insts,
         config,
         stats,
-        body_insts,
+        insts,
     )?;
 
     for &ret_value in ret_values {
@@ -298,14 +297,13 @@ fn analyze_terminator_splice(
         return None;
     }
 
-    let (_, body_insts) = insts.split_last()?;
     let mut collected = collect_splice_body(
         callee,
         callee_call_count,
         reconstruction_insts,
         config,
         stats,
-        body_insts,
+        insts,
     )?;
 
     extend_const_values_from_inst_operands(callee, term_inst_id, &mut collected.const_values);
@@ -326,10 +324,18 @@ fn collect_splice_body(
     reconstruction_insts: usize,
     config: &InlinerConfig,
     stats: &mut InlineStats,
-    body_insts: &[InstId],
+    insts: &[InstId],
 ) -> Option<CollectedSpliceBody> {
+    let (&term, body_insts) = insts.split_last()?;
     let is_single_use = callee_call_count == 1;
-    let body_size: usize = body_insts.iter().map(|&inst| inst_size(callee, inst)).sum();
+    // The terminator counts only what it stands for beyond itself, as for an
+    // `evm_revert_word` the two stores before the revert it replaces.
+    let body_size: usize = body_insts
+        .iter()
+        .map(|&inst| inst_size(callee, inst))
+        .sum::<usize>()
+        + inst_size(callee, term)
+        - 1;
     if !is_single_use && body_size.saturating_sub(reconstruction_insts) > config.splice_max_insts {
         stats.skipped_too_large += 1;
         return None;

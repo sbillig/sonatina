@@ -753,6 +753,63 @@ func public %caller(v0.i32, v1.i32) -> i32 {
 }
 
 #[test]
+fn terminating_splice_counts_revert_word_as_its_expansion() {
+    // `%fail` adds five values and reverts with the last: spelled with
+    // `evm_revert_word` or with the two stores and `evm_revert` it stands
+    // for, its body weighs 7 against the cap.
+    let tail = [
+        "evm_revert_word 1313373041.i32 v5;",
+        "mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;\n        mstore 4.i256 v5 i256;\n        evm_revert 0.i256 36.i256;",
+    ];
+    for tail in tail {
+        let source = format!(
+            r#"
+target = "evm-ethereum-osaka"
+
+func private %fail(v0.i256) {{
+    block0:
+        v1.i256 = add v0 1.i256;
+        v2.i256 = add v1 2.i256;
+        v3.i256 = add v2 3.i256;
+        v4.i256 = add v3 4.i256;
+        v5.i256 = add v4 5.i256;
+        {tail}
+}}
+
+func public %caller(v0.i1, v1.i256, v2.i256) {{
+    block0:
+        br v0 block1 block2;
+
+    block1:
+        call %fail v1;
+        return;
+
+    block2:
+        call %fail v2;
+        return;
+}}
+"#
+        );
+        for (cap, spliced) in [(6, 0), (7, 2)] {
+            let mut parsed = sonatina_parser::parse_module(&source)
+                .unwrap_or_else(|errs| panic!("parse failed: {errs:?}"));
+            let stats = Inliner::new(InlinerConfig {
+                splice_max_insts: cap,
+                ..Default::default()
+            })
+            .run(&mut parsed.module);
+            assert_module_verified(&parsed.module);
+            assert_eq!(
+                stats.calls_spliced,
+                spliced,
+                "cap {cap}, tail `{tail}`:\n{}",
+                dump_module(&parsed.module)
+            );
+        }
+    }
+}
+
+#[test]
 fn inliner_splices_multi_result_callees_without_legalizing_them() {
     let source = r#"
 target = "evm-ethereum-osaka"
