@@ -10,7 +10,10 @@ use crate::{
     liveness::{InstLiveness, Liveness},
     machinst::lower::{SectionMembership, SectionWorkModule},
     module_analysis::{CallGraphSchedule, SccRef},
-    object::lowering::{MachinePassKind, MachineSteps, MallocLowering, StepKind},
+    object::lowering::{
+        AllocaLowering, MachinePassKind, MachineSteps, MallocLowering, ObjLocLowering,
+        SpillReserveLowering, StepKind, WordRange,
+    },
     optim::steps::StepRecorder,
     stackalloc::{Action, StackifyAlloc},
 };
@@ -24,7 +27,7 @@ use sonatina_ir::{
     ir_writer::{FuncWriteCtx, InstStatement, IrWrite},
     isa::{
         Isa,
-        evm::{EvmMachine, space::MEMORY},
+        evm::{Evm, EvmMachine, space::MEMORY},
     },
     module::{FuncRef, ModuleCtx},
     object::EmbedSymbol,
@@ -53,7 +56,6 @@ use super::{
         },
         lazy_frame::{FrameSummary, compute_frame_summary, compute_machine_frame_roots},
         lower::lower_section_to_machine,
-        module::SourceMachineMap,
         pipeline::run_machine_opt_pipeline,
         placement::{
             EvmMemoryPlacementPlan, MallocPlacement, MemoryPlacementSection,
@@ -63,12 +65,13 @@ use super::{
     },
     memory_plan::{
         self, BackendSpillPlan, BackendSpillReserve, DYN_SP_SLOT, FREE_PTR_SLOT, MachineFuncPlan,
-        ProgramMemoryPlan, STATIC_BASE, SemanticFuncPlan, WORD_BYTES, compute_abs_clobber_words,
-        expect_func_entry,
+        ObjLoc, ProgramMemoryPlan, STATIC_BASE, SemanticFuncPlan, WORD_BYTES,
+        compute_abs_clobber_words, expect_func_entry,
     },
     pipeline::EvmPipeline,
     ptr_escape::PtrEscapeSummaries,
     ptr_provenance::{Provenance, compute_provenance},
+    static_arena_alloc::alloca_size_words,
 };
 
 const FREE_PTR_SLOT_START: u32 = FREE_PTR_SLOT as u32;
@@ -92,62 +95,133 @@ pub(crate) struct PreparedLowering {
     pub(crate) source_ir: String,
     /// The source blocks each machine block comes from.
     pub(crate) source_blocks: FxHashMap<FuncRef, FxHashMap<BlockId, Vec<BlockId>>>,
-    pub(crate) mallocs: FxHashMap<FuncRef, Vec<(ValueId, MallocLowering)>>,
+    /// Each source block, in layout order, with the block lowering made for it.
+    pub(crate) lowered_blocks: FxHashMap<FuncRef, Vec<(BlockId, BlockId)>>,
+    pub(crate) placements: FxHashMap<FuncRef, FuncPlacementLowering>,
     pub(crate) entry_free_ptr: Option<u32>,
     pub(crate) machine_steps: MachineSteps,
+}
+
+/// Where memory placement put a function's allocations and spill reserves.
+pub(crate) struct FuncPlacementLowering {
+    pub(crate) mallocs: Vec<(ValueId, MallocLowering)>,
+    pub(crate) allocas: Vec<(ValueId, AllocaLowering)>,
+    pub(crate) restores_free_ptr: bool,
+    pub(crate) spill_reserve: SpillReserveLowering,
 }
 
 impl PreparedLowering {
     fn new(
         source: &Module,
         funcs: &[FuncRef],
+        isa: &Evm,
         placement: &EvmMemoryPlacementPlan,
-        source_to_machine: &SourceMachineMap,
+        spill_reserves: &FxHashMap<FuncRef, BackendSpillReserve>,
+        lowered_blocks: FxHashMap<FuncRef, Vec<(BlockId, BlockId)>>,
         machine_steps: MachineSteps,
     ) -> Self {
         let mut source_blocks = FxHashMap::default();
-        let mut mallocs = FxHashMap::default();
+        let mut placements = FxHashMap::default();
         for &func in funcs {
             let mut blocks: FxHashMap<BlockId, Vec<BlockId>> = FxHashMap::default();
-            for (source, machine) in expect_func_entry(&source_to_machine.funcs, func, "source map")
-                .blocks
-                .iter()
-            {
-                if let Some(machine) = machine {
-                    blocks.entry(*machine).or_default().push(source);
-                }
+            for &(source, machine) in expect_func_entry(&lowered_blocks, func, "block map") {
+                blocks.entry(machine).or_default().push(source);
             }
             source_blocks.insert(func, blocks);
-            let placements =
-                &expect_func_entry(&placement.funcs, func, "placement").malloc_placements;
-            let mut func_mallocs: Vec<_> = source.func_store.view(func, |function| {
-                placements
-                    .iter()
-                    .filter_map(|(&inst, &placement)| {
-                        let malloc = match placement {
-                            MallocPlacement::Fixed { base } => MallocLowering::Fixed { base },
-                            MallocPlacement::Heap {
-                                min_base,
-                                update_free_ptr,
-                                exact_base,
-                                ..
-                            } => MallocLowering::Heap {
-                                min_base,
-                                exact_base,
-                                update_free_ptr,
-                            },
-                        };
-                        Some((function.dfg.inst_result(inst)?, malloc))
-                    })
-                    .collect()
-            });
-            func_mallocs.sort_unstable_by_key(|(value, _)| value.as_u32());
-            mallocs.insert(func, func_mallocs);
+            let func_placement = expect_func_entry(&placement.funcs, func, "placement");
+            let (mut mallocs, mut allocas): (Vec<_>, Vec<_>) =
+                source.func_store.view(func, |function| {
+                    let result = |inst| {
+                        function
+                            .dfg
+                            .inst_result(inst)
+                            .expect("an allocation has a result")
+                    };
+                    let mallocs = func_placement
+                        .malloc_placements
+                        .iter()
+                        .map(|(&inst, &malloc)| {
+                            let malloc = match malloc {
+                                MallocPlacement::Fixed { base, rule } => {
+                                    MallocLowering::Fixed { base, rule }
+                                }
+                                MallocPlacement::Heap {
+                                    min_base,
+                                    needs_dyn_sp_clamp,
+                                    update_free_ptr,
+                                    exact_base,
+                                } => MallocLowering::Heap {
+                                    min_base,
+                                    exact_base,
+                                    update_free_ptr,
+                                    needs_dyn_sp_clamp,
+                                    free_ptr_floor: func_placement
+                                        .free_ptr_floor_before_malloc
+                                        .get(&inst)
+                                        .copied()
+                                        .flatten(),
+                                },
+                            };
+                            (result(inst), malloc)
+                        })
+                        .collect();
+                    let allocas = func_placement
+                        .mem_plan
+                        .alloca_loc
+                        .iter()
+                        .map(|(&inst, &loc)| {
+                            let EvmInstKind::Alloca(alloca) =
+                                isa.inst_set().resolve_inst(function.dfg.inst(inst))
+                            else {
+                                panic!("an alloca placement of another instruction");
+                            };
+                            let loc = match loc {
+                                ObjLoc::ScratchAbs(word) => ObjLocLowering::ScratchAbs(word),
+                                ObjLoc::StableAbs(word) => ObjLocLowering::StableAbs(
+                                    func_placement
+                                        .mem_plan
+                                        .stable_base_word()
+                                        .expect("a stable alloca has a stable frame")
+                                        + word,
+                                ),
+                                ObjLoc::StableFrame(word) => ObjLocLowering::StableFrame(word),
+                            };
+                            let words = alloca_size_words(isa, &source.ctx, *alloca.ty());
+                            (result(inst), AllocaLowering { loc, words })
+                        })
+                        .collect();
+                    (mallocs, allocas)
+                });
+            mallocs.sort_unstable_by_key(|(value, _)| value.as_u32());
+            allocas.sort_unstable_by_key(|(value, _)| value.as_u32());
+            let reserve = spill_reserves.get(&func).copied().unwrap_or_default();
+            let mem_plan = &func_placement.mem_plan;
+            let scratch = func_placement.final_scratch_reserve;
+            let spill_reserve = SpillReserveLowering {
+                scratch: WordRange {
+                    start: scratch.start_word,
+                    words: scratch.words,
+                },
+                stable: mem_plan.stable_base_word().map(|base_word| WordRange {
+                    start: base_word + mem_plan.stable_words - reserve.stable_words,
+                    words: reserve.stable_words,
+                }),
+            };
+            placements.insert(
+                func,
+                FuncPlacementLowering {
+                    mallocs,
+                    allocas,
+                    restores_free_ptr: func_placement.restores_free_ptr,
+                    spill_reserve,
+                },
+            );
         }
         Self {
             source_ir: functions_text(source, funcs),
             source_blocks,
-            mallocs,
+            lowered_blocks,
+            placements,
             entry_free_ptr: placement.section_entry_free_ptr,
             machine_steps,
         }
@@ -999,6 +1073,25 @@ fn prepare_machine_section_after_pipeline(
         let mut recorder = backend
             .record_lowering
             .then(|| StepRecorder::new(machine.work.module(), &funcs));
+        // The machine passes remove blocks from the source map; the record
+        // keeps the map lowering built.
+        let lowered_blocks: Option<FxHashMap<_, Vec<_>>> = backend.record_lowering.then(|| {
+            funcs
+                .iter()
+                .map(|&func| {
+                    let map =
+                        expect_func_entry(&machine.source_to_machine.funcs, func, "source map");
+                    let blocks = source_module.func_store.view(func, |function| {
+                        function
+                            .layout
+                            .iter_block()
+                            .filter_map(|block| Some((block, map.blocks[block]?)))
+                            .collect()
+                    });
+                    (func, blocks)
+                })
+                .collect()
+        });
         run_machine_opt_pipeline(
             machine.work.module(),
             &funcs,
@@ -1380,15 +1473,19 @@ fn prepare_machine_section_after_pipeline(
             }
             let mut globals: Vec<_> = membership.globals.iter().copied().collect();
             globals.sort_unstable();
-            let lowering = recorder.map(|recorder| {
-                PreparedLowering::new(
-                    source_module,
-                    &funcs,
-                    &placement,
-                    &machine.source_to_machine,
-                    recorder.finish(backend.late_cleanup_profile),
-                )
-            });
+            let lowering = recorder
+                .zip(lowered_blocks)
+                .map(|(recorder, lowered_blocks)| {
+                    PreparedLowering::new(
+                        source_module,
+                        &funcs,
+                        &backend.isa,
+                        &placement,
+                        &backend_spills.reserves,
+                        lowered_blocks,
+                        recorder.finish(backend.late_cleanup_profile),
+                    )
+                });
             return Ok(EvmPreparedSection {
                 work: machine.work,
                 funcs,

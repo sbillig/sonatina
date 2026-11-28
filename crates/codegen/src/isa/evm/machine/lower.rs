@@ -682,7 +682,7 @@ impl FuncLowerCtx<'_> {
             .copied()
             .ok_or_else(|| format!("missing malloc placement for inst {}", source_inst.as_u32()))?;
         match placement {
-            MallocPlacement::Fixed { base } => {
+            MallocPlacement::Fixed { base, .. } => {
                 let value = self.i256_imm(base);
                 self.alias_inst_single_result(source_inst, value)
             }

@@ -17,6 +17,21 @@
 //! Functions and symbols are named as the IR text of the section's module
 //! names them, values and blocks by their ids in the text of their module
 //! (`v12`, `block3`).
+//!
+//! The record says where memory placement put each allocation of the source
+//! IR, as machine lowering used it: each `alloca`'s location and size
+//! (`FuncLowering::allocas`), each `evm_malloc`'s base or how the code
+//! computes it (`FuncLowering::mallocs`), each function's frame
+//! (`FuncLowering::frame`), the words it reserves for spills
+//! (`FuncLowering::spill_reserve`) and whether it gives back the heap it
+//! allocated (`FuncLowering::restores_free_ptr`), and of the section the
+//! arena base, the free pointer the entry starts with and whether code
+//! spills to the fixed slots (`SectionLowering::fixed_slot_spills`). Frame
+//! words are counted from the arena base: frame word `w` is the bytes at
+//! `arena_base + 32 * w`. Memory placement runs again until spills fit their
+//! reserves; the record is of the run whose code is emitted.
+//! `FuncLowering::lowered_blocks` maps each source block to the block of
+//! the lowered machine IR lowering made for it.
 
 use sonatina_ir::{BlockId, I256, Immediate, InstId, U256, ValueId, module::FuncRef};
 
@@ -37,6 +52,9 @@ pub struct SectionLowering {
     /// The free pointer the section entry stores at `0x40` before anything
     /// else, if it stores one.
     pub entry_free_ptr: Option<u32>,
+    /// Some function's code spills to the fixed slots, the words at `0` and
+    /// `0x20` (`SpillLocation::Memory(0)` and `Memory(32)`).
+    pub fixed_slot_spills: bool,
     pub funcs: Vec<FuncLowering>,
     /// The offset and size of each code unit the late merges outlined.
     pub units: Vec<(String, u32, u32)>,
@@ -290,12 +308,64 @@ pub struct FuncLowering {
     /// Where the function's code starts; `None` if its code is another's.
     pub offset: Option<u32>,
     pub blocks: Vec<BlockLowering>,
+    /// Each block of the source IR, in its function's layout order, with the
+    /// block of the lowered machine IR (`MachineSteps::lowered`) that lowering
+    /// made for it and that its code starts in.
+    pub lowered_blocks: Vec<(BlockId, BlockId)>,
     /// Where each value the stack does not hold everywhere is kept, and where
     /// the function's code stores and reloads it.
     pub spills: Vec<SpillLowering>,
     pub frame: FrameLowering,
     /// The placement of each `evm_malloc` of the source IR, by its result.
     pub mallocs: Vec<(ValueId, MallocLowering)>,
+    /// The placement of each `alloca` of the source IR, by its result.
+    pub allocas: Vec<(ValueId, AllocaLowering)>,
+    /// Before each `return`, the code stores back at `0x40` the free pointer
+    /// the function was entered with, which it loads at entry: what the
+    /// function allocated from the heap is free again.
+    pub restores_free_ptr: bool,
+    pub spill_reserve: SpillReserveLowering,
+}
+
+/// An `alloca`'s `words` words at `loc`: its type's size rounded up to a
+/// word. An `alloca` of no words is at word 0 of the scratch overlay.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AllocaLowering {
+    pub loc: ObjLocLowering,
+    pub words: u32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ObjLocLowering {
+    /// This frame word of the scratch overlay, at `arena_base + 32 * word`.
+    ScratchAbs(u32),
+    /// This frame word of the function's stable frame
+    /// (`StableLowering::Abs`), at `arena_base + 32 * word`: `base_word` and
+    /// the word's offset in the frame.
+    StableAbs(u32),
+    /// This word of the dynamic frame, which the code addresses from the
+    /// dynamic stack pointer.
+    StableFrame(u32),
+}
+
+/// The memory words placement reserved for a function's spills, where final
+/// spills put each value `SpillLocation::Memory` names other than in the
+/// fixed slots.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SpillReserveLowering {
+    /// Words of the scratch overlay, above its objects.
+    pub scratch: WordRange,
+    /// The top words of the stable frame; `None` if the frame is not
+    /// `StableLowering::Abs`.
+    pub stable: Option<WordRange>,
+}
+
+/// The frame words `[start, start + words)`, frame word `w` being the bytes
+/// `[arena_base + 32 * w, arena_base + 32 * w + 32)`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct WordRange {
+    pub start: u32,
+    pub words: u32,
 }
 
 #[derive(Debug, Clone)]
@@ -405,15 +475,39 @@ pub enum StableLowering {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MallocLowering {
-    /// At this constant address.
-    Fixed { base: u32 },
+    /// At this constant address, by `rule`.
+    Fixed { base: u32, rule: FixedMallocRule },
     /// At the free pointer, raised to `min_base`, or at `exact_base` when
     /// the free pointer is known; `update_free_ptr` if it moves the pointer.
     Heap {
         min_base: u32,
         exact_base: Option<u32>,
         update_free_ptr: bool,
+        /// The base is also raised to the dynamic stack pointer at `0x80`:
+        /// a dynamic frame may be live at the malloc.
+        needs_dyn_sp_clamp: bool,
+        /// A value the free pointer is at least before the malloc. When it
+        /// is at least `min_base`, the code does not raise the base to
+        /// `min_base`.
+        free_ptr_floor: Option<u32>,
     },
+}
+
+/// Why a malloc has a fixed base. Each rule but `PrivateStatic` puts a
+/// transient malloc, whose buffer is dead when its function returns, at its
+/// minimum base.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FixedMallocRule {
+    /// Its buffer only feeds the halting payload.
+    Terminal,
+    /// The section has no malloc that is not transient and never accesses
+    /// the free-pointer slot.
+    Program,
+    /// The section entry, which runs once, allocates it before anything
+    /// moves the free pointer.
+    ExactEntry,
+    /// In the function's private static malloc words.
+    PrivateStatic,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

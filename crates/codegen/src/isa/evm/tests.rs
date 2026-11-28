@@ -2684,7 +2684,7 @@ block0:
     });
     let min_base = match placement.funcs[&mk].malloc_placements[&malloc] {
         machine::placement::MallocPlacement::Heap { min_base, .. } => min_base,
-        machine::placement::MallocPlacement::Fixed { base } => base,
+        machine::placement::MallocPlacement::Fixed { base, .. } => base,
     };
     let min_base_words = min_base
         .checked_sub(mk_plan.arena_base)
@@ -2842,7 +2842,7 @@ block0:
     });
     let min_base = match placement.funcs[&scratch].malloc_placements[&malloc] {
         machine::placement::MallocPlacement::Heap { min_base, .. } => min_base,
-        machine::placement::MallocPlacement::Fixed { base } => base,
+        machine::placement::MallocPlacement::Fixed { base, .. } => base,
     };
     assert_eq!(
         placement.funcs[&scratch].free_ptr_floor_before_malloc[&malloc],
