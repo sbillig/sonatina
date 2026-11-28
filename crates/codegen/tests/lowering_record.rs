@@ -1102,3 +1102,51 @@ fn lowering_record_gives_restores_reserves_and_fixed_slots() {
             .is_some_and(|stable| stable.words > 0)
     }));
 }
+
+/// Machine lowering expands `evm_revert_word sel word` to `evm_mstore 0 C;
+/// evm_mstore 4 word; evm_revert 0 36`: `C` is `sel << 224` folded for an
+/// immediate selector, else a `shl`. `%spill` of `revert_word.sntn` reverts
+/// with its argument `v1`, which it keeps in memory; the expansion's first
+/// store writes `[0, 32)`, so the word is spilled elsewhere.
+#[test]
+fn lowering_record_of_revert_word() {
+    let source = evm_fixture("revert_word.sntn");
+    check_fixture(&source, &[OptLevel::O0, OptLevel::O1, OptLevel::Os]);
+    let artifacts = compile(&source, OptLevel::O0, true);
+    let lowering = artifacts[0]
+        .sections
+        .values()
+        .next()
+        .and_then(|section| section.lowering.as_ref())
+        .expect("a lowering record");
+    let lowered = |name: &str| {
+        lowering
+            .machine_steps
+            .lowered
+            .iter()
+            .find(|snap| snap.func == name)
+            .map(|snap| snap.text.clone())
+            .expect("the function is lowered")
+    };
+    let selector = (0x4e487b71u64 as u128) << 96;
+    let folded = format!(
+        "evm_mstore 0.i256 {}.i256;\n",
+        sonatina_ir::U256::from(selector) << 128
+    );
+    let entry = lowered("entry");
+    assert!(entry.contains(&folded), "{entry}");
+    assert!(entry.contains("= shl 224.i256 v"), "{entry}");
+    assert!(entry.contains("evm_mstore 4.i256 v"), "{entry}");
+    assert!(lowered("spill").contains(&folded));
+    let word = spill_points(&artifacts, "spill")
+        .into_iter()
+        .find(|spill| spill.starts_with("v1 Memory("))
+        .expect("`v1` is spilled to memory");
+    let addr: u32 = word["v1 Memory(".len()..]
+        .split(')')
+        .next()
+        .unwrap()
+        .parse()
+        .unwrap();
+    assert!(addr >= 32, "{word}");
+}

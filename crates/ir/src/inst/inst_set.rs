@@ -185,6 +185,7 @@ define_inst_set_base! {
         evm::EvmCreate2,
         evm::EvmStaticCall,
         evm::EvmRevert,
+        evm::EvmRevertWord,
         evm::EvmSelfDestruct,
         evm::EvmMalloc,
 

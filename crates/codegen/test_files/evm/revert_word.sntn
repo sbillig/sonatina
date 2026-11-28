@@ -1,0 +1,86 @@
+#! evm.case: immediate_selector
+#!   calldata: u32be(0) u32be(5)
+#!   expect: revert 0x4e487b71 u256(5)
+#! evm.case: computed_selector
+#!   calldata: u32be(1) u32be(3735928559)
+#!   expect: revert 0xdeadbeef u256(1)
+#! evm.case: spilled_word
+#!   calldata: u32be(2) u32be(11)
+#!   expect: revert 0x4e487b71 u256(11)
+
+target = "evm-ethereum-osaka"
+
+# `evm_revert_word` reverts with a selector and a word and names no memory.
+# The first case's selector is an immediate, the second's is computed from
+# calldata, and `%spill` reverts with its argument `v1`, which it keeps in
+# memory across its loop's calls.
+
+func public %entry() {
+    block0:
+        v0.i256 = evm_calldata_load 0.i32;
+        v1.i256 = shr 224.i256 v0;
+        v2.i256 = shl 32.i256 v0;
+        v3.i256 = shr 224.i256 v2;
+        v4.i1 = eq v1 0.i256;
+        br v4 block1 block2;
+
+    block1:
+        evm_revert_word 1313373041.i32 v3;
+
+    block2:
+        v5.i1 = eq v1 1.i256;
+        br v5 block3 block4;
+
+    block3:
+        v6.i32 = trunc v3 i32;
+        evm_revert_word v6 v1;
+
+    block4:
+        v7.i256 = call %spill 0.i256 v3 0.i256 0.i256 0.i256 0.i256 0.i256 200.i256;
+        mstore 0.i256 v7 i256;
+        evm_return 0.i256 32.i256;
+}
+
+func public %sum8(v0.i256, v1.i256, v2.i256, v3.i256, v4.i256, v5.i256, v6.i256, v7.i256) -> i256 {
+    block0:
+        v8.i256 = add v0 v1;
+        v9.i256 = add v2 v3;
+        v10.i256 = add v4 v5;
+        v11.i256 = add v6 v7;
+        v12.i256 = add v8 v9;
+        v13.i256 = add v10 v11;
+        v14.i256 = add v12 v13;
+        return v14;
+}
+
+func public %spill(v0.i256, v1.i256, v2.i256, v3.i256, v4.i256, v5.i256, v6.i256, v7.i256) -> i256 {
+    block1:
+        v8.i256 = add v0 v1;
+        v9.i256 = add v2 v3;
+        v10.i256 = add v4 v5;
+        v11.i256 = add v6 v7;
+        v12.i256 = add v8 v9;
+        v13.i256 = add v10 v11;
+        v14.i256 = add v12 v13;
+
+        jump block2;
+    block2:
+        v15.i256 = phi (v14 block1) (v19 block2);
+
+        v16.i256 = call %sum8 v0 v1 v2 v3 v4 v5 v6 v7;
+        v17.i256 = call %sum8 v8 v9 v10 v11 v12 v13 v14 v15;
+        v18.i256 = add v16 v17;
+        v19.i256 = add v7 v18;
+
+        v20.i1 = gt v19 1000.i256;
+        br v20 block3 block2;
+
+    block3:
+        evm_revert_word 1313373041.i32 v1;
+}
+
+object @Contract {
+  section runtime {
+    entry %entry;
+  }
+}

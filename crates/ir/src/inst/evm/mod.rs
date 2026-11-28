@@ -551,6 +551,18 @@ pub struct EvmRevert {
     len: ValueId,
 }
 
+/// Halt and revert with the 36 bytes of the four low bytes of `sel`, big
+/// endian, then `word`, without touching IR linear memory. Lowers to
+/// `evm_mstore 0 (sel << 224); evm_mstore 4 word; evm_revert 0 36` at EVM
+/// machine lowering.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
+#[inst(side_effect(crate::inst::SideEffect::Control))]
+#[inst(terminator)]
+pub struct EvmRevertWord {
+    sel: ValueId,
+    word: ValueId,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
 #[inst(side_effect(crate::inst::SideEffect::Write))]
 #[inst(terminator)]

@@ -996,6 +996,8 @@ impl TerminalPrivateMallocAnalysis<'_> {
             let (addr, len) = match self.resolve(inst) {
                 EvmInstKind::EvmReturn(ret) => (*ret.addr(), *ret.len()),
                 EvmInstKind::EvmRevert(revert) => (*revert.addr(), *revert.len()),
+                // Its payload is in no memory.
+                EvmInstKind::EvmRevertWord(_) => return true,
                 _ if self.function.dfg.inst(inst).is_terminator() => {
                     let mut succs = self.cfg.succs_of(block);
                     return succs

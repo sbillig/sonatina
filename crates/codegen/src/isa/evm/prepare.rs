@@ -22,7 +22,8 @@ use sonatina_ir::{
     MemoryAccess, Module, ValueId,
     cfg::ControlFlowGraph,
     inst::evm::{
-        EvmReturn, EvmRevert, inst_set::EvmInstKind, machine_inst_set::EvmMachineInstKind,
+        EvmMstore, EvmReturn, EvmRevert, inst_set::EvmInstKind,
+        machine_inst_set::EvmMachineInstKind,
     },
     ir_writer::{FuncWriteCtx, InstStatement, IrWrite},
     isa::{
@@ -51,8 +52,7 @@ use super::{
         final_spills::{
             FinalSpillAllocationInput, FinalSpillChoiceCtx, FinalSpillObjects,
             FixedMemoryWriteRange, MachineFinalSpillInput, OptionalFinalSpillPlacement,
-            allocate_final_spills, compute_malloc_spill_bounds,
-            validate_dynamic_terminal_payload_spills,
+            allocate_final_spills, compute_malloc_spill_bounds, validate_terminal_payload_spills,
         },
         lazy_frame::{FrameSummary, compute_frame_summary, compute_machine_frame_roots},
         lower::lower_section_to_machine,
@@ -649,6 +649,27 @@ pub(crate) fn dynamic_terminal_payload(
         && matches!(access.loc, AccessLoc::LinearRange { addr: write_addr, len: write_len }
             if write_len == len && value_imm_u32(function, write_addr) == Some(start));
     covers.then_some(DynamicTerminalPayload { write, start, len })
+}
+
+/// The word the machine expansion of an `evm_revert_word` ending at `terminal`,
+/// `evm_mstore 0 C; evm_mstore 4 word; evm_revert 0 36`, stores after its first
+/// store.
+pub(crate) fn revert_word_payload(function: &Function, terminal: InstId) -> Option<ValueId> {
+    let is = function.inst_set();
+    let stored_at = |inst: InstId, addr: u32| {
+        let store = <&EvmMstore as InstDowncast>::downcast(is, function.dfg.inst(inst))?;
+        (value_imm_u32(function, *store.addr()) == Some(addr)).then_some(*store.value())
+    };
+    let revert = <&EvmRevert as InstDowncast>::downcast(is, function.dfg.inst(terminal))?;
+    if value_imm_u32(function, *revert.addr()) != Some(0)
+        || value_imm_u32(function, *revert.len()) != Some(36)
+    {
+        return None;
+    }
+    let second = function.layout.prev_inst_of(terminal)?;
+    let word = stored_at(second, 4)?;
+    stored_at(function.layout.prev_inst_of(second)?, 0)?;
+    Some(word)
 }
 
 fn terminal_payload_range(
@@ -1465,12 +1486,7 @@ fn prepare_machine_section_after_pipeline(
             for &func in &funcs {
                 let plan = expect_func_entry(&function_plans, func, "function plan");
                 machine.work.module().func_store.view(func, |function| {
-                    validate_dynamic_terminal_payload_spills(
-                        func,
-                        function,
-                        &plan.alloc,
-                        &plan.mem_plan,
-                    )
+                    validate_terminal_payload_spills(func, function, &plan.alloc, &plan.mem_plan)
                 })?;
             }
             let mut globals: Vec<_> = membership.globals.iter().copied().collect();

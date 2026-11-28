@@ -2424,6 +2424,36 @@ impl_evm_no_result_rule!(
     evm::EvmSelfDestruct,
 );
 
+/// `sel` is an `i32`, or the `i256` EVM legalization widens it to, and `word`
+/// an `i256`.
+impl VerifyInst for evm::EvmRevertWord {
+    fn verify_inst(&self, verifier: &mut FunctionVerifier<'_>, inst_id: InstId) {
+        let location = verifier.inst_location(inst_id);
+        verifier.expect_no_result(inst_id, location.clone());
+        for (value, tys, what) in [
+            (
+                *self.sel(),
+                &[Type::I32, Type::I256][..],
+                "selector must be i32 or i256",
+            ),
+            (*self.word(), &[Type::I256][..], "word must be i256"),
+        ] {
+            if let Some(ty) = verifier.value_ty(value)
+                && !tys.contains(&ty)
+            {
+                verifier.emit(
+                    Diagnostic::error(
+                        DiagnosticCode::InstOperandTypeMismatch,
+                        format!("evm_revert_word {what}"),
+                        location.clone(),
+                    )
+                    .with_note(format!("operand v{} has type {ty:?}", value.as_u32())),
+                );
+            }
+        }
+    }
+}
+
 macro_rules! impl_evm_arithmetic_rule {
     ($($ty:ty),+ $(,)?) => {
         $(

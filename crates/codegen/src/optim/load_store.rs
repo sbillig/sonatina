@@ -9,8 +9,8 @@ use sonatina_ir::{
         data::{Alloca, Memzero, Mload, Mstore},
         evm::{
             EvmCalldataLoad, EvmCodeLoad, EvmInvalid, EvmMalloc, EvmMloadBytes, EvmMstore8,
-            EvmReturn, EvmReturnCode, EvmRevert, EvmSelfDestruct, EvmSload, EvmSstore, EvmStop,
-            EvmTload, EvmTstore,
+            EvmReturn, EvmReturnCode, EvmRevert, EvmRevertWord, EvmSelfDestruct, EvmSload,
+            EvmSstore, EvmStop, EvmTload, EvmTstore,
         },
     },
 };
@@ -1224,6 +1224,7 @@ fn exit_commits_visible_writes(func: &Function, block: sonatina_ir::BlockId) -> 
     let is = func.inst_set();
 
     if <&EvmRevert as InstDowncast>::downcast(is, inst).is_some()
+        || <&EvmRevertWord as InstDowncast>::downcast(is, inst).is_some()
         || <&EvmInvalid as InstDowncast>::downcast(is, inst).is_some()
     {
         return false;

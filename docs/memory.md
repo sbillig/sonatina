@@ -84,6 +84,10 @@ frontend contract.
   higher-IR semantics returns `code[off..off+len]` directly without touching IR
   memory. It lowers to `CODECOPY 0 off len; RETURN 0 len` at machine lowering,
   preserving E2 for contract init sections with zero immutable slots.
+- **E6.** `evm_revert_word sel word` is a memory-free terminal instruction whose
+  higher-IR semantics reverts with the 36 bytes of the four low bytes of `sel`
+  and then `word`, without touching IR memory. It lowers to
+  `MSTORE 0 (sel << 224); MSTORE 4 word; REVERT 0 36` at machine lowering.
 
 ## Undefined Behavior (Complete List)
 

@@ -384,6 +384,7 @@ impl FuncLowerCtx<'_> {
             EvmInstKind::Mload(mload) => self.lower_mload(source_inst, mload),
             EvmInstKind::EvmMloadBytes(load) => self.lower_mload_bytes(source_inst, load),
             EvmInstKind::EvmReturnCode(ret) => self.lower_return_code(source_inst, ret),
+            EvmInstKind::EvmRevertWord(revert) => self.lower_revert_word(source_inst, revert),
             EvmInstKind::Mstore(mstore) => self.lower_mstore(source_inst, mstore),
             EvmInstKind::Alloca(_) => self.lower_alloca(source_inst),
             EvmInstKind::Gep(gep) => self.lower_gep(source_inst, gep.values()),
@@ -519,6 +520,41 @@ impl FuncLowerCtx<'_> {
             .expect("evm_return_code lowering needs a current block");
         self.append_inst_no_result_to(block, evm::EvmCodeCopy::new(self.is, zero, offset, len));
         self.insert_no_result(source_inst, evm::EvmReturn::new(self.is, zero, len))
+    }
+
+    /// `evm_mstore 0 (sel << 224); evm_mstore 4 word; evm_revert 0 36`, the
+    /// shift folded when `sel` is an immediate. The immediates are made in the
+    /// order the stores and the revert of the payload Fe used to write make
+    /// them, so the machine IR is the same.
+    fn lower_revert_word(
+        &mut self,
+        source_inst: sonatina_ir::InstId,
+        revert: &evm::EvmRevertWord,
+    ) -> Result<(), String> {
+        let zero = self.i256_imm(0);
+        let selector = match self.source.dfg.value_imm(*revert.sel()) {
+            Some(sel) => {
+                let low = sel.as_i256().to_u256() & U256::from(u32::MAX);
+                self.machine.dfg.make_imm_value(Immediate::from_i256(
+                    I256::from_u256(low << 224),
+                    Type::I256,
+                ))
+            }
+            None => {
+                let sel = self.lower_value(*revert.sel())?;
+                let bits = self.i256_imm(224);
+                self.emit_binary(arith::Shl::new(self.is, bits, sel), Type::I256)
+            }
+        };
+        let four = self.i256_imm(4);
+        let word = self.lower_value(*revert.word())?;
+        let len = self.i256_imm(36);
+        let block = self
+            .current_block
+            .expect("evm_revert_word lowering needs a current block");
+        self.append_inst_no_result_to(block, evm::EvmMstore::new(self.is, zero, selector));
+        self.append_inst_no_result_to(block, evm::EvmMstore::new(self.is, four, word));
+        self.insert_no_result(source_inst, evm::EvmRevert::new(self.is, zero, len))
     }
 
     fn lower_mstore(

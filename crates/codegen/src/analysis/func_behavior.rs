@@ -6,7 +6,10 @@ use sonatina_ir::{
     BlockId, ControlFlowGraph, FuncEffectSummary, Function, InstDowncast, Module, OtherEffects,
     inst::{
         control_flow,
-        evm::{EvmInvalid, EvmReturn, EvmReturnCode, EvmRevert, EvmSelfDestruct, EvmStop},
+        evm::{
+            EvmInvalid, EvmReturn, EvmReturnCode, EvmRevert, EvmRevertWord, EvmSelfDestruct,
+            EvmStop,
+        },
     },
     module::FuncRef,
 };
@@ -534,6 +537,7 @@ pub(crate) fn is_committing_exit(func: &Function, inst: sonatina_ir::InstId) -> 
     }
 
     <&EvmRevert as InstDowncast>::downcast(is, inst_data).is_none()
+        && <&EvmRevertWord as InstDowncast>::downcast(is, inst_data).is_none()
         && <&EvmInvalid as InstDowncast>::downcast(is, inst_data).is_none()
         && <&control_flow::Unreachable as InstDowncast>::downcast(is, inst_data).is_none()
 }

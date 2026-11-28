@@ -424,6 +424,7 @@ fn gives_wider_word(kind: EvmInstKind<'_>, width: ScalarWidth) -> bool {
         | EvmInstKind::EvmReturn(_)
         | EvmInstKind::EvmReturnCode(_)
         | EvmInstKind::EvmRevert(_)
+        | EvmInstKind::EvmRevertWord(_)
         | EvmInstKind::EvmSelfDestruct(_) => false,
     }
 }

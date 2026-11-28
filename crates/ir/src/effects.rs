@@ -16,8 +16,8 @@ use crate::{
             EvmGasLimit, EvmGasPrice, EvmInvalid, EvmKeccak256, EvmLog0, EvmLog1, EvmLog2, EvmLog3,
             EvmLog4, EvmMalloc, EvmMcopy, EvmMload, EvmMloadBytes, EvmMsize, EvmMstore, EvmMstore8,
             EvmNumber, EvmOrigin, EvmPrevRandao, EvmReturn, EvmReturnCode, EvmReturnDataCopy,
-            EvmReturnDataSize, EvmRevert, EvmSelfBalance, EvmSelfDestruct, EvmSload, EvmSstore,
-            EvmStaticCall, EvmStop, EvmTimestamp, EvmTload, EvmTstore,
+            EvmReturnDataSize, EvmRevert, EvmRevertWord, EvmSelfBalance, EvmSelfDestruct, EvmSload,
+            EvmSstore, EvmStaticCall, EvmStop, EvmTimestamp, EvmTload, EvmTstore,
         },
     },
     isa::evm::space::{CALLDATA, CODE, MEMORY, RETURNDATA, STORAGE, TRANSIENT},
@@ -814,6 +814,11 @@ fn classify_declared_effects_with<S: EffectSink>(
 
     if let Some(ret) = dfg.downcast::<&EvmReturnCode>(inst_id) {
         sink.read_range(CODE, *ret.code_offset(), *ret.len());
+        sink.add_other(OtherEffects::CONTROL);
+        return sink.finish();
+    }
+
+    if dfg.downcast::<&EvmRevertWord>(inst_id).is_some() {
         sink.add_other(OtherEffects::CONTROL);
         return sink.finish();
     }
