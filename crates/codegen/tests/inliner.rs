@@ -3092,6 +3092,70 @@ func public %caller(v0.i1, v1.i32, v2.i32) -> i32 {
 }
 
 #[test]
+fn full_inliner_net_growth_counts_revert_word_as_its_expansion() {
+    // Each callee adds a branch, an `evm_revert_word` (two stores and a
+    // revert), an add and a jump: 6 by `inst_size`. A cap of 11 fits one.
+    let source = r#"
+target = "evm-ethereum-osaka"
+
+func private %left(v0.i1, v1.i32) -> i32 {
+    block0:
+        br v0 block1 block2;
+
+    block1:
+        evm_revert_word 1313373041.i32 17.i256;
+
+    block2:
+        v2.i32 = add v1 1.i32;
+        return v2;
+}
+
+func private %right(v0.i1, v1.i32) -> i32 {
+    block0:
+        br v0 block1 block2;
+
+    block1:
+        evm_revert_word 1313373041.i32 17.i256;
+
+    block2:
+        v2.i32 = add v1 2.i32;
+        return v2;
+}
+
+func public %caller(v0.i1, v1.i32, v2.i32) -> i32 {
+    block0:
+        v3.i32 = call %left v0 v1;
+        v4.i32 = call %right v0 v2;
+        v5.i32 = add v3 v4;
+        return v5;
+}
+"#;
+
+    let mut parsed = sonatina_parser::parse_module(source)
+        .unwrap_or_else(|errs| panic!("parse failed: {errs:?}"));
+    let module = &mut parsed.module;
+
+    let mut cfg = full_only_inliner_test_config();
+    cfg.max_single_use_caller_insts = 0;
+    cfg.max_growth_per_caller = 11;
+    cfg.max_total_growth = 64;
+    cfg.inline_threshold = 1000;
+    cfg.inline_threshold_cold = 1000;
+
+    let mut inliner = Inliner::new(cfg);
+    let stats = inliner.run(module);
+    assert_module_verified(module);
+
+    let dumped = dump_module(module);
+    assert_eq!(stats.full_calls_inlined, 1);
+    assert!(
+        dumped.contains("call %left") ^ dumped.contains("call %right"),
+        "one call should remain once the caller growth cap is reached:\n{dumped}"
+    );
+    assert!(stats.skipped_caller_growth > 0);
+}
+
+#[test]
 fn full_inliner_reachability_cache_tracks_split_continuations() {
     let call_count = 10usize;
     let mut source = String::from(

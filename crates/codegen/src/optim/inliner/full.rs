@@ -261,7 +261,7 @@ pub(super) fn try_inline_callsite_full(
                 .func_mut()
                 .import_inst_attribution_from(callee, term_id, new_term);
             inserted_insts += 1;
-            growth += 1;
+            growth += inst_size(callee, term_id);
         }
     }
 
