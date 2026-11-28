@@ -432,7 +432,10 @@ impl EvmPipelineContext<'_> {
             Some(summaries) if !changed => summaries,
             _ => compute_ptr_escape_summaries(self.module(), &self.funcs, &self.backend.isa),
         };
-        let promoted = promote_local_mallocs(self.module(), &self.funcs, self.backend, &summaries);
+        // Promoting a malloc to an `alloca` changes its placement, which O0
+        // output leaves to lowering.
+        let promoted = self.backend.late_cleanup_profile != LateCleanupProfile::Off
+            && promote_local_mallocs(self.module(), &self.funcs, self.backend, &summaries);
         if changed || promoted {
             self.func_behavior_dirty = true;
         }

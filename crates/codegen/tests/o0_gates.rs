@@ -3,7 +3,10 @@
 //! output can be checked against the IR: each test compiles a module at O0,
 //! where the step does not happen, and at O1, where it does.
 
-use sonatina_codegen::{EvmCompile, OptLevel, object::lowering::SectionLowering};
+use sonatina_codegen::{
+    EvmCompile, OptLevel,
+    object::lowering::{FixedMallocRule, MallocLowering, SectionLowering},
+};
 use sonatina_parser::parse_module;
 
 /// The lowering record of each section of `source` compiled at `opt`.
@@ -119,4 +122,69 @@ object @Table {
             .any(|line| !line.contains("%get(") && !line.contains("%runtime("));
         assert_eq!(others, cloned, "{opt:?}: {funcs:?}");
     }
+}
+
+/// `%entry`'s first buffer is dead before `%entry` halts. At O1 the backend
+/// turns it into an `alloca`, at O0 not.
+#[test]
+fn local_malloc_promotion_is_off_at_o0() {
+    let source = r#"
+target = "evm-ethereum-osaka"
+
+func inline(never) private %note() {
+    block0:
+        evm_sstore 0.i256 1.i256;
+        return;
+}
+
+func public %entry() {
+    block0:
+        v1.*i256 = evm_malloc 32.i256;
+        mstore v1 7.i256 i256;
+        call %note;
+        v2.i256 = mload v1 i256;
+        v3.*i256 = evm_malloc 64.i256;
+        v4.i256 = ptr_to_int v3 i256;
+        mstore v3 v4 i256;
+        v5.i256 = mload v3 i256;
+        v6.i256 = add v2 v5;
+        mstore 0.i256 v6 i256;
+        evm_return 0.i256 32.i256;
+}
+
+object @Promote {
+  section runtime {
+    entry %entry;
+  }
+}
+"#;
+    for (opt, mallocs) in [(OptLevel::O0, 2), (OptLevel::O1, 1)] {
+        let records = records(source, opt);
+        let entry = func_text(&records[0], "entry");
+        assert_eq!(
+            entry.matches("= evm_malloc ").count(),
+            mallocs,
+            "{opt:?}: {entry}"
+        );
+    }
+    // At O0 the buffer, allocated before anything moves the free pointer in
+    // a section with a malloc that is not transient, and live across a call,
+    // which rules out private static words, is placed by the exact-entry
+    // rule.
+    let records = records(source, OptLevel::O0);
+    let rules: Vec<_> = records[0]
+        .funcs
+        .iter()
+        .flat_map(|func| &func.mallocs)
+        .collect();
+    assert!(
+        rules.iter().any(|(_, malloc)| matches!(
+            malloc,
+            MallocLowering::Fixed {
+                rule: FixedMallocRule::ExactEntry,
+                ..
+            }
+        )),
+        "{rules:?}"
+    );
 }
