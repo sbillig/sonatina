@@ -188,3 +188,22 @@ object @Promote {
         "{rules:?}"
     );
 }
+
+/// At O1 a function of `free_ptr_restore_releases_callee_heap.sntn` gives
+/// back the heap it allocated when it returns; at O0 none does.
+#[test]
+fn free_ptr_restore_is_off_at_o0() {
+    let path = format!(
+        "{}/test_files/evm/free_ptr_restore_releases_callee_heap.sntn",
+        env!("CARGO_MANIFEST_DIR")
+    );
+    let source = std::fs::read_to_string(path).expect("the fixture reads");
+    for (opt, restores) in [(OptLevel::O0, false), (OptLevel::O1, true)] {
+        let records = records(&source, opt);
+        let restoring = records
+            .iter()
+            .flat_map(|record| &record.funcs)
+            .any(|func| func.restores_free_ptr);
+        assert_eq!(restoring, restores, "{opt:?}");
+    }
+}
