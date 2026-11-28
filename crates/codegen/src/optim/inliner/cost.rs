@@ -1,8 +1,8 @@
 use rustc_hash::{FxHashMap, FxHashSet};
 use smallvec::SmallVec;
 use sonatina_ir::{
-    BlockId, ControlFlowGraph, Function, Immediate, Linkage, Module,
-    inst::{control_flow, data},
+    BlockId, ControlFlowGraph, EffectCostClass, Function, Immediate, Linkage, Module,
+    inst::{control_flow, data, evm},
     module::{FuncHints, FuncRef},
 };
 
@@ -694,6 +694,13 @@ fn compute_inlinee_summary(
             if func.dfg.is_call(inst_id) {
                 calls += 1;
                 base_cost += 5;
+                continue;
+            }
+
+            // `evm_revert_word` costs what its two stores and revert did.
+            if func.dfg.downcast::<&evm::EvmRevertWord>(inst_id).is_some() {
+                base_cost +=
+                    2 * EffectCostClass::Mutate.base_cost() + EffectCostClass::Control.base_cost();
                 continue;
             }
 

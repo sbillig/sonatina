@@ -43,13 +43,21 @@ pub mod switch_formation;
 pub(crate) mod uniform_const_arg;
 
 pub use pipeline::{Pass, Pipeline, Step};
-use sonatina_ir::{Function, InstId, inst::data::AggMake};
+use sonatina_ir::{
+    Function, InstId,
+    inst::{data::AggMake, evm::EvmRevertWord},
+};
 
-/// The instructions `inst` stands for in a size budget: one, or one per
-/// operand for an `agg.make`, as for the insert chain it replaces, so that how
-/// a fresh aggregate is spelled does not change what a budget allows.
+/// The instructions `inst` stands for in a size budget: one, one per operand
+/// for an `agg.make`, as for the insert chain it replaces, and three for an
+/// `evm_revert_word`, as for the two stores and the revert it replaces, so that
+/// how a value or a revert is spelled does not change what a budget allows.
 pub(crate) fn inst_size(func: &Function, inst: InstId) -> usize {
-    func.dfg
-        .downcast::<&AggMake>(inst)
-        .map_or(1, |make| make.values().len())
+    if let Some(make) = func.dfg.downcast::<&AggMake>(inst) {
+        make.values().len()
+    } else if func.dfg.downcast::<&EvmRevertWord>(inst).is_some() {
+        3
+    } else {
+        1
+    }
 }
