@@ -75,3 +75,48 @@ object @Elision {
         assert_eq!(caller.contains("= alloca "), copies, "{opt:?}: {caller}");
     }
 }
+
+/// `%get` takes a constant table. At O1 the backend clones it for the
+/// table `%runtime` passes, at O0 not.
+#[test]
+fn constref_specialization_is_off_at_o0() {
+    let source = r#"
+target = "evm-ethereum-osaka"
+
+global private const [i256; 6] $table = [5, 17, 2, 99, 1234567, 8];
+
+func inline(never) private %get(v0.constref<[i256; 6]>, v1.i256) -> i256 {
+    block0:
+        v2.constref<i256> = const.index v0 v1;
+        v3.i256 = const.load v2;
+        return v3;
+}
+
+func public %runtime() {
+    block0:
+        v0.i256 = evm_calldata_load 0.i256;
+        v1.constref<[i256; 6]> = const.ref $table;
+        v2.i256 = call %get v1 v0;
+        mstore 0.i256 v2 i256;
+        evm_return 0.i256 32.i256;
+}
+
+object @Table {
+  section runtime {
+    entry %runtime;
+  }
+}
+"#;
+    for (opt, cloned) in [(OptLevel::O0, false), (OptLevel::O1, true)] {
+        let records = records(source, opt);
+        let funcs: Vec<_> = records[0]
+            .source_ir
+            .lines()
+            .filter(|line| line.starts_with("func "))
+            .collect();
+        let others = funcs
+            .iter()
+            .any(|line| !line.contains("%get(") && !line.contains("%runtime("));
+        assert_eq!(others, cloned, "{opt:?}: {funcs:?}");
+    }
+}

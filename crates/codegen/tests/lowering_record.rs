@@ -614,10 +614,10 @@ fn lowering_record_of_evm_fixtures_agrees_with_bytes(fixture: Fixture<&str>) {
 }
 
 /// `%runtime` reads a table at an index from calldata through `%get`. The
-/// backend's pipeline specializes `%get` for the table and moves the table to
-/// a word blob: a function and a global the compiled module does not have,
-/// named in the record as the section's IR names them. The compiled module
-/// has no function with the new function's id.
+/// backend's pipeline moves the table to a word blob and, but at O0,
+/// specializes `%get` for the table: a global and a function the compiled
+/// module does not have, named in the record as the section's IR names them.
+/// The compiled module has no function with the new function's id.
 #[test]
 fn lowering_record_names_symbols_of_the_section_module() {
     let source = r#"
@@ -686,7 +686,8 @@ object @Table {
             .map(|(symbol, _)| symbol.as_str())
             .filter(|symbol| !input_symbols.contains(*symbol))
             .collect();
-        for prefix in ['%', '$'] {
+        let prefixes = if opt == OptLevel::O0 { "$" } else { "%$" };
+        for prefix in prefixes.chars() {
             assert!(
                 new.iter().any(|symbol| symbol.starts_with(prefix)),
                 "{opt:?}: no `{prefix}` symbol of the section's own in {new:?}"
