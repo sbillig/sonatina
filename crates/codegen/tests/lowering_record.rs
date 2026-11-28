@@ -8,8 +8,8 @@ use sonatina_codegen::{
     object::{
         CompileOptions, ObjectArtifact, compile_all_objects, encode_gv_initializer_to_bytes,
         lowering::{
-            CodeLabel, CodePoint, FuncLowering, SectionLowering, SpillLocation, StableLowering,
-            StackSlot,
+            CodeLabel, CodePoint, FixedMallocRule, FuncLowering, MallocLowering, ObjLocLowering,
+            SectionLowering, SpillLocation, StableLowering, StackSlot,
         },
     },
 };
@@ -152,6 +152,7 @@ fn check_record(lowering: &SectionLowering, bytes: &[u8]) {
         }
     }
     check_spill_accesses(lowering, bytes, &starts);
+    check_placement(lowering);
     for func in &lowering.funcs {
         let Some(entry) = func.blocks.first() else {
             continue;
@@ -308,6 +309,261 @@ fn check_spill_accesses(lowering: &SectionLowering, bytes: &[u8], starts: &BTree
                         if store { "stores" } else { "loads" }
                     );
                 }
+            }
+        }
+    }
+    checked
+}
+
+/// The text of each function of `ir`, by name.
+fn func_texts(ir: &str) -> BTreeMap<&str, &str> {
+    let mut texts = BTreeMap::new();
+    let mut rest = ir;
+    while let Some(start) = rest.find("func ") {
+        let text = &rest[start..];
+        let end = text.find("\n}").map_or(text.len(), |end| end + 2);
+        let name = text.split_once('%').unwrap().1.split('(').next().unwrap();
+        texts.insert(name, &text[..end]);
+        rest = &text[end..];
+    }
+    texts
+}
+
+/// The values of `text` defined by `inst` (`v3.*i256 = alloca i256;`).
+fn defined_by(text: &str, inst: &str) -> BTreeSet<u32> {
+    text.lines()
+        .filter_map(|line| {
+            let (def, rhs) = line.trim().split_once(" = ")?;
+            let value = def.strip_prefix('v')?.split('.').next()?;
+            rhs.starts_with(inst).then(|| value.parse().unwrap())
+        })
+        .collect()
+}
+
+/// The address of each recorded `alloca` and malloc of `func` that the code
+/// places at a constant address, by value.
+fn constant_addresses(lowering: &SectionLowering, func: &FuncLowering) -> BTreeMap<u32, u32> {
+    let allocas = func.allocas.iter().filter_map(|(value, alloca)| {
+        let word = match alloca.loc {
+            _ if alloca.words == 0 => return None,
+            ObjLocLowering::ScratchAbs(word) | ObjLocLowering::StableAbs(word) => word,
+            ObjLocLowering::StableFrame(_) => return None,
+        };
+        Some((value.as_u32(), lowering.arena_base + 32 * word))
+    });
+    let mallocs = func.mallocs.iter().filter_map(|(value, malloc)| {
+        let base = match *malloc {
+            MallocLowering::Fixed { base, .. } => base,
+            MallocLowering::Heap { exact_base, .. } => exact_base?,
+        };
+        Some((value.as_u32(), base))
+    });
+    allocas.chain(mallocs).collect()
+}
+
+/// The placement the record gives agrees with the source IR, with the
+/// machine IR lowering built and with itself:
+/// - every `alloca` and `evm_malloc` of the source IR is recorded, and
+///   every source block with the lowered block it starts in: the `k`-th
+///   block of the function's layout is lowered `blockk`, and the blocks of
+///   the machine IR come from the source blocks the map takes to them;
+/// - each `alloca` lies in its function's frame, outside its spill reserves,
+///   and the reserves in the frame;
+/// - each memory spill word is in a reserve of its function or in a fixed
+///   slot, which only a section with fixed-slot spills uses;
+/// - an `i256` store of an immediate through an `alloca` or malloc at a
+///   constant address is an `evm_mstore` at that address in the lowered
+///   machine IR;
+/// - a heap malloc reads the free pointer, and the dynamic stack pointer if
+///   it needs the clamp, and raises its base to `min_base` unless the
+///   free-pointer floor makes that redundant;
+/// - a function that restores the free pointer loads it at entry and stores
+///   it back before each `return`.
+///
+/// Returns the number of stores checked against the machine IR.
+fn check_placement(lowering: &SectionLowering) -> usize {
+    let sources = func_texts(&lowering.source_ir);
+    let lowered: BTreeMap<_, _> = lowering
+        .machine_steps
+        .lowered
+        .iter()
+        .map(|snap| (snap.func.as_str(), snap.text.as_str()))
+        .collect();
+    let mut checked = 0;
+    for func in &lowering.funcs {
+        let name = func.name.as_str();
+        let (source, machine) = (sources[name], lowered[name]);
+        assert_eq!(
+            func.allocas
+                .iter()
+                .map(|(v, _)| v.as_u32())
+                .collect::<BTreeSet<_>>(),
+            defined_by(source, "alloca "),
+            "{name}: the recorded allocas"
+        );
+        assert_eq!(
+            func.mallocs
+                .iter()
+                .map(|(v, _)| v.as_u32())
+                .collect::<BTreeSet<_>>(),
+            defined_by(source, "evm_malloc "),
+            "{name}: the recorded mallocs"
+        );
+
+        let source_blocks: Vec<_> = source
+            .lines()
+            .filter_map(|line| line.trim().strip_prefix("block")?.strip_suffix(':'))
+            .map(|block| block.parse::<u32>().unwrap())
+            .collect();
+        assert_eq!(
+            func.lowered_blocks
+                .iter()
+                .map(|(source, lowered)| (source.0, lowered.0))
+                .collect::<Vec<_>>(),
+            source_blocks.into_iter().zip(0..).collect::<Vec<_>>(),
+            "{name}: the lowered block of each source block"
+        );
+        for block in &func.blocks {
+            let from: Vec<_> = func
+                .lowered_blocks
+                .iter()
+                .filter(|(_, lowered)| *lowered == block.block)
+                .map(|(source, _)| *source)
+                .collect();
+            assert_eq!(
+                block.sources, from,
+                "{name}: the sources of block{}",
+                block.block.0
+            );
+        }
+
+        let frame = &func.frame;
+        let scratch = (0, frame.scratch_words);
+        let stable = match frame.stable {
+            StableLowering::Abs { base_word } => Some((base_word, base_word + frame.stable_words)),
+            StableLowering::None | StableLowering::DynamicFrame => None,
+        };
+        let reserves: Vec<_> = [Some(func.spill_reserve.scratch), func.spill_reserve.stable]
+            .into_iter()
+            .flatten()
+            .map(|range| (range.start, range.start + range.words))
+            .collect();
+        let within = |(start, end): (u32, u32), (lo, hi): (u32, u32)| lo <= start && end <= hi;
+        assert!(
+            within(reserves[0], scratch),
+            "{name}: the scratch reserve {reserves:?} is in the scratch overlay {scratch:?}"
+        );
+        assert_eq!(
+            func.spill_reserve.stable.is_some(),
+            stable.is_some(),
+            "{name}: a stable reserve iff an absolute stable frame"
+        );
+        if let (Some(stable), Some(&reserve)) = (stable, reserves.get(1)) {
+            assert_eq!(
+                reserve.1, stable.1,
+                "{name}: the stable reserve tops the frame"
+            );
+            assert!(
+                within(reserve, stable),
+                "{name}: the stable reserve is in the frame"
+            );
+        }
+        for (value, alloca) in &func.allocas {
+            let (start, region) = match (alloca.loc, stable) {
+                (ObjLocLowering::ScratchAbs(word), _) => (word, scratch),
+                (ObjLocLowering::StableAbs(word), Some(stable)) => (word, stable),
+                (ObjLocLowering::StableFrame(_), None) => {
+                    assert_eq!(frame.stable, StableLowering::DynamicFrame, "{name}");
+                    continue;
+                }
+                (loc, _) => panic!(
+                    "{name}: v{} at {loc:?} in {:?}",
+                    value.as_u32(),
+                    frame.stable
+                ),
+            };
+            let range = (start, start + alloca.words);
+            assert!(
+                alloca.words == 0
+                    || within(range, region)
+                        && reserves
+                            .iter()
+                            .all(|&(lo, hi)| range.1 <= lo || hi <= range.0),
+                "{name}: v{} at words {range:?}, in {region:?}, outside the reserves {reserves:?}",
+                value.as_u32()
+            );
+        }
+        for spill in &func.spills {
+            let SpillLocation::Memory(addr) = spill.location else {
+                continue;
+            };
+            let word = addr.wrapping_sub(lowering.arena_base) / 32;
+            assert!(
+                addr % 32 == 0
+                    && (addr >= lowering.arena_base
+                        && reserves.iter().any(|&(lo, hi)| lo <= word && word < hi)
+                        || lowering.fixed_slot_spills && addr < 64),
+                "{name}: v{} spilled at {addr}, outside the reserves {reserves:?}",
+                spill.value.as_u32()
+            );
+        }
+
+        for (value, addr) in constant_addresses(lowering, func) {
+            for line in source.lines().map(str::trim) {
+                if let Some(imm) = line
+                    .strip_prefix(&format!("mstore v{value} "))
+                    .and_then(|rest| rest.strip_suffix(".i256 i256;"))
+                    .filter(|imm| imm.bytes().all(|b| b.is_ascii_digit()))
+                {
+                    let store = format!("evm_mstore {addr}.i256 {imm}.i256;");
+                    assert!(machine.contains(&store), "{name}: {store} for {line}");
+                    checked += 1;
+                }
+            }
+        }
+        for (_, malloc) in &func.mallocs {
+            let MallocLowering::Heap {
+                min_base,
+                exact_base: None,
+                needs_dyn_sp_clamp,
+                free_ptr_floor,
+                ..
+            } = *malloc
+            else {
+                continue;
+            };
+            assert!(
+                machine.contains("= evm_mload 64.i256;")
+                    && (!needs_dyn_sp_clamp || machine.contains("= evm_mload 128.i256;")),
+                "{name}: reads the free pointer, and the dynamic stack pointer to clamp to it"
+            );
+            if min_base != 0 && free_ptr_floor.is_none_or(|floor| floor < min_base) {
+                let clamp = format!(" {}.i256;", min_base - 1);
+                assert!(
+                    machine
+                        .lines()
+                        .any(|l| l.contains("= gt ") && l.ends_with(&clamp)),
+                    "{name}: raises the base to {min_base}"
+                );
+            }
+        }
+        if func.restores_free_ptr {
+            let entry = machine
+                .lines()
+                .find_map(|line| line.trim().strip_suffix(" = evm_mload 64.i256;"))
+                .expect("the entry loads the free pointer");
+            let entry = entry.split('.').next().unwrap();
+            let lines: Vec<_> = machine.lines().map(str::trim).collect();
+            for (i, _) in lines
+                .iter()
+                .enumerate()
+                .filter(|(_, l)| l.starts_with("return"))
+            {
+                assert_eq!(
+                    lines[i - 1],
+                    format!("evm_mstore 64.i256 {entry};"),
+                    "{name}: restores the free pointer before returning"
+                );
             }
         }
     }
@@ -677,4 +933,168 @@ fn lowering_record_omits_stores_back_to_a_shared_word() {
         15,
         "{spills:#?}"
     );
+}
+
+/// The lowering records of the sections of `source`, compiled at O0 and
+/// checked.
+fn o0_records(source: &str) -> Vec<SectionLowering> {
+    check_fixture(source, &[OptLevel::O0]);
+    compile(source, OptLevel::O0, true)
+        .iter()
+        .flat_map(|artifact| artifact.sections.values())
+        .map(|section| section.lowering.clone().expect("a lowering record"))
+        .collect()
+}
+
+/// The recorded function `name` of `records`.
+fn recorded_func<'a>(records: &'a [SectionLowering], name: &str) -> &'a FuncLowering {
+    records
+        .iter()
+        .flat_map(|lowering| &lowering.funcs)
+        .find(|func| func.name == name)
+        .unwrap_or_else(|| panic!("{name} is recorded"))
+}
+
+/// `%entry`'s `alloca` lives across the call that reads it, so it is in
+/// `%entry`'s stable frame; `%keep`'s is in the scratch overlay. The code
+/// stores each marker at the address the record gives.
+#[test]
+fn lowering_record_places_scratch_and_stable_allocas() {
+    let source = r#"
+target = "evm-ethereum-osaka"
+
+func inline(never) private %keep(v0.*i256) -> i256 {
+    block0:
+        v1.i256 = mload v0 i256;
+        v2.*i256 = alloca i256;
+        mstore v2 1001.i256 i256;
+        v3.i256 = mload v2 i256;
+        v4.i256 = add v1 v3;
+        return v4;
+}
+
+func public %entry() {
+    block0:
+        v0.*i256 = alloca i256;
+        mstore v0 1002.i256 i256;
+        v1.i256 = call %keep v0;
+        mstore 0.i256 v1 i256;
+        evm_return 0.i256 32.i256;
+}
+
+object @Allocas {
+  section runtime {
+    entry %entry;
+  }
+}
+"#;
+    let records = o0_records(source);
+    assert_eq!(check_placement(&records[0]), 2, "both markers are checked");
+    let loc = |name| recorded_func(&records, name).allocas[0].1;
+    assert!(
+        matches!(loc("keep").loc, ObjLocLowering::ScratchAbs(_)),
+        "{:?}",
+        loc("keep")
+    );
+    let entry = recorded_func(&records, "entry");
+    let (ObjLocLowering::StableAbs(word), StableLowering::Abs { base_word }) =
+        (entry.allocas[0].1.loc, entry.frame.stable)
+    else {
+        panic!("{entry:?}");
+    };
+    assert!(base_word <= word && word < base_word + entry.frame.stable_words);
+}
+
+/// Each rule of a malloc's placement is recorded: the fixed rules but
+/// `ExactEntry`, which no fixture places, and of heap mallocs the clamp to
+/// the dynamic stack pointer and a free-pointer floor that drops the clamp
+/// to the minimum base, or none.
+#[test]
+fn lowering_record_gives_each_malloc_rule() {
+    for (fixture, kind) in [
+        ("fe_wide_abi32_sum.sntn", "terminal"),
+        ("malloc_transient_symbolic_size_fixed_base.sntn", "program"),
+        (
+            "free_ptr_restore_skips_raw_allocator.sntn",
+            "private static",
+        ),
+        (
+            "lazy_frame_enter_over_transient_malloc.sntn",
+            "dynamic stack pointer clamp",
+        ),
+        ("callee_heap_escape_free_ptr.sntn", "floor drops the clamp"),
+        (
+            "heap_malloc_free_ptr_entry_reentry.sntn",
+            "clamp to the minimum base",
+        ),
+    ] {
+        let is = |malloc: &MallocLowering| match (kind, *malloc) {
+            ("terminal", MallocLowering::Fixed { rule, .. }) => rule == FixedMallocRule::Terminal,
+            ("program", MallocLowering::Fixed { rule, .. }) => rule == FixedMallocRule::Program,
+            ("private static", MallocLowering::Fixed { rule, .. }) => {
+                rule == FixedMallocRule::PrivateStatic
+            }
+            (
+                "dynamic stack pointer clamp",
+                MallocLowering::Heap {
+                    needs_dyn_sp_clamp, ..
+                },
+            ) => needs_dyn_sp_clamp,
+            (
+                "floor drops the clamp" | "clamp to the minimum base",
+                MallocLowering::Heap {
+                    exact_base: None,
+                    min_base,
+                    free_ptr_floor,
+                    ..
+                },
+            ) => {
+                let drops = free_ptr_floor.is_some_and(|floor| floor >= min_base);
+                drops == (kind == "floor drops the clamp") && min_base != 0
+            }
+            _ => false,
+        };
+        let records = o0_records(&evm_fixture(fixture));
+        let mallocs: Vec<_> = records
+            .iter()
+            .flat_map(|lowering| &lowering.funcs)
+            .flat_map(|func| &func.mallocs)
+            .map(|(_, malloc)| *malloc)
+            .collect();
+        assert!(
+            mallocs.iter().any(is),
+            "{fixture}: no {kind} malloc in {mallocs:?}"
+        );
+    }
+}
+
+/// A function that releases the heap it allocated is recorded as restoring
+/// the free pointer, and `check_placement` finds the save and the restores
+/// in its machine IR. `%spill` of `arena_alloc_spills.sntn` spills to both
+/// of its reserves and to the fixed slots.
+#[test]
+fn lowering_record_gives_restores_reserves_and_fixed_slots() {
+    let records = o0_records(&evm_fixture("free_ptr_restore_releases_callee_heap.sntn"));
+    assert!(
+        records
+            .iter()
+            .flat_map(|lowering| &lowering.funcs)
+            .any(|func| func.restores_free_ptr)
+    );
+    let records = o0_records(&evm_fixture("arena_alloc_spills.sntn"));
+    assert!(records.iter().any(|lowering| lowering.fixed_slot_spills));
+    let funcs: Vec<_> = records
+        .iter()
+        .flat_map(|lowering| &lowering.funcs)
+        .collect();
+    assert!(
+        funcs
+            .iter()
+            .any(|func| func.spill_reserve.scratch.words > 0)
+    );
+    assert!(funcs.iter().any(|func| {
+        func.spill_reserve
+            .stable
+            .is_some_and(|stable| stable.words > 0)
+    }));
 }

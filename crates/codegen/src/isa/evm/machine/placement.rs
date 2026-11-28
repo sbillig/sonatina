@@ -15,6 +15,7 @@ use sonatina_ir::{
 use crate::{
     bitset::BitSet,
     module_analysis::{CallGraphSchedule, SccRef},
+    object::lowering::FixedMallocRule,
 };
 
 use super::{
@@ -73,6 +74,7 @@ pub(crate) struct EvmFuncPlacementPlan {
 pub(crate) enum MallocPlacement {
     Fixed {
         base: u32,
+        rule: FixedMallocRule,
     },
     Heap {
         min_base: u32,
@@ -441,9 +443,13 @@ pub(crate) fn compute_semantic_memory_placement(
                 .map(|(&inst, &rule)| {
                     let min_base = min_base(func, inst);
                     let placement = match rule {
-                        MallocPlacementRule::MinBase => MallocPlacement::Fixed { base: min_base },
+                        MallocPlacementRule::MinBase(rule) => MallocPlacement::Fixed {
+                            base: min_base,
+                            rule,
+                        },
                         MallocPlacementRule::PrivateStatic { word } => MallocPlacement::Fixed {
                             base: func_plan.abs_addr_for_word(word),
+                            rule: FixedMallocRule::PrivateStatic,
                         },
                         MallocPlacementRule::Heap {
                             update_free_ptr,
@@ -558,8 +564,9 @@ fn compute_func_heap_facts(
 /// free-pointer slot.
 #[derive(Clone, Copy)]
 enum MallocPlacementRule {
-    /// Fixed at the malloc's minimum base.
-    MinBase,
+    /// Fixed at the malloc's minimum base, by a rule other than
+    /// `PrivateStatic`.
+    MinBase(FixedMallocRule),
     /// Fixed in the function's private static malloc words.
     PrivateStatic { word: u32 },
     /// Allocated from the free pointer.
@@ -607,27 +614,31 @@ impl MallocPlacementRules<'_> {
                     .unwrap_or(false);
                 // A fixed base takes no DYN_SP clamp, so it would overlap a
                 // dynamic frame live at the malloc.
-                let fixed_by_terminal_or_program_rule = transient
-                    && !heap_facts.needs_dyn_sp_clamp
-                    && (heap_facts.terminal_private_mallocs.contains(&inst)
-                        || (!self.free_ptr_slot_may_be_touched
-                            && !self.has_persistent_mallocs
-                            // Transience proves storage is no longer needed;
-                            // it does not make encoded pointer bits unobservable.
-                            && malloc_private_uses_are_compatible_with_fixed_base(
-                                function,
-                                self.module,
-                                self.isa,
-                                inst,
-                                exact_heap_base,
-                            )));
+                let terminal_or_program_rule = if !transient || heap_facts.needs_dyn_sp_clamp {
+                    None
+                } else if heap_facts.terminal_private_mallocs.contains(&inst) {
+                    Some(FixedMallocRule::Terminal)
+                } else {
+                    (!self.free_ptr_slot_may_be_touched
+                        && !self.has_persistent_mallocs
+                        // Transience proves storage is no longer needed;
+                        // it does not make encoded pointer bits unobservable.
+                        && malloc_private_uses_are_compatible_with_fixed_base(
+                            function,
+                            self.module,
+                            self.isa,
+                            inst,
+                            exact_heap_base,
+                        ))
+                    .then_some(FixedMallocRule::Program)
+                };
                 // An entry that runs once has not written the free-pointer
                 // slot since it started, so the heap base is a known constant.
                 let fresh_free_ptr = exact_heap_base
                     && self.entry_runs_once
                     && self.section_entry == func
                     && function.arg_values.is_empty();
-                let fixed_by_exact_entry_rule = !fixed_by_terminal_or_program_rule
+                let fixed_by_exact_entry_rule = terminal_or_program_rule.is_none()
                     && transient
                     && fresh_free_ptr
                     && malloc_private_uses_are_compatible_with_fixed_base(
@@ -643,12 +654,12 @@ impl MallocPlacementRules<'_> {
                     .get(&func)
                     .and_then(|plan| plan.word_offsets.get(&inst))
                     .copied();
-                let rule = if fixed_by_terminal_or_program_rule {
-                    MallocPlacementRule::MinBase
+                let rule = if let Some(rule) = terminal_or_program_rule {
+                    MallocPlacementRule::MinBase(rule)
                 } else if transient && let Some(word) = private_static_word {
                     MallocPlacementRule::PrivateStatic { word }
                 } else if fixed_by_exact_entry_rule {
-                    MallocPlacementRule::MinBase
+                    MallocPlacementRule::MinBase(FixedMallocRule::ExactEntry)
                 } else {
                     MallocPlacementRule::Heap {
                         update_free_ptr: !transient,

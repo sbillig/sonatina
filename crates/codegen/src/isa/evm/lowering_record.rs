@@ -69,6 +69,7 @@ pub(crate) fn record_section_lowering(
                         (code_label(&func_name, old), code_label(&func_name, new))
                     }));
                 }
+                let placement = &lowering.placements[&func];
                 let final_alloc = FinalAlloc::new(plan.alloc.clone(), plan.mem_plan.clone());
                 module.func_store.view(func, |function| {
                     let sources = &lowering.source_blocks[&func];
@@ -215,7 +216,11 @@ pub(crate) fn record_section_lowering(
                                 calls
                             },
                         },
-                        mallocs: lowering.mallocs[&func].clone(),
+                        lowered_blocks: lowering.lowered_blocks[&func].clone(),
+                        mallocs: placement.mallocs.clone(),
+                        allocas: placement.allocas.clone(),
+                        restores_free_ptr: placement.restores_free_ptr,
+                        spill_reserve: placement.spill_reserve,
                     }
                 })
             })
@@ -258,6 +263,11 @@ pub(crate) fn record_section_lowering(
         arena_base: prepared.section_plan().arena_base,
         dyn_base: prepared.section_plan().dyn_base,
         entry_free_ptr: lowering.entry_free_ptr,
+        fixed_slot_spills: prepared.funcs().iter().any(|&func| {
+            prepared
+                .function_plan(func)
+                .is_some_and(|plan| plan.alloc.uses_scratch_spills())
+        }),
         funcs,
         units,
         redirects,
