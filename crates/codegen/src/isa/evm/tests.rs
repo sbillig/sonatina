@@ -3102,7 +3102,7 @@ block0:
 fn buffers_beside_exposed_callee_heap_objects_move_into_the_frame() {
     // `%entry` stores a heap object's address and contents where other frames
     // can read them. Neither can name `%entry`'s own buffer, which therefore
-    // moves into the frame.
+    // moves into the frame, except at O0, which keeps mallocs on the heap.
     let parsed = parse_module(
         r#"
 target = "evm-ethereum-osaka"
@@ -3130,10 +3130,10 @@ block0:
     .expect("module parses");
     let funcs = parsed.module.funcs();
     let entry = find_func(&parsed.module, "entry");
-    for profile in [
-        LateCleanupProfile::Off,
-        LateCleanupProfile::Speed,
-        LateCleanupProfile::Size,
+    for (profile, frame_words) in [
+        (LateCleanupProfile::Off, 0),
+        (LateCleanupProfile::Speed, 1),
+        (LateCleanupProfile::Size, 1),
     ] {
         let prepared = osaka_backend()
             .with_late_cleanup_profile(profile)
@@ -3141,8 +3141,8 @@ block0:
             .expect("prepare should succeed");
         let plan = &prepared.function_plan(entry).expect("entry plan").mem_plan;
         assert_eq!(
-            plan.stable_words, 1,
-            "{profile:?}: buffer stays on the heap"
+            plan.stable_words, frame_words,
+            "{profile:?}: the buffer's words in the frame"
         );
     }
 }
